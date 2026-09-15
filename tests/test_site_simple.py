@@ -156,17 +156,23 @@ async def test_candidates_with_multiple_unscored_does_not_500(
     assert resp.status == 200
 
 
-async def test_codebase_publish_explicit_mode_requires_admin(aiohttp_client):
-    _private_app, app = await create_app(config=create_config(), redis=FakeRedis())
-    client = await aiohttp_client(app)
-    resp = await client.post(
-        "/lintian-fixes/c/foo/publish", data={"mode": "propose"}
+async def test_codebase_publish_explicit_mode_requires_admin(
+    aiohttp_client, database_location
+):
+    _private_app, app = await create_app(
+        config=create_config(database_location), redis=FakeRedis()
     )
+    client = await aiohttp_client(app)
+    resp = await client.post("/lintian-fixes/c/foo/publish", data={"mode": "propose"})
     assert resp.status == 401
 
 
-async def test_codebase_publish_without_mode_does_not_require_admin(aiohttp_client):
-    _private_app, app = await create_app(config=create_config(), redis=FakeRedis())
+async def test_codebase_publish_without_mode_does_not_require_admin(
+    aiohttp_client, database_location
+):
+    _private_app, app = await create_app(
+        config=create_config(database_location), redis=FakeRedis()
+    )
     client = await aiohttp_client(app)
     resp = await client.post("/lintian-fixes/c/foo/publish", data={})
     # No publisher configured in this test app, so the request fails trying
