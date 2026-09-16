@@ -2704,9 +2704,26 @@ async def next_item(
         if resume_branch is not None:
             with span.new_child("resume-branch:check"):
                 resume = await check_resume_result(conn, item.campaign, resume_branch)
+                if resume is not None and is_authenticated_url(resume.branch.user_url):
+                    # A resume branch found via the forge (e.g. an existing,
+                    # not-yet-cleaned-up proposal branch) can legitimately
+                    # resolve to a push-only, authenticated URL (git+ssh://
+                    # for Gitea/GitHub-style forges) - that's expected, not
+                    # an invariant violation, so don't crash the whole
+                    # assignment request over it. There's nothing usable to
+                    # resume from here (an authenticated URL isn't safely
+                    # re-readable the way a resume source needs to be), so
+                    # just proceed without resuming, the same as the
+                    # "no matching run" case below.
+                    logging.info(
+                        "Not resuming %s/%s from %s: resolves to an "
+                        "authenticated URL, not safely re-readable",
+                        item.codebase,
+                        item.campaign,
+                        resume.branch,
+                    )
+                    resume = None
                 if resume is not None:
-                    if is_authenticated_url(resume.branch.user_url):
-                        raise AssertionError(f"invalid resume branch {resume.branch}")
                     active_run.resume_from = resume.run_id
                     logging.info(
                         "Resuming %s/%s from run %s",
