@@ -8,13 +8,13 @@
 # the https://{{ janitor_domain }}/ URLs the other roles already build.
 {{ ':80' if 'vagrant' in group_names else janitor_domain }} {
 	handle /git/* {
-		reverse_proxy localhost:9924
+		reverse_proxy 127.0.0.1:9924
 	}
 	handle /bzr/* {
-		reverse_proxy localhost:9930
+		reverse_proxy 127.0.0.1:9930
 	}
 	handle {
-		reverse_proxy localhost:8090
+		reverse_proxy 127.0.0.1:8090
 	}
 }
 {% if 'vagrant' in group_names %}
@@ -32,13 +32,13 @@
 :443 {
 	tls /etc/caddy/vagrant-selfsigned.crt /etc/caddy/vagrant-selfsigned.key
 	handle /git/* {
-		reverse_proxy localhost:9924
+		reverse_proxy 127.0.0.1:9924
 	}
 	handle /bzr/* {
-		reverse_proxy localhost:9930
+		reverse_proxy 127.0.0.1:9930
 	}
 	handle {
-		reverse_proxy localhost:8090
+		reverse_proxy 127.0.0.1:8090
 	}
 }
 {% endif %}
