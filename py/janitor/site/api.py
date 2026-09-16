@@ -56,6 +56,7 @@ routes = web.RouteTableDef()
 @docs()
 @routes.post("/{campaign}/c/{codebase}/publish", name="codebase-publish")
 async def handle_publish(request):
+    check_logged_in(request)
     publisher_url = request.app["publisher_url"]
     codebase = request.match_info["codebase"]
     campaign = request.match_info["campaign"]
@@ -234,6 +235,7 @@ async def handle_merge_proposal_change(request):
 @docs()
 @routes.post("/refresh-proposal-status", name="refresh-proposal-status")
 async def handle_refresh_proposal_status(request):
+    check_logged_in(request)
     post = await request.post()
     try:
         mp_url = post["url"]
