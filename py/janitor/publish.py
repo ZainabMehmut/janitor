@@ -1626,11 +1626,14 @@ async def handle_publish_id(request):
     publish_id = request.match_info["publish_id"]
     async with request.app["db"].acquire() as conn:
         row = await conn.fetchrow(
+            "SELECT * FROM publish WHERE id = $1",
             publish_id,
         )
-        if row:
+        if row is None:
             raise web.HTTPNotFound(text=f"no such publish: {publish_id}")
-    return web.json_response({})
+        result = dict(row)
+        result["timestamp"] = result["timestamp"].isoformat()
+    return web.json_response(result)
 
 
 @routes.post("/{campaign}/{codebase}/publish", name="publish")
