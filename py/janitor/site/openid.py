@@ -128,10 +128,8 @@ async def discover_openid_config(app, oauth2_provider_base_url):
                 return
             app["openid_config"] = await resp.json()
     except (aiohttp.ClientError, asyncio.TimeoutError):
-        # A non-200 response is handled above, but a connection failure
-        # (the provider unreachable, DNS, timeout) raises instead of
-        # returning a response at all - without this, an on_startup
-        # handler raising aborts the whole site's startup, not just login.
+        # Unlike a non-200 response, a connection failure raises instead
+        # of returning - uncaught, it would abort the whole site's startup.
         logging.warning(
             "Unable to reach openid configuration at %s", url, exc_info=True
         )
