@@ -75,7 +75,7 @@ dependencies = [
     "aiozipkin",
     "asyncpg",
     "backoff",
-    "breezy[git,launchpad,workspace]",
+    "breezy[git,launchpad,workspace] @ git+https://github.com/ZainabMehmut/breezy.git@local-test-gitea-plugin",
     "bs4",
     "dulwich",
     #"gpg", # Using python3-gpg instead ~ https://github.com/jelmer/janitor/issues/931
