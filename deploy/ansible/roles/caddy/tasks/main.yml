@@ -52,6 +52,19 @@
   when: "'vagrant' in group_names"
   notify: restart caddy
 
+- name: Let the caddy service account read the self-signed key
+  # openssl req above writes root:root 0600 - the caddy service runs as
+  # its own unprivileged account, which that leaves unable to read the
+  # key at all ("loading tls app: ... permission denied"), failing the
+  # service on every start.
+  file:
+    path: /etc/caddy/vagrant-selfsigned.key
+    owner: root
+    group: caddy
+    mode: "0640"
+  when: "'vagrant' in group_names"
+  notify: restart caddy
+
 - name: Deploy Caddyfile
   template:
     src: Caddyfile.j2
