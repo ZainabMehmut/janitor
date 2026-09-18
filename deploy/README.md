@@ -8,7 +8,9 @@ Debian host, or with the worker split onto its own host talking to the
 rest over the network - see [multi-host
 deployment](../docs/multi-host-deployment.md) for the second case; the
 single-host case below is unaffected either way, and is still what you
-get by default.
+get by default. Two roles for standing up real (if local-only) external
+services alongside janitor itself - a Gitea instance, an `auto_upload`
+target - are opt-in, see [optional services](../docs/optional-services.md).
 
 ## Layout
 
@@ -16,9 +18,10 @@ get by default.
   then one deploy play per inventory group (`control`, `worker` - the
   same group for both in the single-host case). Roles run in order:
   `base`, `janitor_source` (clone + build/pull the service images),
-  `postgres`, `redis`, `caddy`, `janitor_config`, `janitor_quadlet`
-  (systemd user units for every service, plus sbuild/schroot setup inside
-  the worker container).
+  `postgres`, `redis`, `caddy`, `gitea` and `auto_upload_target` (both
+  optional, see [optional services](../docs/optional-services.md)),
+  `janitor_config`, `janitor_quadlet` (systemd user units for every
+  service, plus sbuild/schroot setup inside the worker container).
 - `ansible/inventory.ini` - fill in the real host/IP, SSH user, and key
   path for the target instance(s). One host in both `[control]` and
   `[worker]` for single-host; two distinct hosts for the split topology.

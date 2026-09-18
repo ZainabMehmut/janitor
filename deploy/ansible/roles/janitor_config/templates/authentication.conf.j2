@@ -15,3 +15,14 @@ host = localhost
 port = 9924
 user = {{ worker_name }}
 password = {{ worker_password }}
+{% if gitea_access_token is defined %}
+
+# roles/gitea (see site.yml, gated by enable_gitea) - the bot account it
+# creates, for janitor's Gitea forge plugin.
+[gitea-local]
+scheme = http
+host = {{ gitea_domain }}
+port = {{ gitea_http_port }}
+user = {{ gitea_bot_user }}
+private_token = {{ gitea_access_token }}
+{% endif %}
