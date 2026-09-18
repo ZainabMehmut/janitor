@@ -14,8 +14,16 @@ Network=host
 # (argparse keeps the last occurrence of a repeated flag). Reached only
 # by other janitor services over loopback (Caddy doesn't proxy this
 # one); nothing external needs this reachable beyond the host.
-Exec=--listen-address 127.0.0.1 --config /mnt/janitor/janitor.conf
+Exec=--listen-address 127.0.0.1 --config /mnt/janitor/janitor.conf{% if auto_upload_dput_host is defined %} --dput-host {{ auto_upload_dput_host }} --debsign-keyid {{ auto_upload_debsign_keyid }}{% endif %}
 Volume={{ janitor_home }}:/mnt/janitor:rw
+{% if auto_upload_dput_host is defined %}
+# roles/auto_upload_target set these up - a local incoming directory and
+# a signing key debsign can use, dput.cf pointed at that directory under
+# the dput_host name above. dput reads /etc/dput.cf by default, no flag
+# or env var needed. See docs/optional-services.md for how to enable this.
+Volume={{ janitor_home }}/dput.cf:/etc/dput.cf:ro
+Environment=GNUPGHOME=/mnt/janitor/gnupg
+{% endif %}
 
 # Already pulled this exact image explicitly in roles/janitor_source
 # - never re-check the registry on every service start (quadlet's default

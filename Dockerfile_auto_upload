@@ -44,6 +44,9 @@ RUN apt-get update --yes \
  && apt-get upgrade --yes \
  && apt-get satisfy --yes --no-install-recommends \
         ca-certificates \
+        devscripts \
+        dput \
+        gnupg \
         libssl3 \
         libzstd1 \
         python3 \
