@@ -108,7 +108,9 @@ INSERT INTO site_session (id, userinfo) VALUES ($1, $2)
 
     resp.del_cookie("state")
     resp.del_cookie("back_url")
-    resp.set_cookie("session_id", session_id, secure=True, httponly=True)
+    resp.set_cookie(
+        "session_id", session_id, secure=True, httponly=True, samesite="Strict"
+    )
     return resp
 
 
