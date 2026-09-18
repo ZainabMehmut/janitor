@@ -20,6 +20,23 @@ import pytest
 import janitor.publish as publish
 
 
+async def test_credentials_missing_ssh_dir_returns_no_keys(aiohttp_client, monkeypatch):
+    from aiohttp import web
+
+    app = web.Application()
+    app.router.add_routes(publish.routes)
+    app["gpg"] = type("FakeGpg", (), {"keylist": lambda self, secret=False: []})()
+
+    monkeypatch.setattr(publish, "forges", {})
+    monkeypatch.setattr(publish.os.path, "expanduser", lambda p: "/nonexistent-ssh-dir-for-test")
+
+    client = await aiohttp_client(app)
+    resp = await client.get("/credentials")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["ssh_keys"] == []
+
+
 class _FakeVcsManager:
     def get_branch_url(self, codebase, branch_name):
         return f"https://example.com/{codebase}/{branch_name}"
