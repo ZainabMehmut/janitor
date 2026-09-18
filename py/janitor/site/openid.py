@@ -62,7 +62,7 @@ async def handle_oauth_callback(request):
         "redirect_uri": str(redirect_uri),
     }
     async with request.app["http_client_session"].post(
-        token_url, params=params
+        token_url, data=params
     ) as resp:
         if resp.status != 200:
             return web.json_response(
@@ -73,7 +73,7 @@ async def handle_oauth_callback(request):
                 },
             )
         resp = await resp.json()
-        if resp["token_type"] != "Bearer":
+        if resp["token_type"].lower() != "bearer":
             return web.Response(
                 status=500,
                 text="Expected bearer token, got {}".format(resp["token_type"]),
