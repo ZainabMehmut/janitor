@@ -43,6 +43,26 @@ janitor_github_org: CHANGEME    # CHANGEME per instance - GitHub org/user the bo
 
 postgres_max_connections: 300   # default 100 is too tight for several services opening pools concurrently on cold boot
 
+# Optional roles (roles/gitea, roles/auto_upload_target) - both disabled
+# unless explicitly turned on, same "omit to disable" convention as
+# oauth_client_id/secret above. See docs/optional-services.md for what
+# each actually provisions and when you'd want it.
+enable_gitea: false
+gitea_home: "/home/{{ ansible_user }}/gitea"
+gitea_domain: gitea.example.internal
+gitea_http_port: 3000
+gitea_ssh_port: 2222
+gitea_bot_user: janitor-bot
+gitea_bot_password: CHANGEME   # only used the first time the bot account is created
+
+# Leave unset to run auto_upload without an upload target (its default,
+# current behavior - builds succeed, nothing gets uploaded). Set to a
+# dput.cf section name (any name) to enable roles/auto_upload_target,
+# which points that name at a local proof-of-concept incoming directory
+# on this host - point dput_host/debsign_keyid at a real archive instead
+# for production.
+# auto_upload_dput_host: local
+
 # Which services get a quadlet unit deployed (roles/janitor_quadlet) - the
 # order here is tier-ordered and doubles as the start order the "Start
 # janitor services in dependency tiers" task loops over; each unit's own

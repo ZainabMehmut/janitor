@@ -1,0 +1,73 @@
+---
+# Optional role, only applied when auto_upload_dput_host is set (see
+# site.yml) - stands up a local dput-compatible incoming directory and a
+# signing key, so auto_upload has something real to upload built packages
+# to. Not meant as a production upload target, just enough to prove the
+# upload path works end to end - point dput_host/debsign_keyid at a real
+# archive for a production deployment instead.
+
+- name: Create the local dput incoming directory
+  file:
+    path: "{{ janitor_home }}/dput-incoming"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0755"
+
+- name: Create the GNUPG home used for debsign
+  file:
+    path: "{{ janitor_home }}/gnupg"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0700"
+
+- name: Check whether a signing key already exists
+  command: "gpg --homedir {{ janitor_home }}/gnupg --list-secret-keys --with-colons"
+  become: true
+  become_user: "{{ ansible_user }}"
+  register: auto_upload_gpg_list
+  changed_when: false
+  failed_when: false
+
+- name: Generate a signing key for debsign
+  # Batch-generated, no passphrase - this key only needs to exist so
+  # debsign has something to sign with for the local proof-of-concept
+  # target, not to be a real trusted identity.
+  command: >
+    gpg --homedir {{ janitor_home }}/gnupg --batch --gen-key /dev/stdin
+  args:
+    stdin: |
+      %echo Generating auto_upload signing key
+      Key-Type: eddsa
+      Key-Curve: ed25519
+      Subkey-Type: eddsa
+      Subkey-Curve: ed25519
+      Name-Real: {{ janitor_github_org }} auto_upload
+      Name-Email: auto-upload@{{ janitor_domain }}
+      Expire-Date: 0
+      %no-protection
+      %commit
+  become: true
+  become_user: "{{ ansible_user }}"
+  when: "'sec:' not in auto_upload_gpg_list.stdout"
+
+- name: Get the signing key's ID
+  command: "gpg --homedir {{ janitor_home }}/gnupg --list-secret-keys --with-colons"
+  become: true
+  become_user: "{{ ansible_user }}"
+  register: auto_upload_gpg_final
+  changed_when: false
+
+- name: Set the signing key ID fact
+  set_fact:
+    auto_upload_debsign_keyid: "{{ (auto_upload_gpg_final.stdout_lines | select('match', '^fpr:') | first).split(':')[9] }}"
+
+- name: Deploy dput.cf pointing dput_host at the local incoming directory
+  copy:
+    dest: "{{ janitor_home }}/dput.cf"
+    owner: "{{ ansible_user }}"
+    mode: "0644"
+    content: |
+      [{{ auto_upload_dput_host }}]
+      method = local
+      incoming = /mnt/janitor/dput-incoming
+      allow_unsigned_uploads = 0

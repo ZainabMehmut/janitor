@@ -1,0 +1,111 @@
+---
+# Optional role (see site.yml, gated by enable_gitea) - stands up a real
+# Gitea instance the same way it was originally hand-configured for the
+# forge-plugin E2E proof: a real account + access token, wired into
+# breezy's authentication.conf by roles/janitor_config. Not meant as a
+# production forge, just enough to prove janitor's Gitea plugin against a
+# real server instead of manual API calls.
+
+- name: Create Gitea data/config directories
+  file:
+    path: "{{ gitea_home }}/{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0755"
+  loop:
+    - data
+    - config
+
+- name: Deploy app.ini
+  template:
+    src: app.ini.j2
+    dest: "{{ gitea_home }}/config/app.ini"
+    owner: "{{ ansible_user }}"
+    mode: "0644"
+
+- name: Create quadlet unit directory
+  file:
+    path: "/home/{{ ansible_user }}/.config/containers/systemd"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0755"
+
+- name: Deploy the gitea quadlet unit
+  template:
+    src: gitea.container.j2
+    dest: "/home/{{ ansible_user }}/.config/containers/systemd/gitea.container"
+    owner: "{{ ansible_user }}"
+    mode: "0644"
+  notify: reload user systemd for gitea
+
+- meta: flush_handlers
+
+- name: Start gitea
+  become: true
+  become_user: "{{ ansible_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
+  systemd:
+    name: gitea.service
+    scope: user
+    state: started
+
+- name: Wait for gitea to actually be ready
+  # gitea's own CLI only works once its DB migration/setup has finished -
+  # a plainer "podman exec gitea true" would return before that, same
+  # race janitor_quadlet's worker-readiness check guards against.
+  become: true
+  become_user: "{{ ansible_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
+  command: podman exec gitea gitea admin user list
+  register: gitea_ready
+  until: gitea_ready.rc == 0
+  retries: 30
+  delay: 2
+  changed_when: false
+
+- name: Create the bot account
+  become: true
+  become_user: "{{ ansible_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
+  command: >
+    podman exec gitea gitea admin user create
+    --username {{ gitea_bot_user }}
+    --password {{ gitea_bot_password }}
+    --email {{ gitea_bot_user }}@{{ gitea_domain }}
+    --admin
+    --must-change-password=false
+  when: "gitea_bot_user not in gitea_ready.stdout"
+  no_log: true
+
+- name: Check whether the bot's access token already exists
+  become: true
+  become_user: "{{ ansible_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
+  command: >
+    podman exec gitea gitea admin user generate-access-token
+    --username {{ gitea_bot_user }}
+    --token-name janitor
+    --scopes all
+  register: gitea_token_create
+  changed_when: "'Access token was successfully created' in gitea_token_create.stdout"
+  failed_when:
+    - gitea_token_create.rc != 0
+    - "'already exists' not in gitea_token_create.stderr"
+  no_log: true
+
+- name: Set the access token fact
+  # generate-access-token errors on a second run ("token name already
+  # exists") rather than reprinting the token - Gitea never exposes an
+  # existing token's value again after creation, only its name/scopes, so
+  # this role's own idempotency can't recover a token from a re-run. The
+  # ansible_facts.set fact below only reflects the LATEST run's real
+  # value; see docs/multi-host-deployment.md for the recovery path (drop
+  # the token from gitea's admin UI, delete gitea_home/config so INSTALL_LOCK
+  # is cleared too if genuinely starting over).
+  set_fact:
+    gitea_access_token: "{{ gitea_token_create.stdout_lines[-1] | trim if gitea_token_create.rc == 0 else 'CHANGEME-see-docs-multi-host-deployment' }}"
+  no_log: true
