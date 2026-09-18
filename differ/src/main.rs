@@ -1974,11 +1974,41 @@ mod tests {
         async fn health_with_unreachable_db_surfaces_5xx() {
             let cache = tempfile::TempDir::new().unwrap();
             let art = tempfile::TempDir::new().unwrap();
-            let router = build_router(test_state(cache.path(), art.path()));
+            // `test_state`'s pool uses libpq env defaults, which in CI
+            // happily find the test Postgres on localhost:5432.
+            // Explicitly point at a port nothing listens on so SELECT
+            // 1 is forced to fail -- otherwise this assertion only
+            // holds on dev workstations without a local Postgres.
+            let bad_opts = PgConnectOptions::new()
+                .host("127.0.0.1")
+                .port(1)
+                .username("nobody")
+                .database("janitor-health-test-unreachable");
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(std::time::Duration::from_millis(500))
+                .connect_lazy_with(bad_opts);
+            let artifact_manager = janitor::artifacts::LocalArtifactManager::new(art.path())
+                .expect("LocalArtifactManager::new");
+            let state = Arc::new(AppState {
+                pool,
+                artifact_manager: Arc::new(artifact_manager),
+                task_memory_limit: 100,
+                task_timeout: 10,
+                diffoscope_command: "diffoscope".to_string(),
+                diffoscope_cache_dir: Some(cache.path().join("diffoscope")),
+                debdiff_cache_dir: Some(cache.path().join("debdiff")),
+                background_tasks: TaskTracker::new(),
+                precache_slots: Arc::new(Semaphore::new(2)),
+                debdiff_inflight: Arc::new(InFlight::default()),
+                diffoscope_inflight: Arc::new(InFlight::default()),
+                metrics: metrics(),
+            });
+            let router = build_router(state);
 
-            // Lazy pool points at a non-existent DB; SELECT 1 will
-            // fail, and Error::Database maps to 500 (or 503 for
-            // pool-timeout / SQLSTATE 53 — both are acceptable).
+            // SELECT 1 against the unreachable pool fails; Error::Database
+            // maps to 500 (or 503 for pool-timeout / SQLSTATE 53 — both
+            // are acceptable).
             let resp = router.oneshot(get("/health")).await.unwrap();
             let status = resp.status();
             assert!(

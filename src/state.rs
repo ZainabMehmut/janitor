@@ -39,6 +39,11 @@ pub struct Run {
     pub vcs_type: String,
     pub branch_url: String,
     pub logfilenames: Option<Vec<String>>,
+    // Column in the schema is `worker` (name of the worker); keep the
+    // Rust field as `worker_name` for clarity but rename at the sqlx
+    // layer so queries can select `run.worker` directly without an
+    // `AS worker_name` alias everywhere.
+    #[sqlx(rename = "worker")]
     pub worker_name: Option<String>,
     pub result_branches: Option<Vec<(String, String, Option<RevisionId>, Option<RevisionId>)>>,
     pub result_tags: Option<Vec<(String, String)>>,
