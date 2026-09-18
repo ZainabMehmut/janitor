@@ -1,0 +1,21 @@
+[Unit]
+Description=gitea (forge plugin E2E target)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/gitea/gitea:latest
+ContainerName=gitea
+Network=host
+Volume={{ gitea_home }}/data:/data:rw
+Volume={{ gitea_home }}/config:/etc/gitea:rw
+
+Pull=newer
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

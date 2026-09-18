@@ -52,6 +52,14 @@
     - postgres
     - redis
     - caddy
+    # Both optional, disabled unless the matching var is set (see
+    # group_vars/all.yml and docs/multi-host-deployment.md) - same
+    # "omit to disable" convention janitor_config already uses for OAuth.
+    # Ordered before janitor_config/janitor_quadlet: both set facts
+    # (gitea_access_token, auto_upload_debsign_keyid) those roles'
+    # templates read.
+    - { role: gitea, when: enable_gitea | default(false) }
+    - { role: auto_upload_target, when: auto_upload_dput_host is defined }
     - janitor_config
     - janitor_quadlet
 
