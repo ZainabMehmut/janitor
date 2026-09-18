@@ -3314,27 +3314,36 @@ dependencies = [
 name = "janitor-publish"
 version = "0.0.0"
 dependencies = [
+ "async-stream",
+ "async-trait",
  "axum",
  "breezyshim",
+ "bytes",
  "chrono",
  "clap",
  "debian-changelog",
+ "futures",
  "janitor",
+ "janitor-runner",
+ "lazy_static",
  "log",
  "maplit",
  "minijinja",
  "prometheus 0.14.0",
  "protobuf 3.7.2",
+ "pyo3",
  "redis 1.7.0",
  "reqwest 0.13.5",
  "rslock",
  "serde",
  "serde_json",
+ "serial_test 3.5.0",
  "shlex 2.0.1",
  "silver-platter",
  "sqlx",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3398,7 +3407,7 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
- "serial_test",
+ "serial_test 4.0.1",
  "shlex 2.0.1",
  "silver-platter",
  "tempfile",
@@ -5956,6 +5965,20 @@ dependencies = [
 
 [[package]]
 name = "serial_test"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "699f4197115b8a7e7ff19c9a315a4bd6fffec26cc4626ef45ecaea389e081c6d"
+dependencies = [
+ "futures-executor",
+ "futures-util",
+ "log",
+ "once_cell",
+ "parking_lot",
+ "serial_test_derive 3.5.0",
+]
+
+[[package]]
+name = "serial_test"
 version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6df5ed973ad8d834e09f824f9e9f449af6b9a3745f78dec7cc752770bd3bf11"
@@ -5965,7 +5988,18 @@ dependencies = [
  "log",
  "once_cell",
  "parking_lot",
- "serial_test_derive",
+ "serial_test_derive 4.0.1",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e153fc76e1c6a068703d6d29c508a0b15c061c4b7e43da59cc097bc342673c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
