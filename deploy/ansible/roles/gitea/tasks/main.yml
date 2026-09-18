@@ -6,22 +6,36 @@
 # production forge, just enough to prove janitor's Gitea plugin against a
 # real server instead of manual API calls.
 
-- name: Create Gitea data/config directories
+- name: Create Gitea data directories
   file:
     path: "{{ gitea_home }}/{{ item }}"
     state: directory
     owner: "{{ ansible_user }}"
-    mode: "0755"
+    # 0777, not 0755: the container's git user needs to create/chown its
+    # own subdirectories under here (ssh keys, repo home) on first boot.
+    # Same rootless-podman UID-remap reasoning as app.ini's mode below.
+    mode: "0777"
   loop:
     - data
-    - config
+    - data/gitea
+    - data/gitea/conf
 
 - name: Deploy app.ini
+  # Deployed under the data volume, at the image's own real default config
+  # path (WorkPath=/data/gitea) - the image ignores GITEA_APP_INI for both
+  # `gitea web` and `gitea admin`, only `--config` (checked manually) or
+  # this default path actually gets read, so put it where it already looks
+  # instead of fighting that.
   template:
     src: app.ini.j2
-    dest: "{{ gitea_home }}/config/app.ini"
+    dest: "{{ gitea_home }}/data/gitea/conf/app.ini"
     owner: "{{ ansible_user }}"
-    mode: "0644"
+    # 0666, not 0644: gitea writes generated secrets (JWT_SECRET etc.) back
+    # into this file on first real use. Rootless podman's default UID
+    # remapping puts the container's git user at a host UID this role
+    # doesn't control, so group/owner-based write access can't target it -
+    # world-writable is the pragmatic fix for this E2E-proof role.
+    mode: "0666"
 
 - name: Create quadlet unit directory
   file:
@@ -58,7 +72,7 @@
   become_user: "{{ ansible_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
-  command: podman exec gitea gitea admin user list
+  command: podman exec --user git gitea gitea admin user list
   register: gitea_ready
   until: gitea_ready.rc == 0
   retries: 30
@@ -71,7 +85,7 @@
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
   command: >
-    podman exec gitea gitea admin user create
+    podman exec --user git gitea gitea admin user create
     --username {{ gitea_bot_user }}
     --password {{ gitea_bot_password }}
     --email {{ gitea_bot_user }}@{{ gitea_domain }}
@@ -86,7 +100,7 @@
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
   command: >
-    podman exec gitea gitea admin user generate-access-token
+    podman exec --user git gitea gitea admin user generate-access-token
     --username {{ gitea_bot_user }}
     --token-name janitor
     --scopes all
@@ -104,7 +118,7 @@
   # this role's own idempotency can't recover a token from a re-run. The
   # ansible_facts.set fact below only reflects the LATEST run's real
   # value; see docs/multi-host-deployment.md for the recovery path (drop
-  # the token from gitea's admin UI, delete gitea_home/config so INSTALL_LOCK
+  # the token from gitea's admin UI, delete gitea_home/data so INSTALL_LOCK
   # is cleared too if genuinely starting over).
   set_fact:
     gitea_access_token: "{{ gitea_token_create.stdout_lines[-1] | trim if gitea_token_create.rc == 0 else 'CHANGEME-see-docs-multi-host-deployment' }}"
