@@ -19,7 +19,7 @@ HTTP_PORT = {{ gitea_http_port }}
 ROOT_URL = http://{{ gitea_domain }}:{{ gitea_http_port }}/
 DISABLE_SSH = false
 SSH_PORT = {{ gitea_ssh_port }}
-SSH_LISTEN_PORT = 22
+SSH_LISTEN_PORT = {{ gitea_ssh_port }}
 LFS_START_SERVER = false
 
 [database]
