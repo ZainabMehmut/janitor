@@ -8,7 +8,6 @@ Image=docker.io/gitea/gitea:latest
 ContainerName=gitea
 Network=host
 Volume={{ gitea_home }}/data:/data:rw
-Volume={{ gitea_home }}/config:/etc/gitea:rw
 
 Pull=newer
 
