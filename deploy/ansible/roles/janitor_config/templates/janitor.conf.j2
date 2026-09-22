@@ -1,5 +1,5 @@
-logs_location: "{{ janitor_home }}/data/logs"
-artifact_location: "{{ janitor_home }}/data/artifacts"
+logs_location: "/mnt/janitor/data/logs"
+artifact_location: "/mnt/janitor/data/artifacts"
 database_location: "postgresql://janitor:{{ janitor_db_password }}@localhost:5432/janitor"
 redis_location: "redis://localhost"
 git_location: "http://localhost:9923"
