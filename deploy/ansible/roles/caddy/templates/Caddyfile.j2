@@ -13,6 +13,16 @@
 	handle /bzr/* {
 		reverse_proxy localhost:9930
 	}
+	# archive (janitor-archive, :9914) only serves the /dists/* apt-repo
+	# metadata (Release/Packages/Sources) - the referenced .deb/.dsc pool
+	# files under /<suite>/pkg/<pkg>/<run_id>/<file> are a *different*
+	# route, already reachable through the catch-all below since site.py
+	# registers that path itself and proxies it on to archiver_url. Without
+	# this handle, a real apt client can fetch the pool files but never
+	# the Release/Packages index that names them.
+	handle /dists/* {
+		reverse_proxy localhost:9914
+	}
 	handle {
 		reverse_proxy localhost:8090
 	}
