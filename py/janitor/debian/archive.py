@@ -149,7 +149,7 @@ class GeneratingPackageInfoProvider(PackageInfoProvider):
     async def packages_for_run(self, run_id, suite_name, package, arch):
         with tempfile.TemporaryDirectory(prefix=TMP_PREFIX) as td:
             await self.artifact_manager.retrieve_artifacts(
-                run_id, td, timeout=DEFAULT_GCS_TIMEOUT
+                run_id, td
             )
             async for para in scan_packages(td):
                 para["Filename"] = os.path.join(
@@ -167,7 +167,7 @@ class GeneratingPackageInfoProvider(PackageInfoProvider):
     async def sources_for_run(self, run_id, suite_name, package):
         with tempfile.TemporaryDirectory(prefix=TMP_PREFIX) as td:
             await self.artifact_manager.retrieve_artifacts(
-                run_id, td, timeout=DEFAULT_GCS_TIMEOUT
+                run_id, td
             )
             async for para in scan_sources(td):
                 para["Directory"] = os.path.join(
