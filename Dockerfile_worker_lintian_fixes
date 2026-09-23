@@ -1,0 +1,23 @@
+# Derived image with lintian-brush - see docs/optional-services.md
+FROM ghcr.io/jelmer/janitor/worker:latest
+MAINTAINER Jelmer Vernooij <jelmer@jelmer.uk>
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# lintian-brush isn't in testing yet, build from crates.io (needs lintian present at build time)
+RUN apt-get update --yes \
+ && apt-get satisfy --yes --no-install-recommends \
+        cargo \
+        libclang-dev \
+        libpython3-dev \
+        libssl-dev \
+        pkg-config \
+        nettle-dev \
+        protobuf-compiler \
+ && apt-get clean \
+ && cargo install --locked lintian-brush \
+ && cp /root/.cargo/bin/lintian-brush /usr/local/bin/lintian-brush \
+ && rm -rf /root/.cargo /root/.rustup \
+ && apt-get purge --yes cargo libclang-dev pkg-config nettle-dev protobuf-compiler \
+ && apt-get autoremove --yes \
+ && apt-get clean
