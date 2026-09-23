@@ -24,6 +24,13 @@ impl std::fmt::Display for BuildFailure {
 
 impl std::error::Error for BuildFailure {}
 
+fn append_chroot_arg(command: &str, chroot: Option<&str>) -> String {
+    match chroot {
+        Some(chroot) => format!("{} --chroot={}", command, shlex::try_quote(chroot).unwrap()),
+        None => command.to_string(),
+    }
+}
+
 pub(crate) fn build(
     local_tree: &breezyshim::workingtree::GenericWorkingTree,
     subpath: &std::path::Path,
@@ -82,6 +89,12 @@ pub(crate) fn build(
 
     let apt = ognibuild::debian::apt::AptManager::new(session.as_ref(), None);
     if let Some(command) = config.build_command.as_ref() {
+        // config.chroot only selects which schroot session is created above - fold it into
+        // the builder command itself the same way extra_repositories is folded in by
+        // ognibuild::debian::build::builddeb_command.
+        let command = append_chroot_arg(command, config.chroot.as_deref());
+        let command = command.as_str();
+
         if let Some(last_build_version) = config.last_build_version.as_ref() {
             // Update the changelog entry with the previous build version;
             // This allows us to upload incremented versions for subsequent
@@ -273,4 +286,22 @@ pub(crate) fn build(
 #[derive(serde::Serialize)]
 pub struct DebianBuildResult {
     lintian: crate::debian::lintian::LintianResult,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_append_chroot_arg_some() {
+        assert_eq!(
+            append_chroot_arg("sbuild", Some("bookworm-amd64-sbuild")),
+            "sbuild --chroot=bookworm-amd64-sbuild"
+        );
+    }
+
+    #[test]
+    fn test_append_chroot_arg_none() {
+        assert_eq!(append_chroot_arg("sbuild", None), "sbuild");
+    }
 }
