@@ -10,7 +10,7 @@ repository = "https://github.com/jelmer/janitor.git"
 homepage = "https://github.com/jelmer/janitor"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pyo3 = {workspace = true, features=["serde", "chrono"]}
