@@ -90,3 +90,13 @@ already-published `ghcr.io` image, so a deployment using
 `use_prebuilt_images: true` won't see this take effect until upstream
 publishes a rebuilt image with that Dockerfile change in it. A source
 build (`use_prebuilt_images: false`) picks it up immediately.
+
+## lintian-fixes worker
+
+The docs' own running example campaign, `lintian-fixes`, needs
+`lintian-brush` - an instance-specific codemod the plain worker image
+doesn't ship (see [PR #1415](https://github.com/janitor-team/janitor/pull/1415)).
+
+Enable it with `enable_lintian_fixes_worker: true` in `group_vars/all.yml`
+to build `Dockerfile_worker_lintian_fixes` (derived from the plain worker
+image) instead of the plain one.
