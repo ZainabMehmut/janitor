@@ -63,6 +63,15 @@ gitea_bot_password: CHANGEME   # only used the first time the bot account is cre
 # for production.
 # auto_upload_dput_host: local
 
+# Leave false to run the plain worker image (default). Set true to build
+# Dockerfile_worker_lintian_fixes on top of it instead - lintian-brush is an
+# instance-specific codemod, not something core janitor ships (see PR #1415),
+# but the project's own docs (docs/glossary.md, docs/flow.md,
+# devnotes/glossary.rst) use lintian-fixes as their running example
+# throughout, so a deployment following those docs literally needs this on
+# to actually work.
+enable_lintian_fixes_worker: false
+
 # Which services get a quadlet unit deployed (roles/janitor_quadlet) - the
 # order here is tier-ordered and doubles as the start order the "Start
 # janitor services in dependency tiers" task loops over; each unit's own
