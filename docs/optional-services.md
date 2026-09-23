@@ -95,7 +95,7 @@ build (`use_prebuilt_images: false`) picks it up immediately.
 
 The docs' own running example campaign, `lintian-fixes`, needs
 `lintian-brush` - an instance-specific codemod the plain worker image
-doesn't ship (see [PR #1415](https://github.com/janitor-team/janitor/pull/1415)).
+doesn't ship.
 
 Enable it with `enable_lintian_fixes_worker: true` in `group_vars/all.yml`
 to build `Dockerfile_worker_lintian_fixes` (derived from the plain worker
