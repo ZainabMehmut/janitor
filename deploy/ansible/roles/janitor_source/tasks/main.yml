@@ -131,3 +131,16 @@
       Expected {{ expected_images | length }} janitor service images, found
       {{ built_images.stdout_lines | map('regex_replace', ':[^:]*$', '') | unique | select('search', 'jelmer/janitor/') | list | length }}.
       {{ (not use_prebuilt_images) | ternary('make build-all output: ' + (build_result.stdout[-2000:] | default('')), 'pull path was used - check the individual podman pull task results above') }}
+
+- name: Build the derived lintian-fixes worker image
+  # Opt-in (enable_lintian_fixes_worker, group_vars/all.yml) - derives from
+  # whichever worker image the tasks above just built or pulled, so this
+  # always runs last. Tagged as a plain local image (no registry, nothing
+  # to pull) since roles/janitor_quadlet's worker.container.j2 references
+  # it by this exact tag when the var is on.
+  become_user: "{{ ansible_user }}"
+  command: podman build --no-cache -t localhost/janitor-worker-lintian-fixes:latest -f Dockerfile_worker_lintian_fixes .
+  args:
+    chdir: "{{ janitor_home }}"
+  when: enable_lintian_fixes_worker
+  changed_when: true

@@ -4,7 +4,7 @@ After=network-online.target janitor-runner.service
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/jelmer/janitor/worker:latest
+Image={{ "localhost/janitor-worker-lintian-fixes:latest" if enable_lintian_fixes_worker else "ghcr.io/jelmer/janitor/worker:latest" }}
 ContainerName=janitor-worker
 Network=host
 # sbuild's unshare chroot mode (the only mode that works unprivileged inside
