@@ -72,6 +72,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     args.logging.init();
 
+    // Purge stray schroot sessions a previous crashed/killed worker
+    // instance left behind - SchrootSession's own cleanup can silently
+    // fail to remove a session (see ognibuild upstream), and those pile
+    // up across restarts until new session creation itself starts failing.
+    if let Err(e) = std::process::Command::new("schroot")
+        .args(["--all-sessions", "--end-session", "--force"])
+        .output()
+    {
+        log::debug!("Stale schroot session cleanup failed to run: {}", e);
+    }
+
     // Load breezy plugins so VCS URL handlers (notably
     // breezy.plugins.debian.directory, which normalises
     // "https://.../pkg.git -b branch" into ",branch=branch") are
