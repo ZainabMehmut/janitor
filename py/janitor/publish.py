@@ -1421,7 +1421,7 @@ async def handle_policy_get(request):
                     "mode": p["mode"],
                     "max_frequency_days": p["frequency_days"],
                 }
-                for p in row["publish"]
+                for p in row["per_branch_policy"]
             },
         }
     )
@@ -1609,7 +1609,7 @@ async def get_publish_policy(conn: asyncpg.Connection, codebase: str, campaign: 
         codebase,
         campaign,
     )
-    if row:
+    if row and row["per_branch_policy"] is not None:
         return (
             {
                 v["role"]: (v["mode"], v["frequency_days"])
@@ -1663,8 +1663,20 @@ async def publish_request(request):
 
     if mode:
         branches = [(r, mode) for r in roles]
-    else:
+    elif publish_policy is not None:
         branches = [(r, publish_policy.get(r, (MODE_SKIP, None))[0]) for r in roles]
+    else:
+        return web.json_response(
+            {
+                "run_id": run.id,
+                "code": "missing-publish-policy",
+                "description": (
+                    f"No publish policy configured for {codebase}/{campaign} "
+                    "and no mode specified"
+                ),
+            },
+            status=400,
+        )
 
     publish_ids = {}
     for role, mode in branches:
