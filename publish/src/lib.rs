@@ -468,6 +468,12 @@ pub struct PublishOneRequest {
     pub allow_create_proposal: bool,
     /// The URL of the source branch.
     pub source_branch_url: url::Url,
+    /// The name of the branch to open at `source_branch_url` (campaign/role).
+    ///
+    /// The name cannot be encoded into the URL itself via breezy's segment-parameter
+    /// convention (`,branch=...`) because that encoding cannot round-trip a value
+    /// containing a literal `/`, which every campaign/role branch name has.
+    pub source_branch_name: Option<String>,
     /// The result of the codemod.
     pub codemod_result: serde_json::Value,
     /// Optional template for the commit message.
@@ -898,8 +904,8 @@ impl PublishWorker {
         derived_owner: Option<&str>,
         auto_merge: Option<bool>,
     ) -> Result<PublishOneResult, PublishError> {
-        let local_branch_url =
-            vcs_manager.get_branch_url(codebase, &format!("{}/{}", campaign, role));
+        let local_branch_url = vcs_manager.get_repository_url(codebase);
+        let local_branch_name = format!("{}/{}", campaign, role);
 
         let request = PublishOneRequest {
             campaign: campaign.to_owned(),
@@ -907,6 +913,7 @@ impl PublishWorker {
             codemod_result: codemod_result.clone(),
             target_branch_url: target_branch_url.clone(),
             source_branch_url: local_branch_url,
+            source_branch_name: Some(local_branch_name),
             existing_mp_url: existing_mp_url.cloned(),
             derived_branch_name: derived_branch_name.to_owned(),
             mode,
@@ -1741,6 +1748,7 @@ mod tests {
             tags: None,
             allow_create_proposal: true,
             source_branch_url: url::Url::parse("https://salsa.debian.org/fork/bar").unwrap(),
+            source_branch_name: Some("lintian-fixes/main".to_string()),
             codemod_result: serde_json::json!({"applied": 3}),
             commit_message_template: Some("Fix lintian issues".to_string()),
             title_template: Some("Fix lintian issues in {{source}}".to_string()),
