@@ -30,19 +30,16 @@ fn is_remote_git_branch(branch: &dyn Branch) -> bool {
     vcs_type == breezyshim::foreign::VcsType::Git && url.scheme() != "file"
 }
 
-/// Retry a branch-open attempt once if it fails with a benign connection
-/// reset: the client can legitimately abandon the first round of git's
-/// smart-HTTP negotiation, and a second attempt against the same URL
-/// succeeds cleanly every time this was observed. Which `BranchOpenError`
-/// variant this lands as depends on exactly where in `open_branch` the
-/// reset happens, so the retry is gated on the formatted description text
-/// rather than a specific variant.
+/// Retry a branch open once after a benign connection reset.
 fn open_branch_retrying<T>(
     mut attempt: impl FnMut() -> Result<T, BranchOpenError>,
 ) -> Result<T, BranchOpenError> {
     match attempt() {
         Err(e) if e.to_string().contains("Connection closed early") => {
-            log::warn!("Retrying branch open once after a benign connection reset: {}", e);
+            log::warn!(
+                "Retrying branch open once after a benign connection reset: {}",
+                e
+            );
             attempt()
         }
         other => other,
