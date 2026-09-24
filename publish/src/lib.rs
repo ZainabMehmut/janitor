@@ -468,11 +468,7 @@ pub struct PublishOneRequest {
     pub allow_create_proposal: bool,
     /// The URL of the source branch.
     pub source_branch_url: url::Url,
-    /// The name of the branch to open at `source_branch_url` (campaign/role).
-    ///
-    /// The name cannot be encoded into the URL itself via breezy's segment-parameter
-    /// convention (`,branch=...`) because that encoding cannot round-trip a value
-    /// containing a literal `/`, which every campaign/role branch name has.
+    /// The branch to open at `source_branch_url`, as campaign/role.
     pub source_branch_name: Option<String>,
     /// The result of the codemod.
     pub codemod_result: serde_json::Value,
@@ -1766,6 +1762,40 @@ mod tests {
         assert_eq!(roundtripped.mode, Mode::Propose);
         assert_eq!(roundtripped.require_binary_diff, true);
         assert_eq!(roundtripped.reviewers, Some(vec!["alice".to_string()]));
+        assert_eq!(
+            roundtripped.source_branch_name,
+            Some("lintian-fixes/main".to_string())
+        );
+    }
+
+    #[test]
+    fn test_publish_one_request_without_source_branch_name() {
+        let json = r#"{
+            "campaign": "lintian-fixes",
+            "role": "main",
+            "command": "lintian-brush",
+            "target_branch_url": "https://example.com/mypkg",
+            "source_branch_url": "https://example.com/mypkg",
+            "derived_branch_name": "lintian-fixes",
+            "mode": "propose",
+            "allow_create_proposal": true,
+            "require-binary-diff": false,
+            "codemod_result": {},
+            "existing_mp_url": null,
+            "tags": null,
+            "commit_message_template": null,
+            "title_template": null,
+            "reviewers": null,
+            "log_id": "log-1",
+            "revision_id": "somerevid",
+            "extra_context": null,
+            "external_url": null,
+            "differ_url": "https://example.com/differ",
+            "derived_owner": null,
+            "auto_merge": null
+        }"#;
+        let parsed: PublishOneRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.source_branch_name, None);
     }
 
     #[test]
