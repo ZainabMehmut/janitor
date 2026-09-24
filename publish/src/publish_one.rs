@@ -30,6 +30,25 @@ fn is_remote_git_branch(branch: &dyn Branch) -> bool {
     vcs_type == breezyshim::foreign::VcsType::Git && url.scheme() != "file"
 }
 
+/// Retry a branch-open attempt once if it fails with a benign connection
+/// reset: the client can legitimately abandon the first round of git's
+/// smart-HTTP negotiation, and a second attempt against the same URL
+/// succeeds cleanly every time this was observed. Which `BranchOpenError`
+/// variant this lands as depends on exactly where in `open_branch` the
+/// reset happens, so the retry is gated on the formatted description text
+/// rather than a specific variant.
+fn open_branch_retrying<T>(
+    mut attempt: impl FnMut() -> Result<T, BranchOpenError>,
+) -> Result<T, BranchOpenError> {
+    match attempt() {
+        Err(e) if e.to_string().contains("Connection closed early") => {
+            log::warn!("Retrying branch open once after a benign connection reset: {}", e);
+            attempt()
+        }
+        other => other,
+    }
+}
+
 /// Open the source and target branches for `request` and call the
 /// underlying publish function.
 pub fn publish_one(
@@ -48,12 +67,14 @@ pub fn publish_one(
     };
     drop_env(&mut args);
 
-    let mut source_branch = match open_branch(
-        &request.source_branch_url,
-        possible_transports.as_mut(),
-        None,
-        None,
-    ) {
+    let mut source_branch = match open_branch_retrying(|| {
+        open_branch(
+            &request.source_branch_url,
+            possible_transports.as_mut(),
+            None,
+            None,
+        )
+    }) {
         Ok(branch) => branch,
         Err(BranchOpenError::RateLimited { description, .. }) => {
             return Err(PublishError::Failure {
@@ -104,12 +125,14 @@ pub fn publish_one(
         None
     };
 
-    let target_branch = match open_branch(
-        &request.target_branch_url,
-        possible_transports.as_mut(),
-        None,
-        None,
-    ) {
+    let target_branch = match open_branch_retrying(|| {
+        open_branch(
+            &request.target_branch_url,
+            possible_transports.as_mut(),
+            None,
+            None,
+        )
+    }) {
         Ok(branch) => branch,
         Err(BranchOpenError::RateLimited { description, .. }) => {
             return Err(PublishError::Failure {
@@ -259,43 +282,44 @@ pub fn publish_one(
                     });
                 }
             };
-            let resume_branch =
-                match open_branch(&source_branch_url, possible_transports.as_mut(), None, None) {
-                    Ok(branch) => branch,
-                    Err(BranchOpenError::RateLimited { description, .. }) => {
-                        return Err(PublishError::Failure {
-                            description: format!("Resume branch rate limited: {}", description),
-                            code: "resume-branch-rate-limited".to_string(),
-                        });
-                    }
-                    Err(BranchOpenError::TemporarilyUnavailable { description, .. }) => {
-                        return Err(PublishError::Failure {
-                            description: format!(
-                                "Resume branch temporarily unavailable: {}",
-                                description
-                            ),
-                            code: "resume-branch-temporarily-unavailable".to_string(),
-                        });
-                    }
-                    Err(BranchOpenError::Unavailable { description, .. }) => {
-                        return Err(PublishError::Failure {
-                            description: format!("Resume branch unavailable: {}", description),
-                            code: "resume-branch-unavailable".to_string(),
-                        });
-                    }
-                    Err(BranchOpenError::Missing { description, .. }) => {
-                        return Err(PublishError::Failure {
-                            description: format!("Resume branch missing: {}", description),
-                            code: "resume-branch-missing".to_string(),
-                        });
-                    }
-                    Err(e) => {
-                        return Err(PublishError::Failure {
-                            description: e.to_string(),
-                            code: "unexpected-error".to_string(),
-                        });
-                    }
-                };
+            let resume_branch = match open_branch_retrying(|| {
+                open_branch(&source_branch_url, possible_transports.as_mut(), None, None)
+            }) {
+                Ok(branch) => branch,
+                Err(BranchOpenError::RateLimited { description, .. }) => {
+                    return Err(PublishError::Failure {
+                        description: format!("Resume branch rate limited: {}", description),
+                        code: "resume-branch-rate-limited".to_string(),
+                    });
+                }
+                Err(BranchOpenError::TemporarilyUnavailable { description, .. }) => {
+                    return Err(PublishError::Failure {
+                        description: format!(
+                            "Resume branch temporarily unavailable: {}",
+                            description
+                        ),
+                        code: "resume-branch-temporarily-unavailable".to_string(),
+                    });
+                }
+                Err(BranchOpenError::Unavailable { description, .. }) => {
+                    return Err(PublishError::Failure {
+                        description: format!("Resume branch unavailable: {}", description),
+                        code: "resume-branch-unavailable".to_string(),
+                    });
+                }
+                Err(BranchOpenError::Missing { description, .. }) => {
+                    return Err(PublishError::Failure {
+                        description: format!("Resume branch missing: {}", description),
+                        code: "resume-branch-missing".to_string(),
+                    });
+                }
+                Err(e) => {
+                    return Err(PublishError::Failure {
+                        description: e.to_string(),
+                        code: "unexpected-error".to_string(),
+                    });
+                }
+            };
             (Some(resume_branch), Some(true), Some(existing_proposal))
         } else {
             match silver_platter::publish::find_existing_proposed(
