@@ -330,10 +330,6 @@ class PublishWorker:
           command: Command that was run
         """
         assert mode in SUPPORTED_MODES, f"mode is {mode!r}"
-        # NB: the branch name is passed separately (source_branch_name) rather than
-        # encoded into local_branch_url via breezy's `,branch=...` segment-parameter
-        # convention - that convention cannot round-trip a value containing a literal
-        # `/`, which every campaign/role branch name here has (e.g. "lintian-fixes/main").
         local_branch_url = vcs_manager.get_repository_url(codebase)
         local_branch_name = f"{campaign}/{role}"
         target_branch_url = target_branch_url.rstrip("/")

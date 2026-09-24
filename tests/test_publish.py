@@ -28,7 +28,9 @@ async def test_credentials_missing_ssh_dir_returns_no_keys(aiohttp_client, monke
     app["gpg"] = type("FakeGpg", (), {"keylist": lambda self, secret=False: []})()
 
     monkeypatch.setattr(publish, "forges", {})
-    monkeypatch.setattr(publish.os.path, "expanduser", lambda p: "/nonexistent-ssh-dir-for-test")
+    monkeypatch.setattr(
+        publish.os.path, "expanduser", lambda p: "/nonexistent-ssh-dir-for-test"
+    )
 
     client = await aiohttp_client(app)
     resp = await client.get("/credentials")
@@ -40,6 +42,9 @@ async def test_credentials_missing_ssh_dir_returns_no_keys(aiohttp_client, monke
 class _FakeVcsManager:
     def get_branch_url(self, codebase, branch_name):
         return f"https://example.com/{codebase}/{branch_name}"
+
+    def get_repository_url(self, codebase):
+        return f"https://example.com/{codebase}"
 
 
 async def test_publish_one_sends_revision_id_and_invokes_compiled_binary(monkeypatch):
@@ -73,6 +78,39 @@ async def test_publish_one_sends_revision_id_and_invokes_compiled_binary(monkeyp
     assert captured["args"] == ["janitor-publish-one"]
     assert captured["request"]["revision_id"] == "somerevid"
     assert "revision" not in captured["request"]
+
+
+async def test_publish_one_does_not_encode_branch_name_into_url(monkeypatch):
+    captured = {}
+
+    async def fake_run_worker_process(args, request, **kwargs):
+        captured["request"] = request
+        return 1, {"code": "some-failure", "description": "boom"}
+
+    monkeypatch.setattr(publish, "run_worker_process", fake_run_worker_process)
+
+    worker = publish.PublishWorker()
+
+    with pytest.raises(publish.PublishFailure):
+        await worker.publish_one(
+            campaign="lintian-fixes",
+            codebase="mypkg",
+            command="lintian-brush",
+            target_branch_url="https://example.com/mypkg",
+            mode="propose",
+            role="main",
+            revision=b"somerevid",
+            log_id="log-1",
+            unchanged_id=None,
+            derived_branch_name="lintian-fixes",
+            rate_limit_bucket=None,
+            vcs_manager=_FakeVcsManager(),
+        )
+
+    # campaign/role contains a "/", which a segment parameter cannot hold.
+    assert captured["request"]["source_branch_url"] == "https://example.com/mypkg"
+    assert captured["request"]["source_branch_name"] == "lintian-fixes/main"
+    assert "," not in captured["request"]["source_branch_url"]
 
 
 async def test_publish_one_passes_template_env_path_to_compiled_binary(monkeypatch):
