@@ -95,6 +95,17 @@ from .config import Campaign, Config, get_campaign_config, read_config
 from .schedule import CandidateUnavailable, do_schedule, do_schedule_control
 from .vcs import VcsManager, get_vcs_managers_from_config
 
+try:
+    # Only on breezy's unreleased 3.4 branch so far.
+    import breezy.plugins.gitea  # noqa: F401
+except ImportError:
+    # Logger.warning, not logging.warning: the latter calls basicConfig() and
+    # would make main()'s own basicConfig(level=...) a no-op.
+    logging.getLogger(__name__).warning(
+        "breezy Gitea forge plugin is not available, so Gitea targets will be "
+        "reported as unsupported forges"
+    )
+
 override_launchpad_consumer_name()
 
 

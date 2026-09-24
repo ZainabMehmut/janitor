@@ -62,6 +62,16 @@ try:
     from breezy.errors import ConnectionError  # type: ignore
 except ImportError:  # breezy >= 4
     pass
+try:
+    # Only on breezy's unreleased 3.4 branch so far.
+    import breezy.plugins.gitea  # noqa: F401
+except ImportError:
+    # Logger.warning, not logging.warning: the latter calls basicConfig() and
+    # would make main()'s own basicConfig(level=...) a no-op.
+    logging.getLogger(__name__).warning(
+        "breezy Gitea forge plugin is not available, so Gitea targets will be "
+        "reported as unsupported forges"
+    )
 from breezy.forge import (
     Forge,
     ForgeLoginRequired,
