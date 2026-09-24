@@ -1,0 +1,31 @@
+[Unit]
+Description=gitea (forge plugin E2E target)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/gitea/gitea:latest
+ContainerName=gitea
+Network=host
+Volume={{ gitea_home }}/data:/data:rw
+
+# Without these, gitea's own entrypoint chowns/creates its data
+# directories as container-internal UID 1000, which rootless podman's
+# subuid remap maps to some high host UID (not {{ ansible_user }}, the
+# owner of the bind-mounted volume) - every gitea-managed subdirectory
+# it needs but doesn't already have ends up a fatal "permission denied"
+# the moment startup reaches it (confirmed for /data/gitea/home,
+# /data/gitea/attachments, /data/gitea/repo-archive in turn). Telling it
+# the real host UID/GID it's bind-mounting as fixes this at the source.
+Environment=USER_UID={{ ansible_facts.getent_passwd[ansible_user][1] }}
+Environment=USER_GID={{ ansible_facts.getent_passwd[ansible_user][2] }}
+
+Pull=newer
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

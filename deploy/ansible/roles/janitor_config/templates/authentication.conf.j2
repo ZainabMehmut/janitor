@@ -1,0 +1,28 @@
+[Github]
+scheme = https
+host = github.com
+url = https://api.github.com
+user = {{ janitor_github_org }}
+password = {{ breezy_github_token }}
+private_token = {{ breezy_github_token }}
+
+# git_store's public port requires Basic auth for git-receive-pack (push) -
+# see py/janitor/git_store.py's is_worker() check. Without this, every
+# worker push to git_store 401s.
+[git_store]
+scheme = http
+host = localhost
+port = 9924
+user = {{ worker_name }}
+password = {{ worker_password }}
+{% if gitea_access_token is defined %}
+
+# roles/gitea (see site.yml, gated by enable_gitea) - the bot account it
+# creates, for janitor's Gitea forge plugin.
+[gitea-local]
+scheme = http
+host = {{ gitea_domain }}
+port = {{ gitea_http_port }}
+user = {{ gitea_bot_user }}
+private_token = {{ gitea_access_token }}
+{% endif %}
