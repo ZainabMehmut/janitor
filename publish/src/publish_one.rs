@@ -52,7 +52,7 @@ pub fn publish_one(
         &request.source_branch_url,
         possible_transports.as_mut(),
         None,
-        None,
+        request.source_branch_name.as_deref(),
     ) {
         Ok(branch) => branch,
         Err(BranchOpenError::RateLimited { description, .. }) => {
