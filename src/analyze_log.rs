@@ -1,5 +1,4 @@
 use buildlog_consultant::common::find_build_failure_description;
-use std::io::BufRead;
 
 pub struct AnalyzedLog {
     pub code: String,
@@ -10,15 +9,23 @@ pub struct AnalyzedLog {
 
 pub type AnalyzeLogFn<R> = fn(R) -> AnalyzedLog;
 
+/// Read the whole log, replacing invalid UTF-8: build logs are not always UTF-8.
+fn read_lossy<R: std::io::Read>(mut logf: R) -> String {
+    let mut buf = Vec::new();
+    logf.read_to_end(&mut buf).unwrap();
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+fn read_lines_lossy<R: std::io::Read>(logf: R) -> Vec<String> {
+    read_lossy(logf).lines().map(|l| l.to_string()).collect()
+}
+
 pub trait AnalyzeFn<R: std::io::Read> {
     fn analyze(&self, logf: R) -> AnalyzedLog;
 }
 
 pub fn process_dist_log<R: std::io::Read>(logf: R) -> AnalyzedLog {
-    let lines = std::io::BufReader::new(logf)
-        .lines()
-        .map(|l| l.unwrap())
-        .collect::<Vec<_>>();
+    let lines = read_lines_lossy(logf);
     let problem =
         find_build_failure_description(lines.iter().map(|l| l.as_str()).collect::<Vec<_>>()).1;
     let (new_code, new_description, new_failure_details) = if let Some(problem) = problem {
@@ -47,10 +54,7 @@ pub fn process_dist_log<R: std::io::Read>(logf: R) -> AnalyzedLog {
 }
 
 pub fn process_build_log<R: std::io::Read>(logf: R) -> AnalyzedLog {
-    let lines = std::io::BufReader::new(logf)
-        .lines()
-        .map(|l| l.unwrap())
-        .collect::<Vec<_>>();
+    let lines = read_lines_lossy(logf);
     let (r#match, problem) =
         find_build_failure_description(lines.iter().map(|l| l.as_str()).collect::<Vec<_>>());
     let (new_code, new_failure_details) = if let Some(problem) = problem.as_ref() {
@@ -78,9 +82,10 @@ pub fn process_build_log<R: std::io::Read>(logf: R) -> AnalyzedLog {
 }
 
 pub fn process_sbuild_log<R: std::io::Read>(logf: R) -> AnalyzedLog {
-    let bufread = std::io::BufReader::new(logf);
-
-    let sbuildlog = buildlog_consultant::sbuild::SbuildLog::try_from(bufread).unwrap();
+    // Parse the lossy string; TryFrom<BufReader> would decode it strictly.
+    let sbuildlog = read_lossy(logf)
+        .parse::<buildlog_consultant::sbuild::SbuildLog>()
+        .unwrap();
     let failure = buildlog_consultant::sbuild::worker_failure_from_sbuild_log(&sbuildlog);
 
     let (new_code, new_failure_details) = if let Some(error) = failure.error.as_ref() {
@@ -121,3 +126,4 @@ pub fn process_sbuild_log<R: std::io::Read>(logf: R) -> AnalyzedLog {
         failure_details: new_failure_details,
     }
 }
+
