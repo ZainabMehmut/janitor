@@ -1074,6 +1074,7 @@ dependencies = [
  "pyo3-async-runtimes",
  "pyo3-filelike",
  "pyo3-log",
+ "pythonize",
  "reqwest 0.13.5",
  "serde_json",
  "silver-platter",
