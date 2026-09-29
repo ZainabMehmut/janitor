@@ -39,6 +39,7 @@ from janitor.runner import (
     committer_env,
     create_app,
     is_log_filename,
+    open_resume_branch,
     store_change_set,
     store_run,
 )
@@ -1068,3 +1069,25 @@ async def test_handle_queue_bad_limit(aiohttp_client, db, tmp_path):
     assert "LIMIT" in reasons[2], reasons[2]
     assert "bigint" in reasons[3], reasons[3]
     await qp.stop()
+
+
+def test_open_resume_branch_propagates_forge_login_required(monkeypatch):
+    # find_existing_proposed needs credentials to list proposals on GitHub and
+    # GitLab, and the ForgeLoginRequired it raises used to escape both
+    # open_resume_branch and next_item, turning into a 500 on /active-runs.
+    # It must keep bubbling up, counted and logged rather than swallowed.
+    from breezy.forge import ForgeLoginRequired
+
+    from janitor import runner
+
+    monkeypatch.setattr(runner, "get_forge", lambda *a, **kw: object())
+
+    def raise_login_required(*args, **kwargs):
+        raise ForgeLoginRequired(None)
+
+    monkeypatch.setattr(runner, "find_existing_proposed", raise_login_required)
+
+    before = runner.forge_login_required_count._value.get()
+    with pytest.raises(ForgeLoginRequired):
+        open_resume_branch(object(), "mycampaign", "mypackage")
+    assert runner.forge_login_required_count._value.get() == before + 1
