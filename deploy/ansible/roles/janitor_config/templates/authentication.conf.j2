@@ -18,11 +18,15 @@ password = {{ worker_password }}
 {% if gitea_access_token is defined %}
 
 # roles/gitea (see site.yml, gated by enable_gitea) - the bot account it
-# creates, for janitor's Gitea forge plugin.
+# creates, for janitor's Gitea forge plugin. breezy only considers a stanza
+# here if forge = gitea, and then matches it by url, so both are required.
 [gitea-local]
 scheme = http
 host = {{ gitea_domain }}
 port = {{ gitea_http_port }}
 user = {{ gitea_bot_user }}
+forge = gitea
+url = http://{{ gitea_domain }}:{{ gitea_http_port }}
+token = {{ gitea_access_token }}
 private_token = {{ gitea_access_token }}
 {% endif %}
