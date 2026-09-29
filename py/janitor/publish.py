@@ -39,9 +39,6 @@ import aioredlock
 import aiozipkin
 import asyncpg
 import asyncpg.pool
-import breezy.plugins.github  # noqa: F401
-import breezy.plugins.gitlab  # noqa: F401
-import breezy.plugins.launchpad  # noqa: F401
 from aiohttp import ClientSession, web
 from aiohttp.web_middlewares import normalize_path_middleware
 from aiohttp_apispec import setup_aiohttp_apispec
@@ -66,6 +63,7 @@ from breezy.forge import (
     get_proposal_by_url,
     iter_forge_instances,
 )
+from breezy.plugin import load_plugins
 from breezy.transport import Transport
 from redis.asyncio import Redis
 from silver_platter import (
@@ -209,6 +207,10 @@ CLOSED_STATUSES = ["closed", "abandoned", "rejected", "applied"]
 
 logger = logging.getLogger("janitor.publish")
 
+
+# Register breezy's forge plugins. get_forge() only sees a forge whose
+# plugin has been loaded, and this honours BRZ_PLUGIN_PATH.
+load_plugins()
 
 routes = web.RouteTableDef()
 

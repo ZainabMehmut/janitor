@@ -57,6 +57,7 @@ from aiohttp_openmetrics import Counter, Gauge, Histogram, metrics, metrics_midd
 from breezy import debug, urlutils
 from breezy.branch import Branch
 from breezy.errors import PermissionDenied, UnexpectedHttpStatus
+from breezy.plugin import load_plugins
 
 try:
     from breezy.errors import ConnectionError  # type: ignore
@@ -122,6 +123,10 @@ VCS_STORE_BRANCH_OPEN_TIMEOUT = 5.0
 # Maybe this should be configurable somewhere?
 DEFAULT_VCS_TYPE = "git"
 
+
+# Register breezy's forge plugins. get_forge() only sees a forge whose
+# plugin has been loaded, and this honours BRZ_PLUGIN_PATH.
+load_plugins()
 
 routes = web.RouteTableDef()
 run_count = Counter("run_count", "Number of runs executed.")
