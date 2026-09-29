@@ -11,10 +11,11 @@
     path: "{{ gitea_home }}/{{ item }}"
     state: directory
     owner: "{{ ansible_user }}"
-    # 0777, not 0755: the container's git user needs to create/chown its
-    # own subdirectories under here (ssh keys, repo home) on first boot.
-    # Same rootless-podman UID-remap reasoning as app.ini's mode below.
-    mode: "0777"
+    # group matters: root's gid 0 is unmapped inside the rootless user
+    # namespace, and the kernel refuses to chown a file whose group it
+    # cannot map, which breaks the handover task below.
+    group: "{{ ansible_user }}"
+    mode: "0755"
   loop:
     - data
     - data/gitea
@@ -30,12 +31,18 @@
     src: app.ini.j2
     dest: "{{ gitea_home }}/data/gitea/conf/app.ini"
     owner: "{{ ansible_user }}"
-    # 0666, not 0644: gitea writes generated secrets (JWT_SECRET etc.) back
-    # into this file on first real use. Rootless podman's default UID
-    # remapping puts the container's git user at a host UID this role
-    # doesn't control, so group/owner-based write access can't target it -
-    # world-writable is the pragmatic fix for this E2E-proof role.
-    mode: "0666"
+    group: "{{ ansible_user }}"
+    mode: "0644"
+
+- name: Hand the data volume to the container's git user
+  # gitea runs as uid 1000 inside the image, which rootless podman maps to a
+  # host subuid, so files owned by the login user are read-only to it.
+  become: true
+  become_user: "{{ ansible_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
+  command: podman unshare chown -R 1000:1000 {{ gitea_home }}/data
+  changed_when: true
 
 - name: Create quadlet unit directory
   file:

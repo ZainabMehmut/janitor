@@ -8,6 +8,10 @@ Image=docker.io/gitea/gitea:latest
 ContainerName=gitea
 Network=host
 Volume={{ gitea_home }}/data:/data:rw
+# The image's sshd setup reads these from the environment, not app.ini, and
+# rootless podman cannot bind the default port 22.
+Environment=SSH_PORT={{ gitea_ssh_port }}
+Environment=SSH_LISTEN_PORT={{ gitea_ssh_port }}
 
 Pull=newer
 
