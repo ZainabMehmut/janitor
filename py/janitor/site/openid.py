@@ -61,9 +61,7 @@ async def handle_oauth_callback(request):
         "grant_type": "authorization_code",
         "redirect_uri": str(redirect_uri),
     }
-    async with request.app["http_client_session"].post(
-        token_url, data=params
-    ) as resp:
+    async with request.app["http_client_session"].post(token_url, data=params) as resp:
         if resp.status != 200:
             return web.json_response(
                 status=resp.status,

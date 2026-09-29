@@ -28,7 +28,9 @@ async def test_credentials_missing_ssh_dir_returns_no_keys(aiohttp_client, monke
     app["gpg"] = type("FakeGpg", (), {"keylist": lambda self, secret=False: []})()
 
     monkeypatch.setattr(publish, "forges", {})
-    monkeypatch.setattr(publish.os.path, "expanduser", lambda p: "/nonexistent-ssh-dir-for-test")
+    monkeypatch.setattr(
+        publish.os.path, "expanduser", lambda p: "/nonexistent-ssh-dir-for-test"
+    )
 
     client = await aiohttp_client(app)
     resp = await client.get("/credentials")
