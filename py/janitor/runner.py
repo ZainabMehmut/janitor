@@ -141,6 +141,10 @@ queue_empty_count = Counter(
     "queue_empty",
     "Number of times the queue was empty when an assignment was requested",
 )
+forge_login_required_count = Counter(
+    "forge_login_required",
+    "Number of times a resume-branch lookup failed for lack of forge credentials",
+)
 
 
 async def to_thread_timeout(timeout, func, *args, **kwargs):
@@ -1171,6 +1175,10 @@ def open_resume_branch(
         except UnusableRedirect as e:
             logging.warning("Unable to list existing proposals: %s", e)
             return None
+        except ForgeLoginRequired as e:
+            forge_login_required_count.inc()
+            logging.error("No credentials to list proposals on forge: %s", e)
+            raise
         except UnexpectedHttpStatus as e:
             _parse_unexpected_http_status(e)
             logging.warning(
