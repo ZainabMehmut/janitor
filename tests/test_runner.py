@@ -268,7 +268,7 @@ async def test_release_claim_only_drops_the_queue_exclusion():
     await qp.register_run(active_run)
     assert await qp.active_run_count() == 1
 
-    await qp.release_claim(active_run.queue_id)
+    await qp.release_claim(active_run.queue_id, active_run.log_id)
     assert await qp.redis.hkeys("assigned-queue-items") == []
     assert await qp.redis.hkeys("active-runs") == [b"some-id"]
     assert await qp.redis.hkeys("last-keepalive") == [b"some-id"]
@@ -1104,3 +1104,41 @@ async def test_handle_queue_bad_limit(aiohttp_client, db, tmp_path):
     assert "LIMIT" in reasons[2], reasons[2]
     assert "bigint" in reasons[3], reasons[3]
     await qp.stop()
+
+
+async def test_unclaim_run_leaves_a_later_claim_on_the_same_item_alone():
+    # A claim is only ever dropped by the run that holds it. peek releases its
+    # claim early, so a real assign can take the same queue item, and peek's
+    # later unclaim must not delete the assign's claim or the item stops being
+    # excluded and a second worker is handed the same job.
+    qp = await create_queue_processor()
+
+    def run_for(log_id):
+        return ActiveRun(
+            campaign="test",
+            change_set=None,
+            command="blah",
+            queue_id=42,
+            log_id=log_id,
+            start_time=datetime.utcnow(),
+            codebase="test-1.1",
+            vcs_info={},
+            backchannel=Backchannel(),
+            worker_name="tester",
+            instigated_context=None,
+            estimated_duration=timedelta(seconds=10),
+        )
+
+    peek = run_for("peek-log")
+    await qp.register_run(peek)
+    await qp.release_claim(peek.queue_id, peek.log_id)
+
+    assign = run_for("assign-log")
+    await qp.register_run(assign)
+    assert await qp.redis.hget("assigned-queue-items", "42") == b"assign-log"
+
+    # peek's preview finishes late and tidies up after itself
+    await qp.unclaim_run("peek-log")
+
+    # the assign still owns the item
+    assert await qp.redis.hget("assigned-queue-items", "42") == b"assign-log"

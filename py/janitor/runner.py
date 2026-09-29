@@ -60,6 +60,7 @@ try:
     from breezy.errors import ConnectionError  # type: ignore
 except ImportError:  # breezy >= 4
     pass
+import redis.exceptions
 from breezy.forge import (
     Forge,
     ForgeLoginRequired,
@@ -1622,12 +1623,25 @@ class QueueProcessor:
         js = json.loads(serialized)
         return ActiveRun.from_json(js)
 
-    async def release_claim(self, queue_id: int) -> None:
-        # Releases just the exclusive queue-item claim, without touching
-        # the active-runs/metrics bookkeeping unclaim_run also clears.
-        # Used by peek so a slow preview stops excluding the item from
-        # other callers once it no longer needs exclusivity.
-        await self.redis.hdel("assigned-queue-items", str(queue_id))
+    async def release_claim(self, queue_id: int, log_id: str) -> None:
+        # Drop the claim only while this run still holds it. An unconditional
+        # hdel would delete a claim another run took in the meantime, and the
+        # item would stop being excluded while that run is still using it.
+        field = str(queue_id)
+        async with self.redis.pipeline() as tr:
+            while True:
+                try:
+                    await tr.watch("assigned-queue-items")
+                    held = await tr.hget("assigned-queue-items", field)
+                    if held is not None and held.decode() != log_id:
+                        await tr.unwatch()
+                        return
+                    tr.multi()
+                    tr.hdel("assigned-queue-items", field)
+                    await tr.execute()
+                    return
+                except redis.exceptions.WatchError:
+                    continue
 
     async def unclaim_run(self, log_id: str) -> None:
         active_run = await self.get_run(log_id)
@@ -1636,8 +1650,8 @@ class QueueProcessor:
         ).dec()
         if not active_run:
             return
+        await self.release_claim(active_run.queue_id, log_id)
         async with self.redis.pipeline() as tr:
-            tr.hdel("assigned-queue-items", str(active_run.queue_id))
             tr.hdel("active-runs", log_id)
             tr.hdel("last-keepalive", log_id)
             await tr.execute()
@@ -2595,7 +2609,9 @@ async def next_item(
                 # other callers while they compute the (possibly slow)
                 # preview below - only a real assignment needs exclusivity
                 # for the rest of this function.
-                await queue_processor.release_claim(active_run.queue_id)
+                await queue_processor.release_claim(
+                    active_run.queue_id, active_run.log_id
+                )
 
             try:
                 campaign_config = get_campaign_config(config, item.campaign)
