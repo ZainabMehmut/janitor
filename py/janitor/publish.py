@@ -39,10 +39,7 @@ import aioredlock
 import aiozipkin
 import asyncpg
 import asyncpg.pool
-import breezy.plugins.github  # noqa: F401
-import breezy.plugins.gitlab  # noqa: F401
-import breezy.plugins.launchpad  # noqa: F401
-import gpg
+import breezy.plugin
 from aiohttp import ClientSession, web
 from aiohttp.web_middlewares import normalize_path_middleware
 from aiohttp_apispec import setup_aiohttp_apispec
@@ -97,6 +94,7 @@ from .schedule import CandidateUnavailable, do_schedule, do_schedule_control
 from .vcs import VcsManager, get_vcs_managers_from_config
 
 override_launchpad_consumer_name()
+breezy.plugin.load_plugins()
 
 
 EXISTING_RUN_RETRY_INTERVAL = 30
@@ -350,7 +348,7 @@ class PublishWorker:
             "allow_create_proposal": allow_create_proposal,
             "external_url": self.external_url,
             "differ_url": self.differ_url,
-            "revision": revision.decode("utf-8"),
+            "revision_id": revision.decode("utf-8"),
             "reviewers": reviewers,
             "commit_message_template": commit_message_template,
             "title_template": title_template,
@@ -362,7 +360,7 @@ class PublishWorker:
         else:
             request["tags"] = {}
 
-        args = [sys.executable, "-m", "janitor.publish_one"]
+        args = ["janitor-publish-one"]
 
         if self.template_env_path:
             args.append(f"--template-env-path={self.template_env_path}")
@@ -1627,11 +1625,14 @@ async def handle_publish_id(request):
     publish_id = request.match_info["publish_id"]
     async with request.app["db"].acquire() as conn:
         row = await conn.fetchrow(
+            "SELECT * FROM publish WHERE id = $1",
             publish_id,
         )
-        if row:
+        if row is None:
             raise web.HTTPNotFound(text=f"no such publish: {publish_id}")
-    return web.json_response({})
+        result = dict(row)
+        result["timestamp"] = result["timestamp"].isoformat()
+    return web.json_response(result)
 
 
 @routes.post("/{campaign}/{codebase}/publish", name="publish")
@@ -1709,7 +1710,11 @@ async def publish_request(request):
 @routes.get("/credentials", name="credentials")
 async def credentials_request(request):
     ssh_keys = []
-    for entry in os.scandir(os.path.expanduser("~/.ssh")):
+    try:
+        ssh_dir_entries = list(os.scandir(os.path.expanduser("~/.ssh")))
+    except (FileNotFoundError, NotADirectoryError):
+        ssh_dir_entries = []
+    for entry in ssh_dir_entries:
         if entry.name.endswith(".pub"):
             with open(entry.path) as f:
                 ssh_keys.extend([line.strip() for line in f.readlines()])
@@ -1770,6 +1775,10 @@ async def create_app(
         middlewares=[trailing_slash_redirect, state.asyncpg_error_middleware]
     )
     app.router.add_routes(routes)
+    # python3-gpg is only packaged for the system Python, so import it here
+    # rather than at module scope; the rest of this module works without it.
+    import gpg
+
     app["gpg"] = gpg.Context(armor=True)
     app["publish_worker"] = publish_worker
     app["vcs_managers"] = vcs_managers

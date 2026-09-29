@@ -61,9 +61,7 @@ async def handle_oauth_callback(request):
         "grant_type": "authorization_code",
         "redirect_uri": str(redirect_uri),
     }
-    async with request.app["http_client_session"].post(
-        token_url, params=params
-    ) as resp:
+    async with request.app["http_client_session"].post(token_url, data=params) as resp:
         if resp.status != 200:
             return web.json_response(
                 status=resp.status,
@@ -73,7 +71,7 @@ async def handle_oauth_callback(request):
                 },
             )
         resp = await resp.json()
-        if resp["token_type"] != "Bearer":
+        if resp["token_type"].lower() != "bearer":
             return web.Response(
                 status=500,
                 text="Expected bearer token, got {}".format(resp["token_type"]),
@@ -108,7 +106,9 @@ INSERT INTO site_session (id, userinfo) VALUES ($1, $2)
 
     resp.del_cookie("state")
     resp.del_cookie("back_url")
-    resp.set_cookie("session_id", session_id, secure=True, httponly=True)
+    resp.set_cookie(
+        "session_id", session_id, secure=True, httponly=True, samesite="Strict"
+    )
     return resp
 
 

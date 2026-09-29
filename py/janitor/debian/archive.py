@@ -475,6 +475,7 @@ async def write_suite_files(
     logger.debug("Writing Release.gpg file for %s", suite_name)
 
     if gpg_context:
+        import gpg
         from gpg.constants.sig import mode as gpg_mode
 
         data = gpg.Data(r.dump())
