@@ -127,6 +127,18 @@
   # value; see docs/multi-host-deployment.md for the recovery path (drop
   # the token from gitea's admin UI, delete gitea_home/data so INSTALL_LOCK
   # is cleared too if genuinely starting over).
+  #
+  # The CLI prints "Access token was successfully created: <token>" on one
+  # line, so the token has to be pulled out of it rather than taken whole.
   set_fact:
-    gitea_access_token: "{{ gitea_token_create.stdout_lines[-1] | trim if gitea_token_create.rc == 0 else 'CHANGEME-see-docs-multi-host-deployment' }}"
+    gitea_access_token: "{{ gitea_token_create.stdout | regex_search('(?<=created: )\\S+') | default('', true) if gitea_token_create.rc == 0 else 'CHANGEME-see-docs-multi-host-deployment' }}"
   no_log: true
+
+- name: Check the parsed access token looks like one
+  # Fail loudly if gitea ever changes that message, rather than quietly
+  # wiring a truncated or prefixed token into authentication.conf.
+  assert:
+    that:
+      - gitea_access_token is match('^[0-9a-f]{40}$')
+    fail_msg: "could not parse an access token out of gitea's output"
+  when: gitea_token_create.rc == 0

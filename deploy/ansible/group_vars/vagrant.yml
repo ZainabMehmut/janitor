@@ -21,6 +21,11 @@
 janitor_domain: "192.168.56.10"
 janitor_github_org: vagrant-test
 
+# The default gitea.example.internal does not resolve to this VM, and the
+# host-networked containers resolve it to the libvirt gateway instead, so
+# every API call to gitea is refused. Advertise the VM's own address.
+gitea_domain: "{{ janitor_domain }}"
+
 janitor_db_password: vagrant-dev-only-not-a-real-password
 worker_password: vagrant-dev-only-not-a-real-password
 oauth_client_id: vagrant-dev-fake-client-id
