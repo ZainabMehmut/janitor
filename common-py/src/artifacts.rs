@@ -99,13 +99,14 @@ impl ArtifactManager {
         })
     }
 
-    #[pyo3(signature = (run_id, local_path, filter_fn=None))]
+    #[pyo3(signature = (run_id, local_path, filter_fn=None, timeout=None))]
     fn retrieve_artifacts<'a>(
         &self,
         py: Python<'a>,
         run_id: &str,
         local_path: &str,
         filter_fn: Option<Py<PyAny>>,
+        timeout: Option<u64>,
     ) -> PyResult<Bound<'a, PyAny>> {
         let run_id = run_id.to_string();
         let local_path = std::path::PathBuf::from(local_path);
@@ -122,9 +123,13 @@ impl ArtifactManager {
             }) as Box<dyn Fn(&str) -> bool + Sync + Send>
         });
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            z.retrieve_artifacts(&run_id, &local_path, filter_fn.as_deref())
-                .await
-                .map_err(artifact_err_to_py_err)
+            tokio::time::timeout(
+                std::time::Duration::from_secs(timeout.unwrap_or(60)),
+                z.retrieve_artifacts(&run_id, &local_path, filter_fn.as_deref()),
+            )
+            .await
+            .map_err(|_| PyTimeoutError::new_err("Timeout"))?
+            .map_err(artifact_err_to_py_err)
         })
     }
 
