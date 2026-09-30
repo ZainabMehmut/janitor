@@ -19,6 +19,7 @@ from datetime import timedelta
 from typing import cast
 
 import pytest
+from breezy.errors import TransportError
 from breezy.forge import Forge
 
 import janitor.publish as publish
@@ -261,3 +262,36 @@ async def test_check_existing_keeps_going_after_an_unexpected_status(
     )
 
     assert mp.read_attempts == 1
+
+
+class _UnreachableForge:
+    """A forge whose API cannot be reached at all."""
+
+    def __repr__(self):
+        return "<UnreachableForge>"
+
+    def iter_my_proposals(self, status=None):
+        raise TransportError("Connection refused")
+
+
+class _WorkingForge:
+    """A forge that returns one proposal per status."""
+
+    def __repr__(self):
+        return "<WorkingForge>"
+
+    def iter_my_proposals(self, status=None):
+        yield f"proposal-{status}"
+
+
+def test_iter_all_mps_skips_an_unreachable_forge(monkeypatch):
+    """One forge being unreachable must not stop the others being listed."""
+    monkeypatch.setattr(
+        publish,
+        "iter_forge_instances",
+        lambda: iter([_UnreachableForge(), _WorkingForge()]),
+    )
+
+    found = list(publish.iter_all_mps(statuses=["open"]))
+
+    assert [mp for _forge, mp, _status in found] == ["proposal-open"]
