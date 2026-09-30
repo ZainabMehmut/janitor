@@ -1624,11 +1624,9 @@ class QueueProcessor:
 
     async def unclaim_run(self, log_id: str) -> None:
         active_run = await self.get_run(log_id)
-        active_run_count.labels(
-            worker=active_run.worker_name if active_run else None
-        ).dec()
         if not active_run:
             return
+        active_run_count.labels(worker=active_run.worker_name).dec()
         async with self.redis.pipeline() as tr:
             tr.hdel("assigned-queue-items", str(active_run.queue_id))
             tr.hdel("active-runs", log_id)
@@ -2509,11 +2507,30 @@ class QueueRateLimiting(Exception):
         self.retry_after = retry_after
 
 
-async def next_item(
+class _Claim:
+    """The queue item claim held by _next_item, so callers can release it."""
+
+    log_id: Optional[str] = None
+
+
+async def next_item(queue_processor, config, span, mode, **kwargs):
+    claim = _Claim()
+    try:
+        return await _next_item(queue_processor, config, span, mode, claim, **kwargs)
+    except BaseException:
+        # BaseException, so aiohttp's CancelledError is caught too. shield, so
+        # the release still reaches redis if the caller is cancelled again.
+        if claim.log_id is not None:
+            await asyncio.shield(queue_processor.unclaim_run(claim.log_id))
+        raise
+
+
+async def _next_item(
     queue_processor,
     config,
     span,
     mode,
+    claim,
     *,
     worker=None,
     worker_link: Optional[str] = None,
@@ -2535,6 +2552,8 @@ async def next_item(
             await queue_processor.finish_run(active_run, result)
         except RunExists:
             pass
+        # finish_run already released the claim
+        claim.log_id = None
 
     async with queue_processor.database.acquire() as conn:
         item = None
@@ -2574,6 +2593,8 @@ async def next_item(
                 )
                 item = None
                 continue
+
+            claim.log_id = active_run.log_id
 
             try:
                 campaign_config = get_campaign_config(config, item.campaign)
@@ -2806,6 +2827,7 @@ async def next_item(
         pass
     else:
         await queue_processor.unclaim_run(active_run.log_id)
+        claim.log_id = None
     return assignment
 
 
