@@ -93,20 +93,21 @@ async def upload_build_result(
 
         failures = False
         for changes_filename in changes_filenames:
+            changes_path = os.path.join(td, changes_filename)
             logging.info("Running debsign", extra={"run_id": log_id})
             try:
-                await debsign(td, changes_filename, debsign_keyid)
+                await asyncio.to_thread(debsign, changes_path, debsign_keyid)
             except DebsignFailure as e:
                 logging.error(
-                    "Error (exit code %d) signing %s for %s: %s",
-                    e.returncode,
+                    "Error signing %s for %s: %s",
                     changes_filename,
                     log_id,
-                    e.reason,
+                    e,
                     extra={"run_id": log_id},
                 )
                 failures = True
                 debsign_failed_count.inc()
+                continue
             else:
                 logging.info(
                     "Successfully signed %s for %s",
@@ -117,15 +118,14 @@ async def upload_build_result(
 
             logging.debug("Running dput.", extra={"run_id": log_id})
             try:
-                await dput_changes(td, changes_filename, dput_host)
+                await asyncio.to_thread(dput_changes, changes_path, dput_host)
             except DputFailure as e:
                 upload_failed_count.inc()
                 logging.error(
-                    "Error (exit code %d) uploading %s for %s: %s",
-                    e.returncode,
+                    "Error uploading %s for %s: %s",
                     changes_filename,
                     log_id,
-                    e.reason,
+                    e,
                     extra={"run_id": log_id},
                 )
                 failures = True
