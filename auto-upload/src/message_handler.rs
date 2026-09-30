@@ -49,11 +49,24 @@ impl MessageHandler {
 
 /// Check if a message should be processed based on filters.
 ///
-/// Only debian targets are eligible, and if a distribution allow-list is
-/// configured, the build distribution must match. Artifact existence is
-/// checked lazily in [`upload_build_result`] rather than here to avoid
-/// downloading twice.
+/// Only successful debian builds are eligible, and if a distribution
+/// allow-list is configured, the build distribution must match. Artifact
+/// existence is checked lazily in [`upload_build_result`] rather than
+/// here to avoid downloading twice.
+///
+/// The `code == "success"` check has to come before touching `target`
+/// because the runner publishes non-success runs with `target: {}`
+/// (matches the Python `is_debian_upload_target` fix in py commit
+/// 38fbc2025).
 fn should_process_message(upload_config: &UploadConfig, message: &BuildResultMessage) -> bool {
+    if message.code.as_deref() != Some("success") {
+        debug!(
+            code = message.code.as_deref().unwrap_or("<none>"),
+            "Skipping non-success run"
+        );
+        return false;
+    }
+
     if message.target.name.as_deref() != Some("debian") {
         debug!(
             target = message.target.name.as_deref().unwrap_or("<none>"),
@@ -85,8 +98,17 @@ mod tests {
     use crate::upload::UploadConfig;
 
     fn msg(target: Option<&str>, distribution: Option<&str>) -> BuildResultMessage {
+        msg_with_code(Some("success"), target, distribution)
+    }
+
+    fn msg_with_code(
+        code: Option<&str>,
+        target: Option<&str>,
+        distribution: Option<&str>,
+    ) -> BuildResultMessage {
         BuildResultMessage {
             log_id: "test-123".to_string(),
+            code: code.map(str::to_string),
             target: BuildTarget {
                 name: target.map(str::to_string),
                 details: distribution.map(|d| BuildTargetDetails {
@@ -125,6 +147,28 @@ mod tests {
     #[test]
     fn empty_target_is_rejected() {
         assert!(!should_process_message(&cfg(vec![]), &msg(None, None)));
+    }
+
+    #[test]
+    fn non_success_run_is_rejected() {
+        // Regression: matches the Python fix in commit 38fbc2025. Runner
+        // publishes non-success runs with `target: {}`; without the code
+        // gate we'd fall through the target checks and (in the Python
+        // impl, before the fix) crash. Rust never crashes here, but we
+        // still want the explicit "not success" skip and the log line.
+        assert!(!should_process_message(
+            &cfg(vec![]),
+            &msg_with_code(Some("codemod-error"), None, None)
+        ));
+    }
+
+    #[test]
+    fn missing_code_is_rejected() {
+        // Defensive: a message with no `code` at all shouldn't try to upload.
+        assert!(!should_process_message(
+            &cfg(vec![]),
+            &msg_with_code(None, Some("debian"), Some("unstable"))
+        ));
     }
 
     #[test]

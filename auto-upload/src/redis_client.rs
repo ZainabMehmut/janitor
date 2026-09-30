@@ -24,6 +24,12 @@ pub struct RedisClient {
 pub struct BuildResultMessage {
     /// Unique identifier for the build run.
     pub log_id: String,
+    /// Runner result code (e.g. `"success"`, `"nothing-to-do"`,
+    /// `"codemod-error"`). Non-success runs also publish to this channel
+    /// but emit `target: {}`, so we filter them out before touching
+    /// `target.name`.
+    #[serde(default)]
+    pub code: Option<String>,
     /// Empty object when the run had no builder result.
     #[serde(default)]
     pub target: BuildTarget,
@@ -123,6 +129,7 @@ mod tests {
     fn roundtrips_through_serde() {
         let message = BuildResultMessage {
             log_id: "test-123".to_string(),
+            code: Some("success".to_string()),
             target: BuildTarget {
                 name: Some("debian".to_string()),
                 details: Some(BuildTargetDetails {
@@ -136,6 +143,7 @@ mod tests {
         let deserialized: BuildResultMessage = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(message.log_id, deserialized.log_id);
+        assert_eq!(message.code, deserialized.code);
         assert_eq!(message.target.name, deserialized.target.name);
     }
 
@@ -146,6 +154,19 @@ mod tests {
         assert_eq!(msg.log_id, "abc");
         assert!(msg.target.name.is_none());
         assert!(msg.target.details.is_none());
+    }
+
+    #[test]
+    fn parses_non_success_run_shape() {
+        // Regression: this is what the runner publishes for a non-success
+        // run. The Python service crashed on `result["target"]["name"]`
+        // when target was `{}` (see py commit 38fbc2025). We must at least
+        // be able to deserialise it.
+        let payload =
+            r#"{"log_id": "abc", "code": "codemod-error", "description": "boom", "target": {}}"#;
+        let msg: BuildResultMessage = serde_json::from_str(payload).unwrap();
+        assert_eq!(msg.code.as_deref(), Some("codemod-error"));
+        assert!(msg.target.name.is_none());
     }
 
     #[test]
