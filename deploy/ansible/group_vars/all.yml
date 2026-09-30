@@ -54,6 +54,10 @@ gitea_http_port: 3000
 gitea_ssh_port: 2222
 gitea_bot_user: janitor-bot
 gitea_bot_password: CHANGEME   # only used the first time the bot account is created
+# SQLite _busy_timeout for gitea, in milliseconds. Gitea's own default is 500,
+# which is not enough for opening a pull request on slow storage or on an
+# emulated host, where that single transaction can run for tens of seconds.
+gitea_sqlite_timeout: 60000
 
 # Leave unset to run auto_upload without an upload target (its default,
 # current behavior - builds succeed, nothing gets uploaded). Set to a

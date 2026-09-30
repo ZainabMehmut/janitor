@@ -29,6 +29,11 @@ HOST = localhost:3306
 NAME = gitea
 USER = root
 LOG_SQL = false
+# _busy_timeout in milliseconds. Gitea's own default of 500 is far too short
+# here: creating a pull request runs several statements in one transaction, and
+# under software emulation a single SELECT has been seen to take 20 seconds, so
+# the API returns 500 with "checkPullFilesProtection: database is locked".
+SQLITE_TIMEOUT = {{ gitea_sqlite_timeout }}
 
 [indexer]
 ISSUE_INDEXER_PATH = /data/gitea/indexers/issues.bleve
