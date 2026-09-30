@@ -16,6 +16,7 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 import pytest
+from breezy.errors import TransportError
 
 import janitor.publish as publish
 from janitor.config import read_string as read_config_string
@@ -145,3 +146,36 @@ async def test_publish_one_passes_template_env_path_to_compiled_binary(monkeypat
         "janitor-publish-one",
         "--template-env-path=/etc/janitor/templates",
     ]
+
+
+class _UnreachableForge:
+    """A forge whose API cannot be reached at all."""
+
+    def __repr__(self):
+        return "<UnreachableForge>"
+
+    def iter_my_proposals(self, status=None):
+        raise TransportError("Connection refused")
+
+
+class _WorkingForge:
+    """A forge that returns one proposal per status."""
+
+    def __repr__(self):
+        return "<WorkingForge>"
+
+    def iter_my_proposals(self, status=None):
+        yield f"proposal-{status}"
+
+
+def test_iter_all_mps_skips_an_unreachable_forge(monkeypatch):
+    """One forge being unreachable must not stop the others being listed."""
+    monkeypatch.setattr(
+        publish,
+        "iter_forge_instances",
+        lambda: iter([_UnreachableForge(), _WorkingForge()]),
+    )
+
+    found = list(publish.iter_all_mps(statuses=["open"]))
+
+    assert [mp for _forge, mp, _status in found] == ["proposal-open"]
