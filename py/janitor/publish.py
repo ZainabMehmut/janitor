@@ -54,7 +54,12 @@ from aiohttp_openmetrics import (
 from aiojobs.aiohttp import setup as setup_aiojobs
 from aiojobs.aiohttp import spawn
 from breezy import urlutils
-from breezy.errors import PermissionDenied, RedirectRequested, UnexpectedHttpStatus
+from breezy.errors import (
+    PermissionDenied,
+    RedirectRequested,
+    TransportError,
+    UnexpectedHttpStatus,
+)
 from breezy.forge import (
     Forge,
     ForgeLoginRequired,
@@ -3219,6 +3224,8 @@ def iter_all_mps(
                 logger.warning(
                     "Got unexpected HTTP status %s, skipping %r", e, instance
                 )
+            except TransportError as e:
+                logger.warning("Unable to reach %r, skipping: %s", instance, e)
             except UnsupportedForge as e:
                 logger.warning(
                     "Unsupported host instance, skipping %r: %s", instance, e
