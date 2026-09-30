@@ -23,6 +23,7 @@ from io import BytesIO
 import aiozipkin
 import pytest
 from aiohttp import MultipartWriter, web
+from breezy.errors import TransportError
 from fakeredis.aioredis import FakeRedis
 
 from janitor.config import read_string as read_config_string
@@ -39,6 +40,7 @@ from janitor.runner import (
     committer_env,
     create_app,
     is_log_filename,
+    open_resume_branch,
     store_change_set,
     store_run,
 )
@@ -1068,3 +1070,31 @@ async def test_handle_queue_bad_limit(aiohttp_client, db, tmp_path):
     assert "LIMIT" in reasons[2], reasons[2]
     assert "bigint" in reasons[3], reasons[3]
     await qp.stop()
+
+
+def test_open_resume_branch_survives_a_forge_transport_error(monkeypatch):
+    """A forge that cannot be reached means no resume branch, not an exception."""
+    import janitor.runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod, "get_forge", lambda branch, possible_forges=None: object()
+    )
+
+    def failing_find(*args, **kwargs):
+        raise TransportError("Connection closed early")
+
+    monkeypatch.setattr(runner_mod, "find_existing_proposed", failing_find)
+
+    assert open_resume_branch(object(), "some-campaign", "some-package") is None
+
+
+def test_open_resume_branch_survives_a_forge_transport_error_while_probing(monkeypatch):
+    """The same applies when it is the forge lookup itself that cannot connect."""
+    import janitor.runner as runner_mod
+
+    def failing_get_forge(branch, possible_forges=None):
+        raise TransportError("Connection closed early")
+
+    monkeypatch.setattr(runner_mod, "get_forge", failing_get_forge)
+
+    assert open_resume_branch(object(), "some-campaign", "some-package") is None
