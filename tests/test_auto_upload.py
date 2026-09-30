@@ -137,7 +137,7 @@ def _debian_result(log_id):
 
 
 async def _publish_until_subscribed(redis, payload):
-    for _ in range(1000):
+    for _ in range(200):
         if await redis.publish("result", payload):
             return
         await asyncio.sleep(0.01)
@@ -145,10 +145,11 @@ async def _publish_until_subscribed(redis, payload):
 
 
 async def _wait_for(predicate):
-    for _ in range(1000):
+    for _ in range(200):
         if predicate():
             return
         await asyncio.sleep(0.01)
+    raise AssertionError("timed out waiting for the listener to catch up")
 
 
 async def test_listener_survives_an_unexpected_upload_error(monkeypatch):
@@ -178,6 +179,39 @@ async def test_listener_survives_an_unexpected_upload_error(monkeypatch):
 
         await _wait_for(lambda: handled == ["bad", "good"])
         assert handled == ["bad", "good"]
+        assert not listener.done()
+    finally:
+        listener.cancel()
+        try:
+            await listener
+        except asyncio.CancelledError:
+            pass
+
+
+async def test_result_without_a_log_id_is_not_uploaded(monkeypatch):
+    handled = []
+
+    async def upload(log_id, *args, **kwargs):
+        handled.append(log_id)
+
+    monkeypatch.setattr(auto_upload, "upload_build_result", upload)
+
+    redis = FakeRedis()
+    listener = asyncio.create_task(
+        auto_upload.listen_to_runner(redis, None, "local", distributions=["unstable"])
+    )
+    try:
+        await _publish_until_subscribed(
+            redis, json.dumps({"code": "success", "target": {"name": "generic"}})
+        )
+
+        no_log_id = _debian_result("unused")
+        del no_log_id["log_id"]
+        await redis.publish("result", json.dumps(no_log_id))
+        await redis.publish("result", json.dumps(_debian_result("good")))
+
+        await _wait_for(lambda: handled == ["good"])
+        assert handled == ["good"]
         assert not listener.done()
     finally:
         listener.cancel()
