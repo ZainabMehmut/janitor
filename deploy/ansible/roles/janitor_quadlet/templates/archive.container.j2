@@ -16,6 +16,9 @@ Network=host
 # one); nothing external needs this reachable beyond the host.
 Exec=--listen-address 127.0.0.1 --config /mnt/janitor/janitor.conf --cache-directory /mnt/janitor/data/cache --dists-directory /mnt/janitor/data/dists
 Volume={{ janitor_home }}:/mnt/janitor:rw
+# roles/archive_signing_key generated the key in here. Its own GNUPGHOME,
+# not auto_upload's: /pgp_keys exports every secret key in the keyring.
+Environment=GNUPGHOME=/mnt/janitor/gnupg-archive
 
 # Already pulled this exact image explicitly in roles/janitor_source
 # - never re-check the registry on every service start (quadlet's default

@@ -29,6 +29,15 @@ campaign {
   }
 }
 
+apt_repository {
+  name: "lintian-fixes"
+  description: "Builds of lintian fixes"
+  base: "unstable"
+  select {
+    campaign: "lintian-fixes"
+  }
+}
+
 {% if oauth_client_id is defined %}
 oauth2_provider {
   client_id: "{{ oauth_client_id }}"

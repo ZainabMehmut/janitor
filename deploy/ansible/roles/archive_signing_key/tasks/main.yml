@@ -1,0 +1,42 @@
+---
+# Applied only when the archive service runs on this host (see site.yml) -
+# gives janitor-archive a key to sign Release/InRelease with, in its own
+# GNUPGHOME. Deliberately not auto_upload's {{ janitor_home }}/gnupg: the
+# archive's /pgp_keys route exports every secret key in its keyring over
+# public HTTP, so a shared home would publish auto_upload's identity too.
+
+- name: Create the GNUPG home used for archive signing
+  file:
+    path: "{{ janitor_home }}/gnupg-archive"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0700"
+
+- name: Check whether an archive signing key already exists
+  command: "gpg --homedir {{ janitor_home }}/gnupg-archive --list-secret-keys --with-colons"
+  become: true
+  become_user: "{{ ansible_user }}"
+  register: archive_gpg_list
+  changed_when: false
+  failed_when: false
+
+- name: Generate a signing key for the archive
+  # Batch-generated, no passphrase - the archive signs unattended, there
+  # is nobody to enter one.
+  command: >
+    gpg --homedir {{ janitor_home }}/gnupg-archive --batch --gen-key /dev/stdin
+  args:
+    stdin: |
+      %echo Generating archive signing key
+      Key-Type: eddsa
+      Key-Curve: ed25519
+      Subkey-Type: eddsa
+      Subkey-Curve: ed25519
+      Name-Real: {{ janitor_github_org }} archive
+      Name-Email: archive@{{ janitor_domain }}
+      Expire-Date: 0
+      %no-protection
+      %commit
+  become: true
+  become_user: "{{ ansible_user }}"
+  when: "'sec:' not in archive_gpg_list.stdout"

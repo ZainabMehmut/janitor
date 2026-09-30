@@ -60,6 +60,9 @@
     # templates read.
     - { role: gitea, when: enable_gitea | default(false) }
     - { role: auto_upload_target, when: auto_upload_dput_host is defined }
+    # Archive's Release signing key, in its own GNUPGHOME - has to exist
+    # before janitor_quadlet starts the archive container.
+    - { role: archive_signing_key, when: "'archive' in janitor_services" }
     - janitor_config
     - janitor_quadlet
 
