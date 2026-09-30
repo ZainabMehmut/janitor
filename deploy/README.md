@@ -33,6 +33,11 @@ target - are opt-in, see [optional services](../docs/optional-services.md).
   see [multi-host deployment](../docs/multi-host-deployment.md).
 - `ansible/group_vars/vagrant.yml` - fake, local-dev-only values applied
   only when running against the Vagrant VM below.
+- `ansible/requirements.yml` - the Galaxy collections the playbook needs
+  (`community.postgresql` for the Postgres role, `ansible.posix` for the
+  ACL it grants on the deploy user's home directory). Install them before
+  the first `ansible-playbook` run, per the usage section below. The
+  Vagrantfiles install them inside the VM themselves.
 - `Vagrantfile` - a local single-host VM that runs the same playbook via
   `ansible_local`, for validating changes without needing a real instance.
   `Vagrantfile.multi-host` does the same for the two-host split topology.
@@ -44,7 +49,7 @@ Against a real instance:
 ```
 cd ansible
 # edit inventory.ini and group_vars/all.yml (or supply -e/--ask-vault-pass)
-ansible-galaxy install -r requirements.yml
+ansible-galaxy collection install -r requirements.yml
 ansible-playbook site.yml
 ```
 

@@ -49,11 +49,6 @@
 
 - meta: flush_handlers
 
-- name: Read the current ACL on the deploy user's home directory
-  command: "getfacl -c -p /home/{{ ansible_user }}"
-  register: home_acl
-  changed_when: false
-
 - name: Grant postgres traverse access into the deploy user's home directory
   # /home/{{ ansible_user }} is 0700 by default - postgresql_script below
   # runs as the postgres OS user and reads schema/state.sql directly off
@@ -61,12 +56,12 @@
   # regardless of that file's own (world-readable) permissions. Grant
   # postgres specifically, not everyone, since acl (needed for this) is
   # already required by roles/base for become_user's own temp-file ACLs.
-  #
-  # Guarded on the getfacl above rather than left to run every time: the
-  # entry setfacl writes is the same string getfacl prints back, so a
-  # re-run skips the command instead of reporting a change it did not make.
-  command: setfacl -m u:postgres:--x /home/{{ ansible_user }}
-  when: "'user:postgres:--x' not in home_acl.stdout"
+  ansible.posix.acl:
+    path: "/home/{{ ansible_user }}"
+    entity: postgres
+    etype: user
+    permissions: x
+    state: present
 
 - name: Create janitor Postgres role
   become_user: postgres

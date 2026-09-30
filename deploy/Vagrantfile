@@ -75,6 +75,10 @@ Vagrant.configure("2") do |config|
   config.vm.provision "ansible_local" do |ansible|
     ansible.playbook = "ansible/site.yml"
     ansible.galaxy_role_file = "ansible/requirements.yml"
+    # Not Vagrant's default galaxy_command: that passes --roles-path, and
+    # "ansible-galaxy install -r" then skips the collections: block with only
+    # a warning. requirements.yml holds nothing but collections.
+    ansible.galaxy_command = "ansible-galaxy collection install --requirements-file=%{role_file}"
     ansible.compatibility_mode = "2.0"
     ansible.groups = {
       "janitor" => ["default"],
