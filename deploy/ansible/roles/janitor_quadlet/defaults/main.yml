@@ -1,0 +1,7 @@
+---
+# Name of the sbuild chroot the worker builds Debian packages in. Must stay
+# in step with janitor.conf's own chroot: value (see
+# roles/janitor_config/templates/janitor.conf.j2). The name is used twice:
+# ognibuild opens a schroot session by it, and sbuild, which the image runs
+# in unshare mode, resolves it to a tarball under ~/.cache/sbuild.
+janitor_sbuild_chroot: unstable-amd64-sbuild

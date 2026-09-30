@@ -31,6 +31,12 @@ RunInit=true
 Environment=WORKER_NAME={{ worker_name }}
 Environment=WORKER_PASSWORD={{ worker_password }}
 Volume=/home/{{ ansible_user }}/.config/breezy:/root/.config/breezy:ro
+# The sbuild chroot costs a three minute mmdebstrap run to rebuild, and the
+# schroot registration in chroot.d has to point at the same tree, so both
+# are held on the host instead of the container's writable layer, which is
+# thrown away on every restart. Created by roles/janitor_quadlet.
+Volume={{ janitor_home }}/data/sbuild:/root/.cache/sbuild:rw
+Volume={{ janitor_home }}/data/schroot.d:/etc/schroot/chroot.d:rw
 # --external-address lets the runner build a per-run backchannel URL to ping
 # this worker directly. Without it, every run's backchannel stays empty and
 # the runner's keepalive watchdog can only fall back to a 24h staleness

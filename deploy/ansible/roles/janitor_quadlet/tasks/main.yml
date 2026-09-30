@@ -12,8 +12,11 @@
 # rather than type=file (which extracts a tarball including device nodes,
 # and fails).
 #
-# The chroot registration below (schroot.conf, fstab, tarball) is otherwise
-# lost on every container restart/rebuild - provisioned here so it survives.
+# The chroot tarball and its extracted tree live on host bind mounts (see
+# templates/worker.container.j2), so a restart does not throw away a three
+# minute mmdebstrap run. The sbuild profile's fstab and /var/lib/sbuild are
+# still in the container's writable layer, so the tasks that fix those run
+# on every pass rather than being gated.
 
 - name: Create quadlet unit directory
   file:
@@ -48,6 +51,20 @@
   no_log: true
 
 - meta: flush_handlers
+
+- name: Create the host directories the worker's sbuild state is mounted from
+  # Deliberately not in roles/janitor_config's data-dir loop: that loop is
+  # gated on deploy_janitor_conf, which group_vars/worker.yml sets false on
+  # exactly the worker-only host that needs these.
+  file:
+    path: "{{ janitor_home }}/data/{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0755"
+  loop:
+    - sbuild
+    - schroot.d
+  when: "'worker' in janitor_services"
 
 # Started in dependency tiers rather than all at once: tier 0 (git_store,
 # bzr_store) has no janitor-side deps, tier 1 (differ/archive/auto_upload)
@@ -98,14 +115,20 @@
   changed_when: false
   when: "'worker' in janitor_services"
 
-# The worker container's filesystem is ephemeral - everything below is lost
-# on every restart/rebuild.
-- name: Check whether the sbuild chroot tarball already exists in the worker container
+# Only the two bind-mounted paths survive a restart. Everything else below
+# lands in the container's writable layer and has to be redone each time.
+- name: Check whether the extracted sbuild chroot is already complete
   become: true
   become_user: "{{ ansible_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
-  command: podman exec janitor-worker test -f /root/.cache/sbuild/unstable-amd64-sbuild.tar.xz
+  # Tests a file inside the extracted tree rather than the tarball: a run
+  # that built the tarball but died partway through tar -x would otherwise
+  # read as complete, leaving schroot registered against a tree that has no
+  # usable chroot in it.
+  command: >
+    podman exec janitor-worker
+    test -x /root/.cache/sbuild/{{ janitor_sbuild_chroot }}-dir/usr/bin/dpkg
   register: chroot_tarball_check
   changed_when: false
   failed_when: false
@@ -127,7 +150,7 @@
   command: >
     podman exec janitor-worker
     mmdebstrap --variant=buildd unstable
-    /root/.cache/sbuild/unstable-amd64-sbuild.tar.xz
+    /root/.cache/sbuild/{{ janitor_sbuild_chroot }}.tar.xz
     http://deb.debian.org/debian --mode=unshare --arch=amd64 --components=main
   when: "'worker' in janitor_services and chroot_tarball_check.rc != 0"
 
@@ -138,9 +161,9 @@
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
   command: >
     podman exec janitor-worker sh -c
-    "mkdir -p /root/.cache/sbuild/unstable-amd64-sbuild-dir &&
-    tar --exclude=dev -C /root/.cache/sbuild/unstable-amd64-sbuild-dir
-    -xf /root/.cache/sbuild/unstable-amd64-sbuild.tar.xz"
+    "mkdir -p /root/.cache/sbuild/{{ janitor_sbuild_chroot }}-dir &&
+    tar --exclude=dev -C /root/.cache/sbuild/{{ janitor_sbuild_chroot }}-dir
+    -xf /root/.cache/sbuild/{{ janitor_sbuild_chroot }}.tar.xz"
   when: "'worker' in janitor_services and chroot_tarball_check.rc != 0"
 
 - name: Register the schroot chroot (type=directory, not type=file - see mknod note above)
@@ -155,11 +178,11 @@
   # "type=directory", etc. as literal filenames and fails on each.
   command: |
     podman exec janitor-worker sh -c
-    "cat > /etc/schroot/chroot.d/unstable-amd64-sbuild.conf << 'EOF'
-    [unstable-amd64-sbuild]
+    "cat > /etc/schroot/chroot.d/{{ janitor_sbuild_chroot }}.conf << 'EOF'
+    [{{ janitor_sbuild_chroot }}]
     type=directory
     description=Debian unstable/amd64 autobuilder
-    directory=/root/.cache/sbuild/unstable-amd64-sbuild-dir
+    directory=/root/.cache/sbuild/{{ janitor_sbuild_chroot }}-dir
     groups=root
     root-groups=root
     profile=sbuild
