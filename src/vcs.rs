@@ -648,6 +648,71 @@ mod bytes_as_str {
 
 pub const EMPTY_GIT_TREE: &[u8] = b"4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+#[cfg(test)]
+mod revision_info_tests {
+    use super::*;
+
+    #[test]
+    fn deserializes_git_store_payload() {
+        let sha = "2282dc9d1e5e2c0b95c1a8e1f1e6a5f2b3c4d5e6";
+        let payload = format!(
+            r#"[{{"commit-id": "{sha}", "revision-id": "git-v1:{sha}",
+                 "link": "/git/janitor-e2e-demo/commit/{sha}/",
+                 "message": "Add a thing\n"}}]"#
+        );
+
+        let infos: Vec<RevisionInfo> = serde_json::from_str(&payload).unwrap();
+
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].commit_id.as_deref(), Some(sha.as_bytes()));
+        assert_eq!(
+            infos[0].revision_id,
+            RevisionId::from(format!("git-v1:{sha}").as_bytes())
+        );
+        assert_eq!(
+            infos[0].link.as_deref(),
+            Some(format!("/git/janitor-e2e-demo/commit/{sha}/").as_str())
+        );
+        assert_eq!(infos[0].message, "Add a thing\n");
+    }
+
+    #[test]
+    fn deserializes_a_payload_without_a_commit_id() {
+        let revid = "test@example.com-20260930123456-abc123";
+        let payload =
+            format!(r#"[{{"revision-id": "{revid}", "link": null, "message": "Do a thing"}}]"#);
+
+        let infos: Vec<RevisionInfo> = serde_json::from_str(&payload).unwrap();
+
+        assert_eq!(infos.len(), 1);
+        assert!(infos[0].commit_id.is_none());
+        assert!(infos[0].link.is_none());
+        assert_eq!(infos[0].revision_id, RevisionId::from(revid.as_bytes()));
+    }
+
+    #[test]
+    fn round_trips_the_wire_names() {
+        let sha = "2282dc9d1e5e2c0b95c1a8e1f1e6a5f2b3c4d5e6";
+        let info = RevisionInfo {
+            commit_id: Some(sha.as_bytes().to_vec()),
+            revision_id: RevisionId::from(format!("git-v1:{sha}").as_bytes()),
+            message: "Add a thing\n".to_string(),
+            link: Some(format!("/git/example/commit/{sha}/")),
+        };
+
+        let json = serde_json::to_value(&info).unwrap();
+
+        assert_eq!(json["commit-id"], sha);
+        assert_eq!(json["revision-id"], format!("git-v1:{sha}"));
+        assert_eq!(json["link"], format!("/git/example/commit/{sha}/"));
+        assert_eq!(json["message"], "Add a thing\n");
+
+        let mut keys: Vec<&String> = json.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["commit-id", "link", "message", "revision-id"]);
+    }
+}
+
 #[async_trait]
 pub trait VcsManager: Send + Sync {
     fn get_branch(
