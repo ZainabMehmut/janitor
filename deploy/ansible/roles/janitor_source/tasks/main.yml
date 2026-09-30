@@ -74,7 +74,6 @@
   args:
     chdir: "{{ janitor_home }}"
   register: build_result
-  changed_when: true
   when: not use_prebuilt_images and not images_already_built_for_head
 
 - name: Pull pre-built service images from ghcr.io
@@ -86,11 +85,25 @@
   # unit), so nothing needs them pulled on this faster path.
   # become_user: see the build task above - must land in the same rootless
   # per-uid store the quadlet units actually run podman against.
+  #
+  # Pulling an unchanged :latest is not a change, so the image id is read
+  # before and after and only a different one counts. A genuinely republished
+  # upstream image still reports changed, which is the point - anything that
+  # just asserted changed_when: false here would hide a real image swap.
   become_user: "{{ ansible_user }}"
-  command: podman pull ghcr.io/jelmer/janitor/{{ item }}:latest
+  shell: |
+    set -eu
+    ref=ghcr.io/jelmer/janitor/{{ item }}:latest
+    before=$(podman images --quiet --no-trunc "$ref")
+    podman pull --quiet "$ref" >/dev/null
+    after=$(podman images --quiet --no-trunc "$ref")
+    test "$before" = "$after" || echo IMAGE_UPDATED
+  args:
+    executable: /bin/bash
+  register: image_pull
+  changed_when: "'IMAGE_UPDATED' in image_pull.stdout"
   loop: "{{ janitor_services }}"
   when: use_prebuilt_images
-  changed_when: true
 
 - name: Verify what actually built/pulled
   # become_user: must inspect the same store the two tasks above populated,

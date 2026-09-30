@@ -49,6 +49,11 @@
 
 - meta: flush_handlers
 
+- name: Read the current ACL on the deploy user's home directory
+  command: "getfacl -c -p /home/{{ ansible_user }}"
+  register: home_acl
+  changed_when: false
+
 - name: Grant postgres traverse access into the deploy user's home directory
   # /home/{{ ansible_user }} is 0700 by default - postgresql_script below
   # runs as the postgres OS user and reads schema/state.sql directly off
@@ -56,8 +61,12 @@
   # regardless of that file's own (world-readable) permissions. Grant
   # postgres specifically, not everyone, since acl (needed for this) is
   # already required by roles/base for become_user's own temp-file ACLs.
+  #
+  # Guarded on the getfacl above rather than left to run every time: the
+  # entry setfacl writes is the same string getfacl prints back, so a
+  # re-run skips the command instead of reporting a change it did not make.
   command: setfacl -m u:postgres:--x /home/{{ ansible_user }}
-  changed_when: true
+  when: "'user:postgres:--x' not in home_acl.stdout"
 
 - name: Create janitor Postgres role
   become_user: postgres
@@ -142,6 +151,12 @@
   # sensitive-name redaction recognizes (unlike a "password:" keyed arg
   # elsewhere in this role), so worker_password would otherwise show up
   # in plaintext in -v output.
+  #
+  # The WHERE on the DO UPDATE is what makes a re-run report no change:
+  # gen_salt gives a different hash every time, so an unconditional upsert
+  # rewrites the row on every pass. crypt(plaintext, stored_hash) re-derives
+  # the stored hash from its own salt, so the comparison is false exactly
+  # when the password is unchanged, and the statement then affects no rows.
   become_user: postgres
   community.postgresql.postgresql_query:
     db: janitor
@@ -149,7 +164,9 @@
       INSERT INTO worker (name, password)
       VALUES (%s, crypt(%s, gen_salt('bf')))
       ON CONFLICT (name) DO UPDATE SET password = EXCLUDED.password
+      WHERE worker.password <> crypt(%s, worker.password)
     positional_args:
       - "{{ worker_name }}"
+      - "{{ worker_password }}"
       - "{{ worker_password }}"
   no_log: true

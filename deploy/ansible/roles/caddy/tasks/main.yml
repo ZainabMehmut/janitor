@@ -4,9 +4,13 @@
 # just fails "command not found". Fetch + gpg --dearmor by hand instead,
 # the way apt-key itself used to.
 - name: Download Caddy's official GPG key
+  # dest is under /usr/share/keyrings, not /tmp: trixie mounts /tmp as a
+  # tmpfs, so a /tmp copy is gone after a reboot and the download reports
+  # changed on the next run even though the dearmored keyring below is
+  # already in place.
   get_url:
     url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
-    dest: /tmp/caddy-stable-archive-keyring.gpg.key
+    dest: /usr/share/keyrings/caddy-stable-archive-keyring.asc
     mode: "0644"
     # TLS covers transport, but pinning the checksum catches a compromised
     # or silently-rotated key at the source too. Stable across two
@@ -17,7 +21,9 @@
     checksum: sha256:783dfee04b19e851a928cd87b34710213ebbe7628f98d9f34595ab83be578c00
 
 - name: Dearmor Caddy's GPG key into the trusted keyring
-  command: gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg /tmp/caddy-stable-archive-keyring.gpg.key
+  command: >
+    gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    /usr/share/keyrings/caddy-stable-archive-keyring.asc
   args:
     creates: /usr/share/keyrings/caddy-stable-archive-keyring.gpg
 

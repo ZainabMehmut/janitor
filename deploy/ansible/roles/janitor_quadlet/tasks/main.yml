@@ -12,11 +12,13 @@
 # rather than type=file (which extracts a tarball including device nodes,
 # and fails).
 #
-# The chroot tarball and its extracted tree live on host bind mounts (see
-# templates/worker.container.j2), so a restart does not throw away a three
-# minute mmdebstrap run. The sbuild profile's fstab and /var/lib/sbuild are
-# still in the container's writable layer, so the tasks that fix those run
-# on every pass rather than being gated.
+# The chroot tarball, its extracted tree and the schroot registration in
+# chroot.d all live on host bind mounts (see templates/worker.container.j2),
+# so a restart does not throw away a three minute mmdebstrap run. The sbuild
+# profile's fstab and /var/lib/sbuild are still in the container's writable
+# layer, so a recreated container brings the image's own versions of those
+# back and the tasks that fix them have to run again - each one checks the
+# state it is about to change rather than assuming either way.
 
 - name: Create quadlet unit directory
   file:
@@ -167,40 +169,75 @@
   when: "'worker' in janitor_services and chroot_tarball_check.rc != 0"
 
 - name: Register the schroot chroot (type=directory, not type=file - see mknod note above)
+  # /etc/schroot/chroot.d is a bind mount of the host directory created above,
+  # so this is written straight onto the host with copy rather than catted
+  # into the container through podman exec. copy compares content, so a re-run
+  # reports no change, and a changed chroot name or path still gets rewritten.
+  #
+  # owner/group: the deploy user's own uid/gid are what rootless podman maps
+  # to uid 0 / gid 0 inside the container, which is what a root-owned heredoc
+  # in the container used to produce here, and what schroot requires of a
+  # file in chroot.d.
+  copy:
+    dest: "{{ janitor_home }}/data/schroot.d/{{ janitor_sbuild_chroot }}.conf"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0644"
+    content: |
+      [{{ janitor_sbuild_chroot }}]
+      type=directory
+      description=Debian unstable/amd64 autobuilder
+      directory=/root/.cache/sbuild/{{ janitor_sbuild_chroot }}-dir
+      groups=root
+      root-groups=root
+      profile=sbuild
+  when: "'worker' in janitor_services"
+
+- name: Check whether the sbuild schroot profile still bind-mounts /sys
   become: true
   become_user: "{{ ansible_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
-  # Must be a literal block scalar (|), not folded (>): the heredoc's
-  # terminator and each config line depend on real newlines reaching the
-  # shell. Folded style collapses them all onto one line, so `cat` never
-  # sees a heredoc at all and instead tries to read "[unstable-amd64-sbuild]",
-  # "type=directory", etc. as literal filenames and fails on each.
-  command: |
-    podman exec janitor-worker sh -c
-    "cat > /etc/schroot/chroot.d/{{ janitor_sbuild_chroot }}.conf << 'EOF'
-    [{{ janitor_sbuild_chroot }}]
-    type=directory
-    description=Debian unstable/amd64 autobuilder
-    directory=/root/.cache/sbuild/{{ janitor_sbuild_chroot }}-dir
-    groups=root
-    root-groups=root
-    profile=sbuild
-    EOF"
+  command: podman exec janitor-worker grep -q '^/sys' /etc/schroot/sbuild/fstab
+  register: sbuild_fstab_sys
+  changed_when: false
+  failed_when: false
   when: "'worker' in janitor_services"
 
 - name: Disable the /sys bind-mount in the sbuild schroot profile (fails inside this container)
+  # This file is in the container's writable layer, not on a host bind mount,
+  # so a recreated container brings the image's own uncommented line back and
+  # this has to run again. The grep above is what decides that, so a re-run
+  # against an untouched container reports no change.
   become: true
   become_user: "{{ ansible_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
   command: podman exec janitor-worker sed -i 's|^/sys|#/sys|' /etc/schroot/sbuild/fstab
+  when:
+    - "'worker' in janitor_services"
+    - sbuild_fstab_sys.rc == 0
+
+- name: Check whether the sbuild scratch build directory exists
+  become: true
+  become_user: "{{ ansible_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
+  command: podman exec janitor-worker test -d /var/lib/sbuild/build
+  register: sbuild_build_dir
+  changed_when: false
+  failed_when: false
   when: "'worker' in janitor_services"
 
 - name: Create the sbuild scratch build directory the schroot profile's fstab expects
+  # /var/lib/sbuild is in the container's writable layer too, same as the
+  # fstab above, so this is guarded on the directory actually being missing
+  # rather than on mkdir -p being harmless to repeat.
   become: true
   become_user: "{{ ansible_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
   command: podman exec janitor-worker mkdir -p /var/lib/sbuild/build
-  when: "'worker' in janitor_services"
+  when:
+    - "'worker' in janitor_services"
+    - sbuild_build_dir.rc != 0

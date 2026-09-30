@@ -24,8 +24,11 @@
   # detached podman containers / user-level systemd units) once no login
   # session remains open - containers die ~4 min after the last SSH session
   # closes. Must happen before any container or quadlet unit is started.
-  command: loginctl enable-linger {{ ansible_user }}
-  changed_when: false
+  # creates: that marker file is what logind reads lingering back from, so a
+  # second run genuinely skips the command instead of re-running it.
+  command:
+    cmd: loginctl enable-linger {{ ansible_user }}
+    creates: "/var/lib/systemd/linger/{{ ansible_user }}"
 
 - name: Get deploy user's uid (needed for XDG_RUNTIME_DIR with user-scope systemd)
   getent:
@@ -42,9 +45,15 @@
   # into an already-running container (podman itself starting a NEW
   # container still works, since that goes through systemd's own
   # ExecStart, not a raw write).
+  #
+  # The systemd module reads is-enabled/is-active first and only acts when
+  # they disagree with what is asked for, so a re-run reports no change.
   become: true
   become_user: "{{ ansible_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
-  command: systemctl --user enable --now dbus.socket
-  changed_when: true
+  systemd:
+    name: dbus.socket
+    scope: user
+    enabled: true
+    state: started
