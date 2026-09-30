@@ -15,6 +15,8 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
+from datetime import datetime, timedelta
+
 import pytest
 
 import janitor.publish as publish
@@ -145,3 +147,86 @@ async def test_publish_one_passes_template_env_path_to_compiled_binary(monkeypat
         "janitor-publish-one",
         "--template-env-path=/etc/janitor/templates",
     ]
+
+
+class _StubForge:
+    """Stand-in for a forge instance.
+
+    The scan only uses the forge as a dictionary key and in log messages.
+    """
+
+    def __repr__(self):
+        return "<StubForge>"
+
+
+class _StubMergeProposal:
+    """A proposal that records the scan reaching it, then gives up.
+
+    Reading a proposal goes out to the forge over the network, so this part
+    has to be a stand-in. It raises ForgeLoginRequired, which the scan already
+    handles by moving on, so the only thing left to differ between the two
+    tests below is whether the rate limit gate let the scan get here at all.
+    """
+
+    url = "https://example.com/mypkg/merge_requests/1"
+
+    def __init__(self):
+        self.read_attempts = 0
+
+    def get_source_revision(self):
+        self.read_attempts += 1
+        raise publish.ForgeLoginRequired(self.url)
+
+
+def _one_proposal(monkeypatch, forge, mp):
+    # Only the forge iteration is replaced, since a real one would need a
+    # forge to talk to.
+    monkeypatch.setattr(
+        publish, "iter_all_mps", lambda statuses=None: iter([(forge, mp, "open")])
+    )
+
+
+async def test_check_existing_skips_a_forge_still_inside_its_backoff(
+    con, monkeypatch
+) -> None:
+    forge = _StubForge()
+    mp = _StubMergeProposal()
+    _one_proposal(monkeypatch, forge, mp)
+
+    forge_rate_limiter = {forge: datetime.utcnow() + timedelta(minutes=30)}
+
+    await publish.check_existing(
+        conn=con,
+        redis=None,
+        config=None,
+        publish_worker=None,
+        bucket_rate_limiter=publish.NonRateLimiter(),
+        forge_rate_limiter=forge_rate_limiter,
+        vcs_managers=None,
+    )
+
+    assert mp.read_attempts == 0
+    assert forge in forge_rate_limiter
+
+
+async def test_check_existing_drops_a_forge_backoff_that_has_expired(
+    con, monkeypatch
+) -> None:
+    forge = _StubForge()
+    mp = _StubMergeProposal()
+    _one_proposal(monkeypatch, forge, mp)
+
+    forge_rate_limiter = {forge: datetime.utcnow() - timedelta(minutes=30)}
+
+    await publish.check_existing(
+        conn=con,
+        redis=None,
+        config=None,
+        publish_worker=None,
+        bucket_rate_limiter=publish.NonRateLimiter(),
+        forge_rate_limiter=forge_rate_limiter,
+        vcs_managers=None,
+    )
+
+    assert mp.read_attempts == 1
+    assert forge not in forge_rate_limiter
