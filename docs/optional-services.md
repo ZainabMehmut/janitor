@@ -38,16 +38,20 @@ disabled and the install lock already set (matches how the original
 proof instance was configured by hand), the bot account, and an access
 token added as a `[gitea-local]` stanza in `authentication.conf`.
 
-**Token recovery isn't automatic.** Gitea never exposes a token's value
-again after creation - if this role's own state is lost (the host
-rebuilt, `janitor_home/authentication.conf` deleted) it can't recover the
-old token from the running Gitea instance either, it can only mint a new
-one under a different token name. `gitea admin user generate-access-token`
-errors on a repeated run with the same `--token-name`, so re-running this
-role against an already-provisioned Gitea instance leaves
-`authentication.conf`'s existing entry alone rather than silently
-breaking it - if you actually need a fresh token, delete the old one from
-Gitea's admin UI first.
+**The token is recorded on the host, because Gitea can't be asked for it
+twice.** Gitea only ever prints a token's value at the moment it creates
+it, and `gitea admin user generate-access-token` refuses a second run
+with the same `--token-name`. So the role writes the token it mints to
+`gitea_home/access-token` (mode 0600) and reads it back from there on
+every later run. That is what keeps `authentication.conf` stable across
+re-runs instead of rewriting it with a different token each time.
+
+If that file is lost but Gitea still holds the token, nothing can recover
+its value, and the role fails with a message saying so rather than
+deploying a broken `authentication.conf`. Either write the token you
+already have into `gitea_home/access-token` yourself, or delete the
+`janitor` token from the bot account's applications in Gitea and re-run
+to mint a fresh one.
 
 Not meant as a production forge - it's a real server, not a mock, but
 this role's own defaults (a fixed bot password var, no TLS, no backup)

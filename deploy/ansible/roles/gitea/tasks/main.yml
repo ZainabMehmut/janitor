@@ -6,15 +6,35 @@
 # production forge, just enough to prove janitor's Gitea plugin against a
 # real server instead of manual API calls.
 
+- name: Check who owns gitea's data volume already
+  stat:
+    path: "{{ gitea_home }}/data/gitea/conf/app.ini"
+  register: gitea_app_ini
+
+- name: Work out which uid/gid gitea's data volume should be owned by
+  # On a first run the volume does not exist yet and has to be created owned
+  # by the deploy user: root's gid 0 is unmapped inside the rootless user
+  # namespace, and the kernel refuses to chown a file whose group it cannot
+  # map, which would break the handover task below. Once that handover has
+  # run, the volume belongs to the host subuid that container uid 1000 maps
+  # to, and that is what the tasks below have to keep asserting - putting the
+  # deploy user back would undo the handover, the handover would redo it, and
+  # both would report changed on every run forever. The subuid is read off
+  # disk rather than worked out from /etc/subuid, so nothing here depends on
+  # guessing podman's mapping.
+  set_fact:
+    gitea_data_uid: "{{ gitea_app_ini.stat.uid | default(deploy_uid) }}"
+    gitea_data_gid: "{{ gitea_app_ini.stat.gid | default(deploy_gid) }}"
+  vars:
+    deploy_uid: "{{ ansible_facts.getent_passwd[ansible_user][1] }}"
+    deploy_gid: "{{ ansible_facts.getent_passwd[ansible_user][2] }}"
+
 - name: Create Gitea data directories
   file:
     path: "{{ gitea_home }}/{{ item }}"
     state: directory
-    owner: "{{ ansible_user }}"
-    # group matters: root's gid 0 is unmapped inside the rootless user
-    # namespace, and the kernel refuses to chown a file whose group it
-    # cannot map, which breaks the handover task below.
-    group: "{{ ansible_user }}"
+    owner: "{{ gitea_data_uid }}"
+    group: "{{ gitea_data_gid }}"
     mode: "0755"
   loop:
     - data
@@ -30,19 +50,21 @@
   template:
     src: app.ini.j2
     dest: "{{ gitea_home }}/data/gitea/conf/app.ini"
-    owner: "{{ ansible_user }}"
-    group: "{{ ansible_user }}"
+    owner: "{{ gitea_data_uid }}"
+    group: "{{ gitea_data_gid }}"
     mode: "0644"
 
 - name: Hand the data volume to the container's git user
   # gitea runs as uid 1000 inside the image, which rootless podman maps to a
-  # host subuid, so files owned by the login user are read-only to it.
+  # host subuid, so files owned by the login user are read-only to it. Only
+  # needed while the volume is still owned by the deploy user - see the
+  # uid/gid fact above for why repeating it every run cannot be made honest.
   become: true
   become_user: "{{ ansible_user }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
   command: podman unshare chown -R 1000:1000 {{ gitea_home }}/data
-  changed_when: true
+  when: gitea_data_uid | int == ansible_facts.getent_passwd[ansible_user][1] | int
 
 - name: Create quadlet unit directory
   file:
@@ -101,7 +123,19 @@
   when: "gitea_bot_user not in gitea_ready.stdout"
   no_log: true
 
-- name: Check whether the bot's access token already exists
+- name: Check whether the bot's access token was recorded by an earlier run
+  stat:
+    path: "{{ gitea_home }}/access-token"
+  register: gitea_token_file
+
+- name: Mint an access token for the bot account
+  # gitea only ever prints a token's value at the moment it creates it - there
+  # is no API or CLI that reads an existing one back, and a second
+  # generate-access-token with the same name is refused outright. So the value
+  # is recorded below and reused from then on. Minting one every run instead
+  # would rewrite breezy's authentication.conf (roles/janitor_config) with a
+  # different token each time, and the run that could not mint one used to
+  # fall back to a placeholder that then 401'd every gitea API call.
   become: true
   become_user: "{{ ansible_user }}"
   environment:
@@ -112,33 +146,54 @@
     --token-name janitor
     --scopes all
   register: gitea_token_create
-  changed_when: "'Access token was successfully created' in gitea_token_create.stdout"
-  failed_when:
-    - gitea_token_create.rc != 0
-    - "'already exists' not in gitea_token_create.stderr"
+  failed_when: false
+  when: not gitea_token_file.stat.exists
+  no_log: true
+
+- name: Check the token could actually be minted
+  assert:
+    that:
+      - gitea_token_create.rc == 0
+      - gitea_token_create.stdout is search('Access token was successfully created')
+    fail_msg: >-
+      gitea would not mint an access token named janitor, and
+      {{ gitea_home }}/access-token does not hold one from an earlier run.
+      Most likely gitea already has that token from a run made before this
+      file was recorded, and gitea will not print its value again. Either
+      write the token you already have into {{ gitea_home }}/access-token
+      (one line, mode 0600), or delete the janitor token from the bot
+      account's applications in gitea and run the playbook again.
+  when: not gitea_token_file.stat.exists
+
+- name: Record the access token for later runs
+  # The CLI prints "Access token was successfully created: <token>" on one
+  # line, so the token has to be pulled out of it rather than taken whole.
+  copy:
+    dest: "{{ gitea_home }}/access-token"
+    content: "{{ gitea_token_create.stdout | regex_search('(?<=created: )\\S+') }}"
+    owner: "{{ ansible_user }}"
+    mode: "0600"
+  when: not gitea_token_file.stat.exists
+  no_log: true
+
+- name: Read the recorded access token
+  slurp:
+    src: "{{ gitea_home }}/access-token"
+  register: gitea_token_recorded
   no_log: true
 
 - name: Set the access token fact
-  # generate-access-token errors on a second run ("token name already
-  # exists") rather than reprinting the token - Gitea never exposes an
-  # existing token's value again after creation, only its name/scopes, so
-  # this role's own idempotency can't recover a token from a re-run. The
-  # ansible_facts.set fact below only reflects the LATEST run's real
-  # value; see docs/multi-host-deployment.md for the recovery path (drop
-  # the token from gitea's admin UI, delete gitea_home/data so INSTALL_LOCK
-  # is cleared too if genuinely starting over).
-  #
-  # The CLI prints "Access token was successfully created: <token>" on one
-  # line, so the token has to be pulled out of it rather than taken whole.
   set_fact:
-    gitea_access_token: "{{ gitea_token_create.stdout | regex_search('(?<=created: )\\S+') | default('', true) if gitea_token_create.rc == 0 else 'CHANGEME-see-docs-multi-host-deployment' }}"
+    gitea_access_token: "{{ gitea_token_recorded.content | b64decode | trim }}"
   no_log: true
 
-- name: Check the parsed access token looks like one
-  # Fail loudly if gitea ever changes that message, rather than quietly
-  # wiring a truncated or prefixed token into authentication.conf.
+- name: Check the recorded access token looks like one
+  # Fail loudly rather than quietly wiring a truncated or prefixed token into
+  # authentication.conf - including if gitea ever changes that CLI message.
   assert:
     that:
       - gitea_access_token is match('^[0-9a-f]{40}$')
-    fail_msg: "could not parse an access token out of gitea's output"
-  when: gitea_token_create.rc == 0
+    fail_msg: >-
+      {{ gitea_home }}/access-token does not hold a gitea access token.
+      Delete it and the janitor token in gitea's admin UI, then run the
+      playbook again to mint a fresh one.
