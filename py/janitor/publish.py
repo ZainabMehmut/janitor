@@ -2107,7 +2107,9 @@ WHERE run.id = $1
 
     ret["propose_rate_limit"] = {"details": {"bucket": run["rate_limit_bucket"]}}
     try:
-        request.app["bucket_rate_limiter"].check_allowed(run["rate_limit_bucket"])
+        # A policy need not name a bucket, and check_allowed requires a str.
+        if run["rate_limit_bucket"]:
+            request.app["bucket_rate_limiter"].check_allowed(run["rate_limit_bucket"])
     except BucketRateLimited as e:
         ret["propose_rate_limit"]["result"] = False
         ret["propose_rate_limit"]["details"] = {
