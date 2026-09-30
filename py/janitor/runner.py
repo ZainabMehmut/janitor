@@ -54,12 +54,7 @@ from aiohttp import (
 from aiohttp_openmetrics import Counter, Gauge, Histogram, metrics, metrics_middleware
 from breezy import debug, urlutils
 from breezy.branch import Branch
-from breezy.errors import PermissionDenied, UnexpectedHttpStatus
-
-try:
-    from breezy.errors import ConnectionError  # type: ignore
-except ImportError:  # breezy >= 4
-    pass
+from breezy.errors import PermissionDenied, TransportError, UnexpectedHttpStatus
 from breezy.forge import (
     Forge,
     ForgeLoginRequired,
@@ -1136,12 +1131,12 @@ def open_resume_branch(
     except (ssl.SSLCertVerificationError, ssl.SSLZeroReturnError) as e:
         logging.warning("SSL error probing for forge (%s)", e)
         return None
-    except ConnectionError as e:
-        logging.warning("Connection error opening resume branch (%s)", e)
-        return None
     except UnexpectedHttpStatus as e:
         _parse_unexpected_http_status(e)
         raise e
+    except TransportError as e:
+        logging.warning("Transport error opening resume branch (%s)", e)
+        return None
     else:
         try:
             for option in [
@@ -1177,6 +1172,9 @@ def open_resume_branch(
                 "Unexpected HTTP status for %s: %s %s", e.path, e.code, e.extra
             )
             # TODO(jelmer): Considering re-raising here for some errors?
+            return None
+        except TransportError as e:
+            logging.warning("Unable to list existing proposals: %s", e)
             return None
         else:
             return resume_branch
