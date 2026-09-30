@@ -3491,6 +3491,8 @@ async def refresh_bucket_mp_counts(db, bucket_rate_limiter):
              GROUP BY 1, 2
              """
         ):
+            if row["status"] is None:
+                continue
             counts = per_bucket.setdefault(row["status"], {})
             if row["rate_limit_bucket"] is not None:
                 counts[row["rate_limit_bucket"]] = row["c"]
