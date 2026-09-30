@@ -1420,7 +1420,7 @@ async def handle_policy_get(request):
                     "mode": p["mode"],
                     "max_frequency_days": p["frequency_days"],
                 }
-                for p in row["publish"]
+                for p in row["per_branch_policy"]
             },
         }
     )
