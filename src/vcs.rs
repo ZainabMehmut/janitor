@@ -617,11 +617,33 @@ fn convert_branch_exception(vcs_url: &Url, e: BranchOpenError) -> BranchOpenFail
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct RevisionInfo {
+    #[serde(default, with = "bytes_as_str")]
     pub commit_id: Option<Vec<u8>>,
     pub revision_id: RevisionId,
     pub message: String,
-    pub link: Option<Url>,
+    pub link: Option<String>,
+}
+
+mod bytes_as_str {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<Vec<u8>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(bytes) => serializer.serialize_str(&String::from_utf8_lossy(bytes)),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Vec<u8>>, D::Error> {
+        Ok(Option::<String>::deserialize(deserializer)?.map(String::into_bytes))
+    }
 }
 
 pub const EMPTY_GIT_TREE: &[u8] = b"4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -1091,8 +1113,27 @@ impl VcsManager for RemoteGitVcsManager {
             ))
             .unwrap();
         let client = reqwest::Client::new();
-        let resp = client.get(url).send().await.unwrap();
-        resp.json().await.unwrap()
+        let resp = match client.get(url).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::error!("{}: failed to fetch revision info: {}", codebase, e);
+                return vec![];
+            }
+        };
+        let resp = match resp.error_for_status() {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::error!("{}: revision info request rejected: {}", codebase, e);
+                return vec![];
+            }
+        };
+        match resp.json().await {
+            Ok(infos) => infos,
+            Err(e) => {
+                tracing::error!("{}: failed to decode revision info: {}", codebase, e);
+                vec![]
+            }
+        }
     }
 
     fn get_branch_url(&self, codebase: &str, branch_name: &str) -> Url {
@@ -1227,8 +1268,27 @@ impl VcsManager for RemoteBzrVcsManager {
             request = request.header("x-trace-span-id", format!("{:?}", trace_id));
         }
 
-        let resp = request.send().await.unwrap();
-        resp.json().await.unwrap()
+        let resp = match request.send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::error!("{}: failed to fetch revision info: {}", codebase, e);
+                return vec![];
+            }
+        };
+        let resp = match resp.error_for_status() {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::error!("{}: revision info request rejected: {}", codebase, e);
+                return vec![];
+            }
+        };
+        match resp.json().await {
+            Ok(infos) => infos,
+            Err(e) => {
+                tracing::error!("{}: failed to decode revision info: {}", codebase, e);
+                vec![]
+            }
+        }
     }
 
     fn get_branch_url(&self, codebase: &str, branch_name: &str) -> Url {
