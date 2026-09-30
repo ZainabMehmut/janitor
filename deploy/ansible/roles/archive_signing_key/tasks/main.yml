@@ -22,16 +22,18 @@
 
 - name: Generate a signing key for the archive
   # Batch-generated, no passphrase - the archive signs unattended, there
-  # is nobody to enter one.
+  # is nobody to enter one. RSA rather than ed25519: apt verifies Release
+  # signatures with gpgv, and ed25519 support there is patchy on older
+  # releases that might point at this archive.
   command: >
     gpg --homedir {{ janitor_home }}/gnupg-archive --batch --gen-key /dev/stdin
   args:
     stdin: |
       %echo Generating archive signing key
-      Key-Type: eddsa
-      Key-Curve: ed25519
-      Subkey-Type: eddsa
-      Subkey-Curve: ed25519
+      Key-Type: RSA
+      Key-Length: 4096
+      Subkey-Type: RSA
+      Subkey-Length: 4096
       Name-Real: {{ janitor_github_org }} archive
       Name-Email: archive@{{ janitor_domain }}
       Expire-Date: 0
