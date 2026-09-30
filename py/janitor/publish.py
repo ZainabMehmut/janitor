@@ -3308,6 +3308,8 @@ async def check_existing(
             )
             # TODO(jelmer): print traceback?
             unexpected += 1
+            # The forge may have been written to before the failure, so count it.
+            modified = True
 
         if unexpected > unexpected_limit:
             unexpected_http_response_count.inc()
