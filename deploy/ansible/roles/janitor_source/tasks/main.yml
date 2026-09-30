@@ -2,34 +2,23 @@
 # schema/*.sql (needed by roles/postgres) and the quadlet templates'
 # expectations both come from this checkout regardless of which image
 # path below is used, so the clone always happens.
+- name: Create the janitor checkout directory
+  file:
+    path: "{{ janitor_home }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0755"
+
 - name: Clone janitor
+  # The git module has no owner parameter, so clone as the account the
+  # build tasks below run as, or git rejects the checkout as dubiously
+  # owned.
+  become_user: "{{ ansible_user }}"
   git:
     repo: "{{ janitor_repo }}"
     dest: "{{ janitor_home }}"
     version: "{{ janitor_branch }}"
     force: false
-
-# The clone above (ansible's own git module) doesn't trip git's dubious-
-# ownership check, but a later plain `git` invocation as this same user
-# does - ansible's become_user apparently doesn't leave euid/directory-
-# owner matching in a way git's ownership heuristic accepts, even though
-# it's the same account. The Makefile's build-% rule shells out to `git
-# rev-parse HEAD` for the image's $(SHA) tag; when that fails, $(SHA) is
-# silently empty (make $(shell ...) only captures stdout) and buildah
-# rejects the resulting "archive:" (empty) tag outright with "invalid
-# reference format" - killing build-all at the very first image.
-- name: Check whether the janitor checkout is already marked git-safe
-  become_user: "{{ ansible_user }}"
-  command: git config --global --get-all safe.directory
-  register: git_safe_directories
-  changed_when: false
-  failed_when: false
-
-- name: Mark the janitor checkout safe for git commands make build-all shells out to
-  become_user: "{{ ansible_user }}"
-  command: git config --global --add safe.directory {{ janitor_home }}
-  changed_when: true
-  when: janitor_home not in git_safe_directories.stdout_lines
 
 - name: Get current janitor checkout commit SHA
   # make build-all's build-% rule tags every image :$(SHA) as well as
