@@ -472,21 +472,23 @@ async def write_suite_files(
     with open(os.path.join(base_path, "Release"), "wb") as f:
         r.dump(f)
 
-    logger.debug("Writing Release.gpg file for %s", suite_name)
-
     if gpg_context:
+        # gpg is only imported under TYPE_CHECKING at module scope, need it for real here
         import gpg
         from gpg.constants.sig import mode as gpg_mode
 
+        logger.debug("Writing Release.gpg file for %s", suite_name)
+        # sign before opening the file - "wb" truncates immediately, so a failed sign
+        # must not leave a truncated Release.gpg/InRelease behind
         data = gpg.Data(r.dump())
+        signature, result = gpg_context.sign(data, mode=gpg_mode.DETACH)
         with open(os.path.join(base_path, "Release.gpg"), "wb") as f:
-            signature, result = gpg_context.sign(data, mode=gpg_mode.DETACH)
             f.write(signature)
 
         logger.debug("Writing InRelease file for %s", suite_name)
         data = gpg.Data(r.dump())
+        signature, result = gpg_context.sign(data, mode=gpg_mode.CLEAR)
         with open(os.path.join(base_path, "InRelease"), "wb") as f:
-            signature, result = gpg_context.sign(data, mode=gpg_mode.CLEAR)
             f.write(signature)
 
 
