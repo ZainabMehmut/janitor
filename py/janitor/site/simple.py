@@ -153,9 +153,19 @@ def import_pgp_keys(gpg_context, pgp_keys):
 
 
 def export_pgp_keys(gpg_context, pgp_keys):
-    """Import armored keys into gpg_context and export them again, minimised."""
-    fprs = import_pgp_keys(gpg_context, pgp_keys)
-    return gpg_context.key_export_minimal("\0".join(fprs))
+    """Import armored keys into gpg_context and export just those keys again.
+
+    gpgme takes one pattern string, so a NUL joined fingerprint list is cut at
+    the first NUL and only the first key comes back. One export per
+    fingerprint, concatenated, gives all of them.
+    """
+    exported = [
+        gpg_context.key_export_minimal(fpr)
+        for fpr in import_pgp_keys(gpg_context, pgp_keys)
+    ]
+    if not all(exported):
+        raise web.HTTPBadGateway(text="Some PGP keys could not be exported.")
+    return b"".join(exported)
 
 
 @html_template("credentials.html", headers={"Vary": "Cookie"})
@@ -176,6 +186,10 @@ async def handle_credentials(request):
         else []
     )
 
+    # One keylist call per fingerprint, for the same reason export_pgp_keys
+    # exports one at a time.
+    pgp_keylist = [k for fpr in pgp_fprs for k in request.app["gpg"].keylist(fpr)]
+
     pgp_validity = {
         gpg.constants.VALIDITY_FULL: "full",
         gpg.constants.VALIDITY_MARGINAL: "marginal",
@@ -190,9 +204,7 @@ async def handle_credentials(request):
         "pgp_validity": pgp_validity.get,
         "pgp_algo": gpg.core.pubkey_algo_name,
         "ssh_keys": credentials["ssh_keys"],
-        "pgp_keys": (
-            request.app["gpg"].keylist("\0".join(pgp_fprs)) if pgp_fprs else []
-        ),
+        "pgp_keys": pgp_keylist,
         "hosting": credentials["hosting"],
     }
 
