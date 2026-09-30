@@ -278,3 +278,20 @@ async def test_refresh_bucket_mp_counts_skips_null_rate_limit_bucket(db):
     await publish.refresh_bucket_mp_counts(db, bucket_rate_limiter)
 
     assert bucket_rate_limiter.get_stats() == {"lintian-fixes": 1}
+
+
+async def test_refresh_bucket_mp_counts_skips_a_null_status(db):
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO merge_proposal (url, status, rate_limit_bucket)
+            VALUES ($1, NULL, 'lintian-fixes'), ($2, 'open', 'lintian-fixes')
+            """,
+            "https://example.com/pulls/1",
+            "https://example.com/pulls/2",
+        )
+
+    bucket_rate_limiter = publish.FixedRateLimiter(10)
+    await publish.refresh_bucket_mp_counts(db, bucket_rate_limiter)
+
+    assert bucket_rate_limiter.get_stats() == {"lintian-fixes": 1}
