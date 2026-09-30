@@ -296,8 +296,7 @@ pub fn run_worker(
     let cached_branch = if let Some(cached_branch_url) = cached_branch_url {
         let probers =
             silver_platter::probers::select_probers(vcs_type.map(|v| v.to_string()).as_deref());
-        // breezy reads ,branch= natively, but open_branch strips segment
-        // parameters before opening the transport, so pass the name explicitly.
+        // open_branch reads ,branch= itself but does not unescape it.
         let cached_branch_name = janitor::vcs::segment_branch_name(cached_branch_url);
         match silver_platter::vcs::open_branch(
             cached_branch_url,
