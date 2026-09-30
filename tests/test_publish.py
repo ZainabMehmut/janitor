@@ -17,8 +17,8 @@
 
 import pytest
 
-from janitor.config import read_string as read_config_string
 import janitor.publish as publish
+from janitor.config import read_string as read_config_string
 from janitor.publish import create_app
 
 
