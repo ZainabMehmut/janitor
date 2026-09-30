@@ -3,6 +3,7 @@ name: Containers - Build and push images
 
 "on":
   push:
+  pull_request:
   schedule:
     - cron: '0 6 * * *'  # Daily 6AM UTC build
 
@@ -15,6 +16,12 @@ jobs:
     name: Build and Push
     # https://github.com/actions/runner-images
     runs-on: ubuntu-latest
+    # On a pull request only the site image is built and smoke tested. It has
+    # the widest import surface of the eleven, so it gives the most signal for
+    # one job.
+    if: |
+      github.event_name != 'pull_request'
+      || matrix.dockerfile_suffix == 'site'
     # Publish under vars.GHCR_OWNER when set (see issue #1329: janitor-team
     # org lacks package-creation permission, so we override to "jelmer"),
     # else fall back to the current repository owner (works for forks).
