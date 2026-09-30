@@ -302,4 +302,17 @@ mod tests {
     fn test_append_chroot_arg_none() {
         assert_eq!(append_chroot_arg("sbuild", None), "sbuild");
     }
+
+    #[test]
+    fn test_append_chroot_arg_quotes_special_characters() {
+        // The result is shell-split again by breezy builddeb --builder=, so quoting must survive.
+        assert_eq!(
+            append_chroot_arg("sbuild", Some("unstable amd64-sbuild")),
+            "sbuild --chroot='unstable amd64-sbuild'"
+        );
+        assert_eq!(
+            append_chroot_arg("sbuild", Some("unstable'amd64-sbuild")),
+            "sbuild --chroot=\"unstable'amd64-sbuild\""
+        );
+    }
 }
