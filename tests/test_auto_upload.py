@@ -139,7 +139,7 @@ def _debian_result(log_id):
 
 
 async def _publish_until_subscribed(redis, payload):
-    for _ in range(1000):
+    for _ in range(200):
         if await redis.publish("result", payload):
             return
         await asyncio.sleep(0.01)
@@ -147,10 +147,11 @@ async def _publish_until_subscribed(redis, payload):
 
 
 async def _wait_for(predicate):
-    for _ in range(1000):
+    for _ in range(200):
         if predicate():
             return
         await asyncio.sleep(0.01)
+    raise AssertionError("timed out waiting for the listener to catch up")
 
 
 def _artifacts_without_changes(root, log_id):
@@ -197,6 +198,41 @@ async def test_listener_survives_an_unexpected_upload_error(tmp_path, caplog):
         assert _uploads_started(caplog) == ["bad", "good"]
         (error,) = _logged_errors(caplog)
         assert issubclass(error, OSError)
+        assert not listener.done()
+    finally:
+        listener.cancel()
+        try:
+            await listener
+        except asyncio.CancelledError:
+            pass
+
+
+async def test_result_without_a_log_id_is_not_uploaded(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    _artifacts_without_changes(tmp_path, "good")
+
+    redis = FakeRedis()
+    listener = asyncio.create_task(
+        auto_upload.listen_to_runner(
+            redis,
+            LocalArtifactManager(str(tmp_path)),
+            "local",
+            distributions=["unstable"],
+        )
+    )
+    try:
+        await _publish_until_subscribed(
+            redis, json.dumps({"code": "success", "target": {"name": "generic"}})
+        )
+
+        no_log_id = _debian_result("unused")
+        del no_log_id["log_id"]
+        await redis.publish("result", json.dumps(no_log_id))
+        await redis.publish("result", json.dumps(_debian_result("good")))
+
+        await _wait_for(lambda: "good" in _uploads_started(caplog))
+        assert _uploads_started(caplog) == ["good"]
+        assert _logged_errors(caplog) == [KeyError]
         assert not listener.done()
     finally:
         listener.cancel()

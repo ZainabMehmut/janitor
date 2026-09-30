@@ -168,7 +168,7 @@ async def listen_to_runner(
 
             if is_debian_upload_target(result, distributions):
                 await upload_build_result(
-                    log_id,
+                    result["log_id"],
                     artifact_manager,
                     dput_host,
                     debsign_keyid=debsign_keyid,
