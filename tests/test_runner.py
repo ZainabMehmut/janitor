@@ -693,6 +693,44 @@ async def test_assignment_with_only_vcs(aiohttp_client, db, tmp_path):
     await qp.stop()
 
 
+async def test_assignment_failure_releases_the_claim(
+    aiohttp_client, db, tmp_path, monkeypatch
+):
+    # A failure after the queue item is claimed used to leave it assigned to a
+    # run that never started: hidden from next_queue_item, so assign requests
+    # answered 503 until the watchdog reaped it run-timeout minutes later.
+    vcs = tmp_path / "vcs"
+    vcs.mkdir()
+    qp = await create_queue_processor(db, vcs_managers=get_vcs_managers(str(vcs)))
+    client = await create_client(aiohttp_client, qp, campaigns=["mycampaign"])
+    resp = await client.post("/codebases", json=[{"name": "foo", "vcs_type": "hg"}])
+    assert resp.status == 200
+    resp = await client.post(
+        "/candidates",
+        json=[{"campaign": "mycampaign", "codebase": "foo", "command": "true"}],
+    )
+    assert resp.status == 200
+
+    def boom(*args, **kwargs):
+        raise NotImplementedError
+
+    monkeypatch.setattr("janitor.runner.get_builder", boom)
+
+    resp = await client.post("/active-runs", json={})
+    assert resp.status == 500
+
+    assert await qp.redis.hkeys("assigned-queue-items") == []
+    assert await qp.redis.hkeys("active-runs") == []
+    assert await qp.redis.hkeys("last-keepalive") == []
+
+    # the item stays queued: abort would have deleted the row and rescheduled
+    # the candidate at the back of the queue
+    resp = await client.get("/queue")
+    assert resp.status == 200
+    assert [entry["codebase"] for entry in await resp.json()] == ["foo"]
+    await qp.stop()
+
+
 def _make_active_run(*, queue_id, log_id, codebase="foo"):
     return ActiveRun(
         campaign="test",
