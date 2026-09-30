@@ -126,6 +126,26 @@
   changed_when: false
   when: "'publish' in janitor_services"
 
+- name: Register the bot's SSH key with gitea
+  # Automated here, unlike the GitHub reminder below, because roles/gitea
+  # mints that token itself against a throwaway forge. breezy's gitea forge
+  # pushes to the repository's ssh_url, so without this every publish fails
+  # with "Connection closed early" from a permission denied.
+  uri:
+    url: "http://{{ gitea_domain }}:{{ gitea_http_port }}/api/v1/user/keys"
+    method: POST
+    headers:
+      Authorization: "token {{ gitea_access_token }}"
+    body_format: json
+    body:
+      title: "{{ janitor_github_org }}-publish"
+      key: "{{ bot_ssh_pubkey.stdout }}"
+    status_code: [201, 422]
+  no_log: true
+  when:
+    - "'publish' in janitor_services"
+    - gitea_access_token is defined
+
 - name: Remind the operator to register the SSH key
   # One-time manual step, deliberately not automated: registering it via
   # GitHub's API needs a broader token scope than breezy_github_token's
