@@ -142,8 +142,6 @@ def import_pgp_keys(gpg_context, pgp_keys):
     fprs = []
     for keydata in pgp_keys:
         result = gpg_context.key_import(keydata.encode("utf-8"))
-        # key_import hands back a status string, not a result object, when the
-        # import considered no keys at all.
         fprs.extend(i.fpr for i in getattr(result, "imports", ()))
     if not fprs:
         raise web.HTTPBadGateway(
@@ -178,16 +176,12 @@ async def handle_credentials(request):
         )
     except ClientConnectorError:
         return web.Response(status=500, text="Unable to retrieve credentials")
-    # The page lists SSH keys and hosting sites too, so a publisher with no
-    # PGP keys still gets a page rather than a 404.
     pgp_fprs = (
         import_pgp_keys(request.app["gpg"], credentials["pgp_keys"])
         if credentials["pgp_keys"]
         else []
     )
 
-    # One keylist call per fingerprint, for the same reason export_pgp_keys
-    # exports one at a time.
     pgp_keylist = [k for fpr in pgp_fprs for k in request.app["gpg"].keylist(fpr)]
 
     pgp_validity = {
