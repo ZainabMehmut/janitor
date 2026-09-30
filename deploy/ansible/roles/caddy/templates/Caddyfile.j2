@@ -21,7 +21,7 @@
 	# this handle, a real apt client can fetch the pool files but never
 	# the Release/Packages index that names them.
 	handle /dists/* {
-		reverse_proxy localhost:9914
+		reverse_proxy 127.0.0.1:9914
 	}
 	handle {
 		reverse_proxy 127.0.0.1:8090
