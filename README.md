@@ -78,10 +78,10 @@ There are two common ways of deploying a new janitor instance.
  * On top of kubernetes (see the configuration for the Debian & Upstream janitor)
  * Using e.g. ansible and/or a venv
 
-Docker
-------
+Containers
+----------
 
-Several docker images are provided
+Several container images are provided
 
  * [ghcr.io/jelmer/janitor/archive](https://github.com/users/jelmer/packages/container/package/janitor%2Farchive) - APT archive generator
  * [ghcr.io/jelmer/janitor/differ](https://github.com/users/jelmer/packages/container/package/janitor%2Fdiffer) - diffoscope/debdiff generator
