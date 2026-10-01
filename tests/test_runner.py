@@ -1024,3 +1024,47 @@ async def test_schedule_unknown_run_id_returns_404(aiohttp_client, db, tmp_path)
     resp = await client.post("/schedule", json={"run_id": "nonexistent"})
     assert resp.status == 404
     await qp.stop()
+
+
+async def test_handle_queue_bad_limit(aiohttp_client, db, tmp_path):
+    vcs = tmp_path / "vcs"
+    vcs.mkdir()
+    qp = await create_queue_processor(db, vcs_managers=get_vcs_managers(str(vcs)))
+    client = await create_client(aiohttp_client, qp, campaigns=["mycampaign"])
+    for name in ["foo", "bar"]:
+        resp = await client.post(
+            "/codebases",
+            json=[{"name": name, "branch_url": f"https://example.com/{name}.git"}],
+        )
+        assert resp.status == 200
+        resp = await client.post(
+            "/candidates",
+            json=[{"campaign": "mycampaign", "codebase": name, "command": "true"}],
+        )
+        assert resp.status == 200
+        resp = await client.post(
+            "/schedule", json={"campaign": "mycampaign", "codebase": name}
+        )
+        assert resp.status == 200
+
+    resp = await client.get("/queue")
+    assert resp.status == 200
+    assert len(await resp.json()) == 2
+
+    resp = await client.get("/queue", params={"limit": "1"})
+    assert resp.status == 200
+    assert len(await resp.json()) == 1
+
+    statuses = []
+    reasons = []
+    for value in ["abc", "", "-1", "99999999999999999999999"]:
+        resp = await client.get("/queue", params={"limit": value})
+        statuses.append(resp.status)
+        reasons.append(
+            (await resp.json())["reason"] if resp.status == 400 else await resp.text()
+        )
+    assert statuses == [400, 400, 400, 400]
+    assert reasons[:2] == ["limit must be an integer", "limit must be an integer"]
+    assert "LIMIT" in reasons[2], reasons[2]
+    assert "bigint" in reasons[3], reasons[3]
+    await qp.stop()
