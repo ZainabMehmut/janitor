@@ -125,7 +125,10 @@ async def handle_merge_proposals(request):
 async def handle_merge_proposal(request):
     from .merge_proposals import write_merge_proposal
 
-    url = request.query["url"]
+    try:
+        url = request.query["url"]
+    except KeyError as e:
+        raise web.HTTPBadRequest(text="no url specified") from e
     return await write_merge_proposal(request.app["pool"], url)
 
 
