@@ -656,6 +656,34 @@ db_test! {
 }
 
 db_test! {
+    async fn test_public_app_does_not_expose_admin_endpoints(test_db: TestDatabase) {
+        // /health, /ready, /metrics must stay admin-only, matching
+        // Python's `create_web_app` in `py/janitor/git_store.py`.
+        // Hitting them on the public port should 404.
+        setup_test_database(test_db.pool()).await.unwrap();
+        let tmp = TempDir::new().unwrap();
+        let state = build_state(&tmp, &test_db, AppRole::Public).await;
+        let app = web::create_public_app(state, 0);
+        let (addr, handle) = spawn(app).await;
+
+        for path in ["/health", "/ready", "/metrics"] {
+            let resp = reqwest::get(format!("http://{}{}", addr, path))
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                404,
+                "public app should not expose {}, got {}",
+                path,
+                resp.status()
+            );
+        }
+
+        handle.abort();
+    }
+}
+
+db_test! {
     async fn test_admin_repo_list_at_root(test_db: TestDatabase) {
         // The admin app exposes `list_repositories` at `/`.
         setup_test_database(test_db.pool()).await.unwrap();

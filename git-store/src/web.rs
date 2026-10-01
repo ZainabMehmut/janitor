@@ -143,8 +143,13 @@ fn web_config(client_max_size: usize) -> janitor::shared_config::WebConfig {
 }
 
 /// Public app: mounted under `/git/`, writes gated by worker auth.
+///
+/// `/health`, `/ready`, and `/metrics` are **not** exposed here —
+/// those stay on the admin app, matching the Python route table in
+/// `py/janitor/git_store.py`. Deployments typically only let a
+/// reverse proxy at this port, and leaking `/metrics` externally is
+/// an information-disclosure risk.
 pub fn create_public_app(state: AppState, client_max_size: usize) -> Router {
-    let health = health_router(state.health_checker.clone());
     let router = Router::new()
         .route("/", get(home_handler))
         .route("/git/", get(list_repositories))
@@ -166,8 +171,7 @@ pub fn create_public_app(state: AppState, client_max_size: usize) -> Router {
             "/git/{codebase}/{*path}",
             get(klaus_or_git_backend).post(klaus_or_git_backend),
         )
-        .with_state(state)
-        .merge(health);
+        .with_state(state);
 
     // Serve klaus's static assets from a single shared path so
     // browsers reuse the cache across repos.
