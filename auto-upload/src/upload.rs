@@ -80,6 +80,59 @@ impl UploadConfig {
 mod tests {
     use super::*;
 
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Mutex;
+
+    use tempfile::TempDir;
+
+    // sign_package / upload_package tests mutate the process-wide PATH to
+    // point at a fake debsign / dput, so they cannot run in parallel.
+    static PATH_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Write an executable shim at `dir/name` that silently exits with
+    /// `exit_code`.
+    fn write_shim(dir: &Path, name: &str, exit_code: i32) {
+        let path = dir.join(name);
+        let script = format!("#!/bin/sh\nexit {}\n", exit_code);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    struct PathGuard<'a> {
+        _lock: std::sync::MutexGuard<'a, ()>,
+        original: std::ffi::OsString,
+    }
+
+    impl PathGuard<'_> {
+        fn prepend<'a>(shim_dir: &Path) -> PathGuard<'a> {
+            let lock = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let original = std::env::var_os("PATH").unwrap_or_default();
+            let mut paths = vec![shim_dir.to_path_buf()];
+            paths.extend(std::env::split_paths(&original));
+            let joined = std::env::join_paths(paths).unwrap();
+            // SAFETY: `_lock` serialises all PATH writes in this module and
+            // the guard restores the original on drop.
+            unsafe { std::env::set_var("PATH", &joined) };
+            PathGuard {
+                _lock: lock,
+                original,
+            }
+        }
+    }
+
+    impl Drop for PathGuard<'_> {
+        fn drop(&mut self) {
+            // SAFETY: still holding `_lock`.
+            unsafe { std::env::set_var("PATH", &self.original) };
+        }
+    }
+
+    fn write_changes(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("foo_1.0-1_amd64.changes");
+        std::fs::write(&path, b"Format: 1.8\n").unwrap();
+        path
+    }
+
     fn cfg(distributions: Vec<String>) -> UploadConfig {
         UploadConfig {
             dput_host: Some("test-host".into()),
@@ -102,5 +155,63 @@ mod tests {
         let config = cfg(vec![]);
         assert!(config.should_upload_distribution("unstable"));
         assert!(config.should_upload_distribution("stable"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sign_package_succeeds_when_debsign_exits_zero() {
+        let shims = TempDir::new().unwrap();
+        write_shim(shims.path(), "debsign", 0);
+        let _guard = PathGuard::prepend(shims.path());
+
+        let workdir = TempDir::new().unwrap();
+        let changes = write_changes(workdir.path());
+        sign_package(&changes, None)
+            .await
+            .expect("sign should succeed");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sign_package_reports_failure_and_bumps_counter() {
+        let shims = TempDir::new().unwrap();
+        write_shim(shims.path(), "debsign", 1);
+        let _guard = PathGuard::prepend(shims.path());
+
+        let before = DEBSIGN_FAILED_COUNT.get();
+        let workdir = TempDir::new().unwrap();
+        let changes = write_changes(workdir.path());
+        match sign_package(&changes, None).await {
+            Err(UploadError::DebsignFailure(_)) => {}
+            other => panic!("expected DebsignFailure, got {:?}", other),
+        }
+        assert_eq!(DEBSIGN_FAILED_COUNT.get(), before + 1.0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn upload_package_succeeds_when_dput_exits_zero() {
+        let shims = TempDir::new().unwrap();
+        write_shim(shims.path(), "dput", 0);
+        let _guard = PathGuard::prepend(shims.path());
+
+        let workdir = TempDir::new().unwrap();
+        let changes = write_changes(workdir.path());
+        upload_package(&changes, Some("some-host"))
+            .await
+            .expect("upload should succeed");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn upload_package_reports_failure_and_bumps_counter() {
+        let shims = TempDir::new().unwrap();
+        write_shim(shims.path(), "dput", 1);
+        let _guard = PathGuard::prepend(shims.path());
+
+        let before = UPLOAD_FAILED_COUNT.get();
+        let workdir = TempDir::new().unwrap();
+        let changes = write_changes(workdir.path());
+        match upload_package(&changes, Some("some-host")).await {
+            Err(UploadError::DputFailure(_)) => {}
+            other => panic!("expected DputFailure, got {:?}", other),
+        }
+        assert_eq!(UPLOAD_FAILED_COUNT.get(), before + 1.0);
     }
 }
