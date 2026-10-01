@@ -451,7 +451,8 @@ pub struct MergeProposalRun {
     /// Command that produced the run.
     pub command: String,
     /// Configured value of the candidate that scheduled this run.
-    pub value: i64,
+    /// Matches `run.value` which is `int` (INT4) in the schema.
+    pub value: i32,
     /// Role of the result branch that matched the merge proposal
     /// revision (e.g. `main`).
     pub role: String,

@@ -39,9 +39,11 @@ async fn seed_codebase_and_change_set(
     campaign: &str,
     branch_url: &str,
 ) {
+    // `codebase.check1` requires `(branch_url is null) = (url is null)`
+    // -- set both to the same value or neither.
     sqlx::query(
-        "INSERT INTO codebase (name, branch_url, vcs_type)
-         VALUES ($1, $2, 'git')
+        "INSERT INTO codebase (name, branch_url, url, vcs_type)
+         VALUES ($1, $2, $2, 'git')
          ON CONFLICT DO NOTHING",
     )
     .bind(codebase)
@@ -80,13 +82,15 @@ async fn seed_run(
 ) {
     let finish_time = Utc::now() - Duration::minutes(finish_time_offset_minutes);
     let start_time = finish_time - Duration::minutes(1);
+    // `vcs_type` must be non-null: the Rust `Run` struct decodes it
+    // as `String`, not `Option<String>`.
     sqlx::query(
         r#"
         INSERT INTO run (
             id, suite, codebase, command, result_code, revision,
             branch_url, value, start_time, finish_time, logfilenames,
-            change_set
-        ) VALUES ($1, $2, $3, $4, 'success', $5, $6, $7, $8, $9, '{}', $10)
+            change_set, vcs_type
+        ) VALUES ($1, $2, $3, $4, 'success', $5, $6, $7, $8, $9, '{}', $10, 'git')
         "#,
     )
     .bind(run_id)
@@ -426,26 +430,20 @@ test_with_database! {
         )
         .await;
 
-        // Build a Run by re-reading the row from the same query
-        // shape get_last_effective_run uses, so the test exercises
-        // the actual row decoding too.
-        let last = get_last_effective_run(test_db.pool(), "cb-1", "lintian-fixes")
-            .await
-            .unwrap();
-        // The view requires a result branch to consider the run
-        // effective; without one, the helper returns None and the
-        // assertion below would fail spuriously, so seed it.
-        if last.is_none() {
-            seed_result_branch(
-                test_db.pool(),
-                "run-1",
-                "main",
-                "refs/heads/main",
-                Some("rev-base"),
-                Some("rev-tip"),
-            )
-            .await;
-        }
+        // Seed exactly one result branch so `derived_branch_name` sees
+        // `len(result_branches) == 1` and takes the single-branch arm
+        // (Python publish.py:224: `if len(run.result_branches) == 1`).
+        // Without this the array is empty and the helper falls through
+        // to the `{branch}/{role}` arm.
+        seed_result_branch(
+            test_db.pool(),
+            "run-1",
+            "main",
+            "refs/heads/main",
+            Some("rev-base"),
+            Some("rev-tip"),
+        )
+        .await;
         let last = get_last_effective_run(test_db.pool(), "cb-1", "lintian-fixes")
             .await
             .unwrap()
