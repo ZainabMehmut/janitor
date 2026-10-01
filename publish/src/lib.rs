@@ -4674,19 +4674,24 @@ async fn check_existing(
                 continue;
             }
         };
-        if let Some(retry_after) = retry_after {
-            if chrono::Utc::now() < retry_after {
-                match forge_rate_limiter.write() {
-                    Ok(mut guard) => guard.remove(&forge_key),
-                    Err(e) => {
-                        log::error!("RwLock poisoned when removing rate limit: {}", e);
-                        continue;
-                    }
-                };
-            } else {
+        match classify_forge_rate_limit(retry_after, chrono::Utc::now()) {
+            ForgeRateLimitDecision::Backoff => {
+                crate::metrics::FORGE_RATE_LIMITED_COUNT
+                    .with_label_values(&[forge.forge_name().as_str()])
+                    .inc();
                 was_forge_ratelimited = true;
                 continue;
             }
+            ForgeRateLimitDecision::Expired => match forge_rate_limiter.write() {
+                Ok(mut guard) => {
+                    guard.remove(&forge_key);
+                }
+                Err(e) => {
+                    log::error!("RwLock poisoned when removing rate limit: {}", e);
+                    continue;
+                }
+            },
+            ForgeRateLimitDecision::NotLimited => {}
         }
         let modified = match check_existing_mp(
             &conn,
@@ -4929,6 +4934,29 @@ pub(crate) fn previous_mp_blocks_publish(statuses: &[(String, String)]) -> bool 
     statuses
         .iter()
         .any(|(_role, status)| status == "rejected" || status == "closed")
+}
+
+/// What a per-forge backoff entry means at the moment of the check.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ForgeRateLimitDecision {
+    /// No backoff recorded.
+    NotLimited,
+    /// Backoff still active; caller should skip this forge.
+    Backoff,
+    /// Backoff expired; caller should drop the entry.
+    Expired,
+}
+
+#[must_use]
+pub(crate) fn classify_forge_rate_limit(
+    retry_after: Option<chrono::DateTime<Utc>>,
+    now: chrono::DateTime<Utc>,
+) -> ForgeRateLimitDecision {
+    match retry_after {
+        None => ForgeRateLimitDecision::NotLimited,
+        Some(deadline) if now < deadline => ForgeRateLimitDecision::Backoff,
+        Some(_) => ForgeRateLimitDecision::Expired,
+    }
 }
 
 /// Pick the URL `publish_from_policy` should publish to: the explicit
