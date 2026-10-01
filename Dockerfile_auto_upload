@@ -46,8 +46,10 @@ RUN apt-get update --yes \
         ca-certificates \
         devscripts \
         dput \
+        gnupg \
         libssl3 \
         libzstd1 \
+        openssh-client \
         python3 \
  && apt-get clean
 
