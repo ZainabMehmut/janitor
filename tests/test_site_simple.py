@@ -194,3 +194,15 @@ async def test_candidates_with_multiple_unscored_does_not_500(
     client = await aiohttp_client(app)
     resp = await client.get("/lintian-fixes/candidates")
     assert resp.status == 200
+
+
+async def test_merge_proposal_without_url_returns_400(
+    aiohttp_client, database_location
+):
+    _private_app, app = await create_app(
+        config=create_config(database_location), redis=FakeRedis()
+    )
+    client = await aiohttp_client(app)
+    resp = await client.get("/lintian-fixes/merge-proposal")
+    assert resp.status == 400
+    assert await resp.text() == "no url specified"
