@@ -89,7 +89,10 @@ impl Run {
     }
 }
 
-async fn has_cotenants(
+/// Return whether `codebase` shares its VCS URL with another codebase
+/// (a "cotenant"). None when we can't tell (URL not found in the
+/// codebase table).
+pub async fn has_cotenants(
     conn: &PgPool,
     codebase: &str,
     url: &url::Url,
@@ -122,7 +125,9 @@ async fn has_cotenants(
     })
 }
 
-async fn iter_publishable_suites(
+/// All distinct suites that currently have publishable runs for
+/// `codebase`, per the `publish_ready` view.
+pub async fn iter_publishable_suites(
     conn: &PgPool,
     codebase: &str,
 ) -> Result<Vec<String>, sqlx::Error> {
