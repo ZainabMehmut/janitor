@@ -354,7 +354,7 @@ fn push_scheme_variants(candidates: &mut Vec<String>, url_str: &str) {
 pub(crate) async fn guess_codebase_from_branch_url(
     conn: &PgPool,
     url: &url::Url,
-    _possible_transports: Option<&mut Vec<Transport>>,
+    mut possible_transports: Option<&mut Vec<Transport>>,
 ) -> Result<Option<String>, sqlx::Error> {
     let GuessCodebaseQuery {
         url_trimmed,
@@ -386,11 +386,23 @@ pub(crate) async fn guess_codebase_from_branch_url(
         }
     };
 
+    // spawn_blocking needs a 'static closure, so the list is moved in and handed back.
+    let mut transports = possible_transports
+        .as_deref_mut()
+        .map(std::mem::take)
+        .unwrap_or_default();
     let source_branch = match tokio::task::spawn_blocking(move || {
-        silver_platter::vcs::open_branch(&branch_url, Some(&mut vec![]), None, None)
+        let result =
+            silver_platter::vcs::open_branch(&branch_url, Some(&mut transports), None, None);
+        (result, transports)
     })
     .await
-    {
+    .map(|(result, transports)| {
+        if let Some(out) = possible_transports {
+            *out = transports;
+        }
+        result
+    }) {
         Ok(branch_result) => match branch_result {
             Ok(branch) => branch,
             Err(e) => {
