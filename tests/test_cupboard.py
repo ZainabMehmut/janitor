@@ -17,6 +17,7 @@
 
 from datetime import datetime, timedelta
 
+import aiohttp_jinja2
 import pytest
 from aiohttp import web
 from jinja2 import Environment
@@ -25,6 +26,7 @@ from yarl import URL
 from janitor.config import read_string as read_config_string
 from janitor.runner import store_change_set, store_run
 from janitor.site import (
+    TEMPLATE_ENV,
     classify_result_code,
     format_duration,
     format_timestamp,
@@ -33,6 +35,7 @@ from janitor.site import (
 )
 from janitor.site.cupboard import create_app
 from janitor.site.cupboard.api import create_app as create_api_app
+from janitor.site.cupboard.publish import iter_publish_history
 
 
 @web.middleware
@@ -57,6 +60,9 @@ async def create_client(aiohttp_client, db):
         config=config, publisher_url=None, runner_url=None, differ_url=None, db=db
     )
     app["external_url"] = URL("http://example.com/")
+    # create_app leaves the jinja globals to its caller, and the production
+    # caller is py/janitor/site/simple.py.
+    aiohttp_jinja2.get_env(app).globals.update(TEMPLATE_ENV)
     app.middlewares.insert(0, dummy_user_middleware)
     return await aiohttp_client(app)
 
@@ -459,3 +465,39 @@ async def test_workers_delete_unknown(aiohttp_client, db):
     client = await create_api_client(aiohttp_client, db, user=ADMIN_USER)
     resp = await client.delete("/workers/nonexistent")
     assert resp.status == 404
+
+
+async def test_history_limit_zero_lists_no_runs(aiohttp_client, db):
+    client = await create_client(aiohttp_client, db)
+    async with db.acquire() as conn:
+        await _insert_codebase(conn, "foo")
+        now = datetime.utcnow()
+        await _insert_run(
+            conn,
+            run_id="somerun",
+            codebase="foo",
+            start_time=now - timedelta(minutes=30),
+            finish_time=now,
+        )
+
+    resp = await client.get("/cupboard/history")
+    assert resp.status == 200
+    assert "somerun" in await resp.text()
+
+    resp = await client.get("/cupboard/history?limit=0")
+    assert resp.status == 200
+    assert "somerun" not in await resp.text()
+
+
+async def test_publish_history_limit_zero_lists_nothing(con):
+    await con.execute("INSERT INTO codebase (name) VALUES ('foo')")
+    await store_change_set(con, "cs1", campaign="mycampaign")
+    await con.execute(
+        "INSERT INTO publish (id, change_set, target_branch_url, mode, "
+        "result_code, codebase) VALUES "
+        "('p1', 'cs1', 'https://example.com/foo.git', 'propose', 'success', 'foo'), "
+        "('p2', 'cs1', 'https://example.com/foo.git', 'propose', 'success', 'foo')"
+    )
+    assert len(await iter_publish_history(con)) == 2
+    assert len(await iter_publish_history(con, limit=1)) == 1
+    assert await iter_publish_history(con, limit=0) == []
