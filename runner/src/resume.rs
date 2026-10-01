@@ -390,7 +390,8 @@ pub fn open_resume_branch(
             return ResumeLookup::NotFound;
         }
         Err(BrzError::ForgeLoginRequired) => {
-            log::warn!("No credentials for forge");
+            crate::metrics::FORGE_LOGIN_REQUIRED_COUNT.inc();
+            log::error!("No credentials to list proposals on forge");
             return ResumeLookup::NotFound;
         }
         Err(e) => {
