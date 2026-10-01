@@ -162,8 +162,34 @@ test_with_database! {
     }
 }
 
-test_with_database! {
-    async fn test_loggerhead_browse_known_codebase_renders(test_db: TestDatabase) {
+// Loggerhead's internals call `tokio::task::block_in_place` on the
+// request path. That API panics on the single-threaded runtime our
+// `test_with_database!` macro expands into, so we drive these two
+// tests through a multi-threaded tokio runtime instead.
+#[test]
+#[serial_test::serial]
+fn test_loggerhead_browse_known_codebase_renders() {
+    if std::env::var("SKIP_DATABASE_TESTS").is_ok() {
+        eprintln!("SKIP_DATABASE_TESTS set, skipping");
+        return;
+    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let config = janitor::test_utils::TestDatabaseConfig {
+            run_migrations: true,
+            ..Default::default()
+        };
+        let test_db = match janitor::test_utils::TestDatabase::with_config(config).await {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("skipping: {}", e);
+                return;
+            }
+        };
+
         if !brz_available() {
             eprintln!("skipping: brz not on PATH");
             return;
@@ -220,11 +246,36 @@ test_with_database! {
         }
 
         handle.abort();
-    }
+    });
 }
 
-test_with_database! {
-    async fn test_loggerhead_changes_endpoint_reachable(test_db: TestDatabase) {
+// See the comment on `test_loggerhead_browse_known_codebase_renders`
+// for why this test uses a multi-threaded runtime rather than the
+// `test_with_database!` macro.
+#[test]
+#[serial_test::serial]
+fn test_loggerhead_changes_endpoint_reachable() {
+    if std::env::var("SKIP_DATABASE_TESTS").is_ok() {
+        eprintln!("SKIP_DATABASE_TESTS set, skipping");
+        return;
+    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let config = janitor::test_utils::TestDatabaseConfig {
+            run_migrations: true,
+            ..Default::default()
+        };
+        let test_db = match janitor::test_utils::TestDatabase::with_config(config).await {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("skipping: {}", e);
+                return;
+            }
+        };
+
         if !brz_available() {
             eprintln!("skipping: brz not on PATH");
             return;
@@ -264,5 +315,5 @@ test_with_database! {
         );
 
         handle.abort();
-    }
+    });
 }
