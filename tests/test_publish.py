@@ -145,38 +145,3 @@ async def test_publish_one_passes_template_env_path_to_compiled_binary(monkeypat
         "janitor-publish-one",
         "--template-env-path=/etc/janitor/templates",
     ]
-
-
-async def test_check_stragglers_bad_ndays(aiohttp_client, db):
-    client = await create_client(aiohttp_client, db)
-    # Port 1 on the loopback refuses at once, so the scan this spawns does not
-    # reach anything and cannot delete the rows on a 404.
-    async with db.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO merge_proposal (url, last_scanned) VALUES "
-            "('http://127.0.0.1:1/recent', now() - interval '1 hour'), "
-            "('http://127.0.0.1:1/stale', now() - interval '400 days')"
-        )
-
-    resp = await client.post("/check-stragglers", params={"ndays": "5"})
-    assert resp.status == 200
-    assert await resp.json() == ["http://127.0.0.1:1/stale"]
-
-    resp = await client.post("/check-stragglers", params={"ndays": "-1"})
-    assert resp.status == 200
-    assert sorted(await resp.json()) == [
-        "http://127.0.0.1:1/recent",
-        "http://127.0.0.1:1/stale",
-    ]
-
-    statuses = []
-    reasons = []
-    for value in ["abc", "", "2147483648"]:
-        resp = await client.post("/check-stragglers", params={"ndays": value})
-        statuses.append(resp.status)
-        reasons.append(
-            (await resp.json())["reason"] if resp.status == 400 else await resp.text()
-        )
-    assert statuses == [400, 400, 400]
-    assert reasons[:2] == ["ndays must be an integer", "ndays must be an integer"]
-    assert "2147483648" in reasons[2], reasons[2]

@@ -1872,16 +1872,10 @@ async def refresh_stragglers(request):
             for url in urls:
                 await check_straggler(proposal_info_manager, url)
 
-    try:
-        ndays = int(request.query.get("ndays", 5))
-    except ValueError:
-        return web.json_response({"reason": "ndays must be an integer"}, status=400)
+    ndays = int(request.query.get("ndays", 5))
     async with request.app["db"].acquire() as conn:
         proposal_info_manager = ProposalInfoManager(conn, request.app["redis"])
-        try:
-            urls = await proposal_info_manager.iter_outdated_proposal_info_urls(ndays)
-        except asyncpg.IntervalFieldOverflowError as e:
-            return web.json_response({"reason": str(e)}, status=400)
+        urls = await proposal_info_manager.iter_outdated_proposal_info_urls(ndays)
     await spawn(request, scan(request.app["db"], request.app["redis"], urls))
     return web.json_response(urls)
 
