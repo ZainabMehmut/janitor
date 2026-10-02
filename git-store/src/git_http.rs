@@ -589,6 +589,85 @@ fn strip_branch_segment(segment: &str) -> &str {
     segment
 }
 
+const GIT_BACKEND_TERM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const GIT_BACKEND_REAP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Scope guard: on drop, SIGTERM the http-backend process group,
+/// wait up to `GIT_BACKEND_TERM_TIMEOUT`, then SIGKILL and wait up
+/// to `GIT_BACKEND_REAP_TIMEOUT`. SIGTERM first lets git remove
+/// its own ref lockfiles.
+struct BackendReaper {
+    process: Option<tokio::process::Child>,
+}
+
+impl BackendReaper {
+    fn new(process: tokio::process::Child) -> Self {
+        Self {
+            process: Some(process),
+        }
+    }
+}
+
+impl Drop for BackendReaper {
+    fn drop(&mut self) {
+        let Some(mut process) = self.process.take() else {
+            return;
+        };
+        if let Ok(Some(_)) = process.try_wait() {
+            return;
+        }
+        let pid = process.id();
+        tokio::spawn(async move {
+            if let Some(raw_pid) = pid {
+                #[cfg(unix)]
+                {
+                    use nix::sys::signal::{killpg, Signal};
+                    use nix::unistd::Pid;
+                    let pgid = Pid::from_raw(raw_pid as i32);
+                    if let Err(e) = killpg(pgid, Signal::SIGTERM) {
+                        if !matches!(e, nix::errno::Errno::ESRCH) {
+                            warn!(
+                                "git http-backend: failed to SIGTERM process group {}: {}",
+                                raw_pid, e
+                            );
+                        }
+                    }
+                    if tokio::time::timeout(GIT_BACKEND_TERM_TIMEOUT, process.wait())
+                        .await
+                        .is_err()
+                    {
+                        if let Err(e) = killpg(pgid, Signal::SIGKILL) {
+                            if !matches!(e, nix::errno::Errno::ESRCH) {
+                                warn!(
+                                    "git http-backend: failed to SIGKILL process group {}: {}",
+                                    raw_pid, e
+                                );
+                            }
+                        }
+                        if tokio::time::timeout(GIT_BACKEND_REAP_TIMEOUT, process.wait())
+                            .await
+                            .is_err()
+                        {
+                            warn!(
+                                "git http-backend session {} still alive {}s after SIGKILL",
+                                raw_pid,
+                                GIT_BACKEND_REAP_TIMEOUT.as_secs()
+                            );
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = process.start_kill();
+                    let _ = tokio::time::timeout(GIT_BACKEND_REAP_TIMEOUT, process.wait()).await;
+                }
+            } else if let Err(e) = process.wait().await {
+                warn!("git http-backend wait failed: {}", e);
+            }
+        });
+    }
+}
+
 /// Delegate smart-protocol requests to `git http-backend`.
 pub async fn git_backend(
     State(state): State<crate::web::AppState>,
@@ -699,24 +778,43 @@ pub async fn git_backend(
         cmd.env(key, value);
     }
 
-    // Deliberately no `kill_on_drop`: SIGKILL races git's last writes
-    // and truncates the response for dulwich/breezy clients. The
-    // process is moved into a reaper task below.
+    // No `kill_on_drop`: SIGKILL races git's last writes and
+    // truncates the response for dulwich/breezy clients. Reaped via
+    // the scope guard below instead.
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Own session/group so grandchildren that inherit the
+    // stdout/stderr pipes are reachable via killpg.
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     let mut process = cmd
         .spawn()
         .map_err(|e| GitStoreError::Other(anyhow::anyhow!("failed to spawn git: {}", e)))?;
 
     // Feed the request body to git's stdin, closing it on EOF.
+    // Client disconnects mid-upload are debug-logged: git sees EOF
+    // on stdin and exits, and the response path short-circuits.
     if let Some(mut stdin) = process.stdin.take() {
         let body_stream = body.into_data_stream();
         tokio::spawn(async move {
             let mut stdin_writer = StreamReader::new(body_stream.map_err(std::io::Error::other));
-            if let Err(e) = tokio::io::copy(&mut stdin_writer, &mut stdin).await {
-                warn!("Error writing to git process stdin: {}", e);
+            match tokio::io::copy(&mut stdin_writer, &mut stdin).await {
+                Ok(_) => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::BrokenPipe
+                            | std::io::ErrorKind::UnexpectedEof
+                    ) =>
+                {
+                    debug!("client disconnected while uploading request body: {}", e);
+                }
+                Err(e) => {
+                    warn!("Error writing to git process stdin: {}", e);
+                }
             }
         });
     }
@@ -735,14 +833,7 @@ pub async fn git_backend(
         .take()
         .ok_or_else(|| GitStoreError::Other(anyhow::anyhow!("no stdout on git process")))?;
 
-    // Reap the child so it isn't dropped while we're still reading
-    // its stdout.
-    tokio::spawn(async move {
-        if let Err(e) = process.wait().await {
-            warn!("git http-backend wait failed: {}", e);
-        }
-    });
-
+    let _reaper = BackendReaper::new(process);
     let mut reader = tokio::io::BufReader::new(stdout);
 
     let mut response_headers = HeaderMap::new();
