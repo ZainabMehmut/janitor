@@ -2498,10 +2498,7 @@ async def handle_queue(request):
                         "command": entry.command,
                     }
                 )
-        except (
-            asyncpg.InvalidRowCountInLimitClauseError,
-            asyncpg.NumericValueOutOfRangeError,
-        ) as e:
+        except asyncpg.DataError as e:
             return web.json_response({"reason": str(e)}, status=400)
     return web.json_response(response_obj)
 
