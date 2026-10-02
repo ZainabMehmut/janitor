@@ -16,8 +16,10 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 from datetime import datetime, timedelta
+from typing import cast
 
 import pytest
+from breezy.forge import Forge
 
 import janitor.publish as publish
 from janitor.config import read_string as read_config_string
@@ -189,7 +191,7 @@ def _one_proposal(monkeypatch, forge, mp):
 async def test_check_existing_skips_a_forge_still_inside_its_backoff(
     con, monkeypatch
 ) -> None:
-    forge = _StubForge()
+    forge = cast(Forge, _StubForge())
     mp = _StubMergeProposal()
     _one_proposal(monkeypatch, forge, mp)
 
@@ -212,7 +214,7 @@ async def test_check_existing_skips_a_forge_still_inside_its_backoff(
 async def test_check_existing_drops_a_forge_backoff_that_has_expired(
     con, monkeypatch
 ) -> None:
-    forge = _StubForge()
+    forge = cast(Forge, _StubForge())
     mp = _StubMergeProposal()
     _one_proposal(monkeypatch, forge, mp)
 
