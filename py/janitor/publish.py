@@ -75,7 +75,7 @@ from silver_platter import (
     _open_branch as open_branch,
 )
 
-from . import set_user_agent, state
+from . import set_user_agent, state, utcnow
 from ._launchpad import override_launchpad_consumer_name
 from ._publish import (
     BucketRateLimited,
@@ -457,14 +457,14 @@ async def consider_publish_run(
         conn, run.revision, {"differ-unreachable"}
     )
     next_try_time = calculate_next_try_time(run.finish_time, attempt_count)
-    if datetime.utcnow() < next_try_time:
+    if utcnow() < next_try_time:
         logger.info(
             "Not attempting to push %s / %s (%s) due to "
             "exponential backoff. Next try in %s.",
             run.codebase,
             run.campaign,
             run.id,
-            next_try_time - datetime.utcnow(),
+            next_try_time - utcnow(),
             extra={"run_id": run.id},
         )
         exponential_backoff_count.inc()
@@ -990,7 +990,7 @@ async def publish_from_policy(
                 )
                 if (
                     last_published is not None
-                    and (datetime.utcnow() - last_published).days < max_frequency_days
+                    and (utcnow() - last_published).days < max_frequency_days
                 ):
                     logger.debug(
                         "Not creating proposal for %s/%s: "
@@ -1110,7 +1110,7 @@ async def publish_from_policy(
         pass
 
     if code == "success":
-        publish_delay = datetime.utcnow() - run.finish_time
+        publish_delay = utcnow() - run.finish_time
         publish_latency.observe(publish_delay.total_seconds())
     else:
         publish_delay = None
@@ -1290,7 +1290,7 @@ async def publish_and_store(
             run_id=run.id,
         )
 
-        publish_delay = datetime.utcnow() - run.finish_time
+        publish_delay = utcnow() - run.finish_time
         publish_latency.observe(publish_delay.total_seconds())
 
         publish_entry = {
@@ -2091,7 +2091,7 @@ WHERE run.id = $1
 
     next_try_time = calculate_next_try_time(run["finish_time"], attempt_count)
     ret["backoff"] = {
-        "result": datetime.utcnow() >= next_try_time,
+        "result": utcnow() >= next_try_time,
         "details": {
             "attempt_count": attempt_count,
             "next_try_time": next_try_time.isoformat(),
@@ -2146,7 +2146,7 @@ async def process_queue_loop(
     require_binary_diff: bool = False,
 ):
     while True:
-        cycle_start = datetime.utcnow()
+        cycle_start = utcnow()
         async with db.acquire() as conn:
             await check_existing(
                 conn=conn,
@@ -2170,7 +2170,7 @@ async def process_queue_loop(
                 push_limit=push_limit,
                 require_binary_diff=require_binary_diff,
             )
-        cycle_duration = datetime.utcnow() - cycle_start
+        cycle_duration = utcnow() - cycle_start
         to_wait = max(0, interval - cycle_duration.total_seconds())
         logger.info("Waiting %d seconds for next cycle.", to_wait)
         if to_wait > 0:
@@ -2815,7 +2815,7 @@ applied independently.
             return True
 
     if last_run.result_code != "success":
-        last_run_age = datetime.utcnow() - last_run.finish_time
+        last_run_age = utcnow() - last_run.finish_time
         if last_run.failure_transient:
             logger.info(
                 "%s: Last run failed with transient error (%s). Rescheduling.",
@@ -3262,7 +3262,7 @@ async def check_existing(
     for forge, mp, status in iter_all_mps():
         status_count[status] += 1
         if forge in forge_rate_limiter:
-            if datetime.utcnow() < forge_rate_limiter[forge]:
+            if utcnow() < forge_rate_limiter[forge]:
                 del forge_rate_limiter[forge]
             else:
                 forge_rate_limited_count.labels(forge=str(forge)).inc()
@@ -3296,7 +3296,7 @@ async def check_existing(
                 retry_after = timedelta(minutes=30)
             else:
                 retry_after = timedelta(seconds=e.retry_after)
-            forge_rate_limiter[forge] = datetime.utcnow() + retry_after
+            forge_rate_limiter[forge] = utcnow() + retry_after
             continue
         except UnexpectedHttpStatus as e:
             logger.warning(

@@ -42,7 +42,7 @@ from aiohttp_openmetrics import Gauge, setup_metrics
 from aiojobs import Job, Scheduler
 from debian.deb822 import Packages, Release, Sources
 
-from .. import state
+from .. import state, utcnow
 from ..artifacts import ArtifactsMissing, get_artifact_manager
 from ..config import AptRepository as AptRepositoryConfig
 from ..config import get_campaign_config, get_distribution, read_config
@@ -404,7 +404,7 @@ async def write_suite_files(
     }
 
     if timestamp is None:
-        timestamp = datetime.utcnow()
+        timestamp = utcnow()
     stamp = mktime(timestamp.timetuple())
 
     r = Release()
@@ -850,7 +850,7 @@ async def publish_repository(
     apt_repository_config,
     gpg_context: Optional["gpg.Context"],
 ) -> None:
-    start_time = datetime.utcnow()
+    start_time = utcnow()
     logger.info("Publishing %s", apt_repository_config.name)
     distribution = get_distribution(config, apt_repository_config.base)
     assert distribution
@@ -880,10 +880,10 @@ async def publish_repository(
     logger.info(
         "Done publishing %s (took %s)",
         apt_repository_config.name,
-        datetime.utcnow() - start_time,
+        utcnow() - start_time,
     )
     last_publish_success.labels(suite=apt_repository_config.name).set_to_current_time()
-    last_publish_time[apt_repository_config.name] = datetime.utcnow()
+    last_publish_time[apt_repository_config.name] = utcnow()
 
 
 class GeneratorManager:
