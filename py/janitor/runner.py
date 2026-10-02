@@ -2479,30 +2479,22 @@ async def handle_peek(request):
 async def handle_queue(request):
     response_obj = []
     queue_processor = request.app["queue_processor"]
-    limit = None
     if "limit" in request.query:
-        try:
-            limit = int(request.query["limit"])
-        except ValueError:
-            return web.json_response({"reason": "limit must be an integer"}, status=400)
+        limit = int(request.query["limit"])
+    else:
+        limit = None
     async with queue_processor.database.acquire() as conn:
         queue = Queue(conn)
-        try:
-            async for entry in queue.iter_queue(limit=limit):
-                response_obj.append(
-                    {
-                        "queue_id": entry.id,
-                        "codebase": entry.codebase,
-                        "campaign": entry.campaign,
-                        "context": entry.context,
-                        "command": entry.command,
-                    }
-                )
-        except (
-            asyncpg.InvalidRowCountInLimitClauseError,
-            asyncpg.NumericValueOutOfRangeError,
-        ) as e:
-            return web.json_response({"reason": str(e)}, status=400)
+        async for entry in queue.iter_queue(limit=limit):
+            response_obj.append(
+                {
+                    "queue_id": entry.id,
+                    "codebase": entry.codebase,
+                    "campaign": entry.campaign,
+                    "context": entry.context,
+                    "command": entry.command,
+                }
+            )
     return web.json_response(response_obj)
 
 
