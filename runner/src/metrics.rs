@@ -3,8 +3,8 @@
 use lazy_static::lazy_static;
 use prometheus::{
     register_counter_vec, register_gauge, register_gauge_vec, register_histogram_vec,
-    register_int_counter_vec, register_int_gauge_vec, CounterVec, Gauge, GaugeVec, HistogramVec,
-    IntCounterVec, IntGaugeVec, TextEncoder,
+    register_int_counter, register_int_counter_vec, register_int_gauge_vec, CounterVec, Gauge,
+    GaugeVec, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec, TextEncoder,
 };
 
 lazy_static! {
@@ -185,6 +185,12 @@ lazy_static! {
         "System information",
         &["version", "build_time", "rust_version"]
     ).unwrap();
+
+    /// Resume-branch lookups that failed because the forge needed credentials.
+    pub static ref FORGE_LOGIN_REQUIRED_COUNT: IntCounter = register_int_counter!(
+        "forge_login_required",
+        "Number of times a resume-branch lookup failed for lack of forge credentials"
+    ).unwrap();
 }
 
 /// Metrics collection helper functions
@@ -327,4 +333,16 @@ pub async fn metrics_middleware(
     MetricsCollector::record_http_request(&method, &path, status, duration);
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FORGE_LOGIN_REQUIRED_COUNT;
+
+    #[test]
+    fn forge_login_required_counter_increments() {
+        let before = FORGE_LOGIN_REQUIRED_COUNT.get();
+        FORGE_LOGIN_REQUIRED_COUNT.inc();
+        assert_eq!(FORGE_LOGIN_REQUIRED_COUNT.get(), before + 1);
+    }
 }
