@@ -3445,9 +3445,15 @@ async fn assign_work_internal(
             assignment.queue_item.codebase
         );
     }
+    // The worker requires a VCS type; fall back to git when the codebase has none.
+    let vcs_type = assignment
+        .vcs_info
+        .vcs_type
+        .clone()
+        .unwrap_or_else(|| crate::vcs::VcsType::Git.to_string());
     let (cached_url, target_repo_url) = worker_vcs_urls(
         &state.public_vcs_managers,
-        assignment.vcs_info.vcs_type.as_deref(),
+        Some(vcs_type.as_str()),
         &assignment.queue_item.codebase,
         cache_branch.as_deref(),
     );
@@ -3483,7 +3489,7 @@ async fn assign_work_internal(
 
     let branch = json!({
         "cached_url": cached_url,
-        "vcs_type": assignment.vcs_info.vcs_type,
+        "vcs_type": vcs_type,
         "url": vcs_info.branch_url,
         "subpath": assignment.vcs_info.subpath.clone().unwrap_or_default(),
         "additional_colocated_branches": additional_colocated_branches,
@@ -3492,7 +3498,7 @@ async fn assign_work_internal(
 
     let target_repository = json!({
         "url": target_repo_url,
-        "vcs_type": assignment.vcs_info.vcs_type,
+        "vcs_type": vcs_type,
     });
 
     // Environment merged from config committer + command prefix
