@@ -16,7 +16,7 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from typing import cast
 
 import aiozipkin
@@ -318,7 +318,7 @@ async def _insert_failed_publish(conn):
 
 
 def _an_hour_ago():
-    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+    return utcnow() - timedelta(hours=1)
 
 
 async def test_blockers_backoff_no_attempts(aiohttp_client, db):
