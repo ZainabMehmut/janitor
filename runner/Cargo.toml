@@ -63,6 +63,7 @@ default = ["debian", "cli"]
 debian = ["janitor/debian", "dep:debversion", "dep:debian-control"]
 cli = ["dep:clap"]
 gcs = ["dep:google-cloud-storage", "dep:google-cloud-auth", "janitor/gcs"]
+gcp = ["gcs", "janitor/gcp"]
 # Enables ephemeral test infrastructure (test_utils, testcontainers-based Redis).
 # Turned on automatically for tests via the dev-dep on `janitor-runner` above.
 testing = ["dep:testcontainers", "dep:testcontainers-modules"]
