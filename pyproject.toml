@@ -252,6 +252,8 @@ select = [
     "I",
     "B",
     "UP",
+    "DTZ003",
+    "DTZ004",
 ]
 ignore = [
     "ANN001",

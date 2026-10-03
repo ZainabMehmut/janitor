@@ -15,7 +15,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import aiohttp_jinja2
 import pytest
@@ -23,6 +23,7 @@ from aiohttp import web
 from jinja2 import Environment
 from yarl import URL
 
+from janitor import utcnow
 from janitor.config import read_string as read_config_string
 from janitor.runner import store_change_set, store_run
 from janitor.site import (
@@ -97,8 +98,8 @@ campaign {
     template.render(
         worker_link_is_global=worker_link_is_global,
         run={
-            "start_time": datetime.utcnow(),
-            "finish_time": datetime.utcnow(),
+            "start_time": utcnow(),
+            "finish_time": utcnow(),
         },
         success_probability=0.2,
         classify_result_code=classify_result_code,
@@ -237,7 +238,7 @@ async def test_codebase_redirect_to_latest_run(aiohttp_client, db):
     client = await create_client(aiohttp_client, db)
     async with db.acquire() as conn:
         await _insert_codebase(conn, "foo")
-        now = datetime.utcnow()
+        now = utcnow()
         await _insert_run(
             conn,
             run_id="older",
@@ -264,7 +265,7 @@ async def test_codebase_redirect_prefers_finished_run(aiohttp_client, db):
     client = await create_client(aiohttp_client, db)
     async with db.acquire() as conn:
         await _insert_codebase(conn, "foo")
-        now = datetime.utcnow()
+        now = utcnow()
         await _insert_run(
             conn,
             run_id="done",
@@ -304,7 +305,7 @@ async def test_run_redirect(aiohttp_client, db):
     client = await create_client(aiohttp_client, db)
     async with db.acquire() as conn:
         await _insert_codebase(conn, "foo")
-        now = datetime.utcnow()
+        now = utcnow()
         await _insert_run(
             conn,
             run_id="somerun",
@@ -374,7 +375,7 @@ async def test_workers_list_counts_runs(aiohttp_client, db):
             "INSERT INTO worker (name, password) VALUES ($1, 'x')", "alice"
         )
         await _insert_codebase(conn, "foo")
-        now = datetime.utcnow()
+        now = utcnow()
         await _insert_run(
             conn,
             run_id="r1",
@@ -471,7 +472,7 @@ async def test_history_limit_zero_lists_no_runs(aiohttp_client, db):
     client = await create_client(aiohttp_client, db)
     async with db.acquire() as conn:
         await _insert_codebase(conn, "foo")
-        now = datetime.utcnow()
+        now = utcnow()
         await _insert_run(
             conn,
             run_id="somerun",
