@@ -15,11 +15,12 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 
 import janitor.publish as publish
+from janitor import utcnow
 from janitor.config import read_string as read_config_string
 from janitor.publish import create_app
 from janitor.runner import store_change_set, store_run
@@ -174,7 +175,7 @@ async def _insert_bucket_only_policy(conn):
 
 async def _insert_run(conn, *, run_id, codebase, campaign, result_branches):
     await store_change_set(conn, run_id, campaign=campaign)
-    now = datetime.utcnow()
+    now = utcnow()
     await store_run(
         conn,
         run_id=run_id,
