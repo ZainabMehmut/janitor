@@ -415,6 +415,7 @@ impl Watchdog {
                                     other.start_time,
                                 );
                                 self.active_runs.remove(&run.log_id).await;
+                                self.release_claim(run).await;
                                 Ok(None)
                             }
                             Some(other) => {
@@ -517,6 +518,22 @@ impl Watchdog {
         }
     }
 
+    /// Release the queue item claim held by `run`, if it still owns it.
+    async fn release_claim(&self, run: &ActiveRun) {
+        if let Err(e) = self
+            .database
+            .release_queue_item_claim(run.queue_id, &run.log_id)
+            .await
+        {
+            log::warn!(
+                "Failed to release claim on queue item {} for run {}: {}",
+                run.queue_id,
+                run.log_id,
+                e
+            );
+        }
+    }
+
     /// Terminate a run and clean up its state.
     async fn terminate_run(
         &mut self,
@@ -582,6 +599,7 @@ impl Watchdog {
             &run.worker_name,
             self.active_runs.count_for_worker(&run.worker_name).await as i64,
         );
+        self.release_claim(run).await;
 
         // Clean up health failure tracking
         self.health_failures.remove(&run.log_id);
@@ -613,6 +631,7 @@ impl Watchdog {
                     run.worker_name,
                     run.start_time
                 );
+                self.release_claim(&run).await;
             }
         }
 
