@@ -17,7 +17,7 @@
 
 import asyncio
 import inspect
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import cast
 
 import pytest
@@ -300,7 +300,7 @@ async def _insert_bucket_only_policy(conn):
 
 async def _insert_run(conn, *, run_id, codebase, campaign, result_branches):
     await store_change_set(conn, run_id, campaign=campaign)
-    now = datetime.utcnow()
+    now = utcnow()
     await store_run(
         conn,
         run_id=run_id,
