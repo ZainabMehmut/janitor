@@ -16,12 +16,13 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 
 import aiozipkin
 import pytest
 
 import janitor.publish as publish
+from janitor import utcnow
 from janitor.config import read_string as read_config_string
 from janitor.publish import create_app
 from janitor.runner import store_change_set, store_run
@@ -204,7 +205,7 @@ async def _insert_failed_publish(conn):
 
 
 def _an_hour_ago():
-    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+    return utcnow() - timedelta(hours=1)
 
 
 async def test_blockers_backoff_no_attempts(aiohttp_client, db):
