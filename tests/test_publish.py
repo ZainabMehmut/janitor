@@ -15,13 +15,14 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import cast
 
 import pytest
 from breezy.forge import Forge
 
 import janitor.publish as publish
+from janitor import utcnow
 from janitor.config import read_string as read_config_string
 from janitor.publish import create_app
 
@@ -195,7 +196,7 @@ async def test_check_existing_skips_a_forge_still_inside_its_backoff(
     mp = _StubMergeProposal()
     _one_proposal(monkeypatch, forge, mp)
 
-    forge_rate_limiter = {forge: datetime.utcnow() + timedelta(minutes=30)}
+    forge_rate_limiter = {forge: utcnow() + timedelta(minutes=30)}
 
     await publish.check_existing(
         conn=con,
@@ -218,7 +219,7 @@ async def test_check_existing_drops_a_forge_backoff_that_has_expired(
     mp = _StubMergeProposal()
     _one_proposal(monkeypatch, forge, mp)
 
-    forge_rate_limiter = {forge: datetime.utcnow() - timedelta(minutes=30)}
+    forge_rate_limiter = {forge: utcnow() - timedelta(minutes=30)}
 
     await publish.check_existing(
         conn=con,
