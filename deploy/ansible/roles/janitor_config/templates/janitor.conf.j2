@@ -22,7 +22,7 @@ campaign {
   command: "lintian-brush"
   branch_name: "lintian-fixes"
   debian_build {
-    build_distribution: "lintian-fixes"
+    build_distribution: "{{ janitor_lintian_fixes_build_distribution }}"
     build_suffix: "jan+lint"
     base_distribution: "unstable"
     build_command: "sbuild -Asv --no-clean-source"

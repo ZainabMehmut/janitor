@@ -41,6 +41,9 @@ janitor_home: "/home/{{ ansible_user }}/janitor"
 janitor_domain: CHANGEME        # CHANGEME per instance, e.g. janitor.example.com
 janitor_github_org: CHANGEME    # CHANGEME per instance - GitHub org/user the bot pushes/opens PRs as
 
+# The lintian-fixes campaign's build distribution, also in the worker's sbuild chroot name.
+janitor_lintian_fixes_build_distribution: lintian-fixes
+
 postgres_max_connections: 300   # default 100 is too tight for several services opening pools concurrently on cold boot
 
 # Optional roles (roles/gitea, roles/auto_upload_target) - both disabled

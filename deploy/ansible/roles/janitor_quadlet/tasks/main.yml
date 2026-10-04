@@ -168,6 +168,18 @@
     -xf /root/.cache/sbuild/{{ janitor_sbuild_chroot }}.tar.xz"
   when: "'worker' in janitor_services and chroot_tarball_check.rc != 0"
 
+- name: Link the chroot tarball under each campaign build distribution's name
+  # In unshare mode sbuild finds a chroot by its file name in ~/.cache/sbuild.
+  file:
+    src: "{{ janitor_sbuild_chroot }}.tar.xz"
+    dest: "{{ janitor_home }}/data/sbuild/{{ item }}.tar.xz"
+    state: link
+    follow: false
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+  loop: "{{ janitor_sbuild_chroot_aliases }}"
+  when: "'worker' in janitor_services"
+
 - name: Register the schroot chroot (type=directory, not type=file - see mknod note above)
   # /etc/schroot/chroot.d is a bind mount of the host directory created above,
   # so this is written straight onto the host with copy rather than catted
@@ -217,6 +229,30 @@
   when:
     - "'worker' in janitor_services"
     - sbuild_fstab_sys.rc == 0
+
+- name: Check whether sbuild already keeps the chroot tarball however old it is
+  become: true
+  become_user: "{{ ansible_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
+  command: podman exec janitor-worker grep -q '^\$unshare_mmdebstrap_max_age' /etc/sbuild/sbuild.conf
+  register: sbuild_max_age
+  changed_when: false
+  failed_when: false
+  when: "'worker' in janitor_services"
+
+- name: Stop sbuild ignoring the chroot tarball once it is a week old
+  # sbuild.conf is in the container's writable layer, so a recreated container needs this again.
+  become: true
+  become_user: "{{ ansible_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[ansible_user][1] }}"
+  command: >
+    podman exec janitor-worker sh -c
+    "echo '$unshare_mmdebstrap_max_age = -1;' >> /etc/sbuild/sbuild.conf"
+  when:
+    - "'worker' in janitor_services"
+    - sbuild_max_age.rc != 0
 
 - name: Check whether the sbuild scratch build directory exists
   become: true

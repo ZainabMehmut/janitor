@@ -5,3 +5,7 @@
 # ognibuild opens a schroot session by it, and sbuild, which the image runs
 # in unshare mode, resolves it to a tarball under ~/.cache/sbuild.
 janitor_sbuild_chroot: unstable-amd64-sbuild
+
+# One <build_distribution>-amd64-sbuild per campaign; sbuild looks it up by name.
+janitor_sbuild_chroot_aliases:
+  - "{{ janitor_lintian_fixes_build_distribution }}-amd64-sbuild"
