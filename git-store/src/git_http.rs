@@ -592,79 +592,82 @@ fn strip_branch_segment(segment: &str) -> &str {
 const GIT_BACKEND_TERM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const GIT_BACKEND_REAP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Signal the whole process group. A missing group (ESRCH) is treated
+/// as success: it just means the backend already exited. Any other
+/// errno is logged and swallowed -- we never want to panic trying to
+/// clean up a child.
+#[cfg(unix)]
+fn signal_backend_group(raw_pid: u32, signal: nix::sys::signal::Signal) {
+    use nix::sys::signal::killpg;
+    use nix::unistd::Pid;
+    match killpg(Pid::from_raw(raw_pid as i32), signal) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+        Err(e) => warn!(
+            "git http-backend: failed to {} process group {}: {}",
+            signal, raw_pid, e
+        ),
+    }
+}
+
+/// Wait up to `limit` for the backend to exit. Returns `true` if it
+/// did.
+async fn wait_backend(process: &mut tokio::process::Child, limit: std::time::Duration) -> bool {
+    tokio::time::timeout(limit, process.wait()).await.is_ok()
+}
+
 /// Scope guard: on drop, SIGTERM the http-backend process group,
 /// wait up to `GIT_BACKEND_TERM_TIMEOUT`, then SIGKILL and wait up
 /// to `GIT_BACKEND_REAP_TIMEOUT`. SIGTERM first lets git remove
 /// its own ref lockfiles.
-struct BackendReaper {
-    process: Option<tokio::process::Child>,
-}
+struct BackendReaper(Option<tokio::process::Child>);
 
 impl BackendReaper {
     fn new(process: tokio::process::Child) -> Self {
-        Self {
-            process: Some(process),
-        }
+        Self(Some(process))
     }
 }
 
 impl Drop for BackendReaper {
     fn drop(&mut self) {
-        let Some(mut process) = self.process.take() else {
+        let Some(mut process) = self.0.take() else {
             return;
         };
-        if let Ok(Some(_)) = process.try_wait() {
+        if matches!(process.try_wait(), Ok(Some(_))) {
             return;
         }
-        let pid = process.id();
-        tokio::spawn(async move {
-            if let Some(raw_pid) = pid {
-                #[cfg(unix)]
-                {
-                    use nix::sys::signal::{killpg, Signal};
-                    use nix::unistd::Pid;
-                    let pgid = Pid::from_raw(raw_pid as i32);
-                    if let Err(e) = killpg(pgid, Signal::SIGTERM) {
-                        if !matches!(e, nix::errno::Errno::ESRCH) {
-                            warn!(
-                                "git http-backend: failed to SIGTERM process group {}: {}",
-                                raw_pid, e
-                            );
-                        }
-                    }
-                    if tokio::time::timeout(GIT_BACKEND_TERM_TIMEOUT, process.wait())
-                        .await
-                        .is_err()
-                    {
-                        if let Err(e) = killpg(pgid, Signal::SIGKILL) {
-                            if !matches!(e, nix::errno::Errno::ESRCH) {
-                                warn!(
-                                    "git http-backend: failed to SIGKILL process group {}: {}",
-                                    raw_pid, e
-                                );
-                            }
-                        }
-                        if tokio::time::timeout(GIT_BACKEND_REAP_TIMEOUT, process.wait())
-                            .await
-                            .is_err()
-                        {
-                            warn!(
-                                "git http-backend session {} still alive {}s after SIGKILL",
-                                raw_pid,
-                                GIT_BACKEND_REAP_TIMEOUT.as_secs()
-                            );
-                        }
-                    }
-                }
-                #[cfg(not(unix))]
-                {
-                    let _ = process.start_kill();
-                    let _ = tokio::time::timeout(GIT_BACKEND_REAP_TIMEOUT, process.wait()).await;
-                }
-            } else if let Err(e) = process.wait().await {
-                warn!("git http-backend wait failed: {}", e);
-            }
-        });
+        tokio::spawn(async move { reap_backend(&mut process).await });
+    }
+}
+
+async fn reap_backend(process: &mut tokio::process::Child) {
+    let Some(raw_pid) = process.id() else {
+        // Already reaped by someone else; just surface any error.
+        if let Err(e) = process.wait().await {
+            warn!("git http-backend wait failed: {}", e);
+        }
+        return;
+    };
+
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::Signal;
+        signal_backend_group(raw_pid, Signal::SIGTERM);
+        if wait_backend(process, GIT_BACKEND_TERM_TIMEOUT).await {
+            return;
+        }
+        signal_backend_group(raw_pid, Signal::SIGKILL);
+        if !wait_backend(process, GIT_BACKEND_REAP_TIMEOUT).await {
+            warn!(
+                "git http-backend session {} still alive {}s after SIGKILL",
+                raw_pid,
+                GIT_BACKEND_REAP_TIMEOUT.as_secs()
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = process.start_kill();
+        let _ = wait_backend(process, GIT_BACKEND_REAP_TIMEOUT).await;
     }
 }
 
