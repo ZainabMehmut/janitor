@@ -307,11 +307,12 @@ def main(argv=None):
 
     import breezy.bzr  # noqa: F401
     import breezy.git  # noqa: F401
-
-    from janitor.vcs import (  # type: ignore
+    from silver_platter import (
         BranchMissing,
         BranchUnavailable,
-        open_branch,
+    )
+    from silver_platter import (
+        _open_branch as open_branch,
     )
 
     parser = argparse.ArgumentParser(
@@ -320,13 +321,15 @@ def main(argv=None):
     )
     parser.add_argument("--runner-url", type=str)
     parser.add_argument("callback_url", type=str)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     logging.basicConfig(format="%(message)s")
 
     codebases = asyncio.run(get_codebases(args.runner_url))
 
     for codebase in codebases:
+        if not codebase["branch_url"]:
+            continue
         try:
             b = open_branch(codebase["branch_url"])
         except (BranchUnavailable, BranchMissing):
