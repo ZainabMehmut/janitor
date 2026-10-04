@@ -24,5 +24,9 @@ codebase through building the result.
 * *runner*: The permanently running job that processes the queue and
 hands work to workers.
 
+* *target*: The kind of build a campaign has, `debian` or `generic`, set by
+whichever of `debian_build` or `generic_build` it has. It decides how the
+worker builds the result.
+
 * *worker*: A job that generates and builds a change. Unlike the
 runner, it doesn't have to be permanently running.
