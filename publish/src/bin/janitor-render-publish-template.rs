@@ -121,3 +121,30 @@ async fn main() -> std::process::ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_templates_dir_defaults_beside_the_executable() {
+        use std::path::{Path, PathBuf};
+        assert_eq!(
+            templates_dir(
+                None,
+                Path::new("/opt/janitor/bin/janitor-render-publish-template")
+            ),
+            PathBuf::from("/opt/janitor/bin/proposal-templates")
+        );
+    }
+
+    #[test]
+    fn test_normalise_external_url_drops_a_trailing_slash() {
+        let url = Url::parse("https://janitor.example.com/").unwrap();
+        assert_eq!(
+            normalise_external_url(Some(&url)),
+            Some("https://janitor.example.com".to_string())
+        );
+        assert_eq!(normalise_external_url(None), None);
+    }
+}
