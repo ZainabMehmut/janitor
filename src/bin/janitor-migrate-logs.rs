@@ -345,3 +345,447 @@ async fn main() -> ExitCode {
         ExitCode::SUCCESS
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use janitor::logs::FileSystemLogFileManager;
+    use std::io::Read;
+    use tempfile::TempDir;
+
+    const CODEBASE: &str = "codebase";
+    const RUN_ID: &str = "run-1";
+
+    fn setup() -> (TempDir, FileSystemLogFileManager) {
+        let td = TempDir::new().unwrap();
+        let mgr = FileSystemLogFileManager::new(td.path()).unwrap();
+        (td, mgr)
+    }
+
+    fn write_log(td: &TempDir, name: &str, content: &str) {
+        let dir = td.path().join(CODEBASE).join(RUN_ID);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), content).unwrap();
+    }
+
+    async fn read_log(mgr: &dyn LogFileManager, name: &str) -> String {
+        let mut content = String::new();
+        mgr.get_log(CODEBASE, RUN_ID, name)
+            .await
+            .unwrap()
+            .read_to_string(&mut content)
+            .unwrap();
+        content
+    }
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn test_move() {
+        let (from_td, from) = setup();
+        let (_to_td, to) = setup();
+        write_log(&from_td, "worker.log", "worker\n");
+        write_log(&from_td, "build.log", "build\n");
+
+        let todo = names(&["worker.log", "build.log"]);
+        let moved = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, Options::default())
+            .await
+            .unwrap();
+
+        assert_eq!(moved.moved, todo);
+        assert!(moved.skipped.is_empty());
+        assert_eq!(read_log(&to, "worker.log").await, "worker\n");
+        assert_eq!(read_log(&to, "build.log").await, "build\n");
+        assert!(!from.has_log(CODEBASE, RUN_ID, "worker.log").await.unwrap());
+        assert!(!from.has_log(CODEBASE, RUN_ID, "build.log").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_keep() {
+        let (from_td, from) = setup();
+        let (_to_td, to) = setup();
+        write_log(&from_td, "worker.log", "worker\n");
+
+        let options = Options {
+            keep: true,
+            ..Default::default()
+        };
+        let todo = names(&["worker.log"]);
+        let moved = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, options)
+            .await
+            .unwrap();
+
+        assert_eq!(moved.moved, todo);
+        assert!(moved.skipped.is_empty());
+        assert_eq!(read_log(&to, "worker.log").await, "worker\n");
+        assert_eq!(read_log(&from, "worker.log").await, "worker\n");
+    }
+
+    #[tokio::test]
+    async fn test_dry_run() {
+        let (from_td, from) = setup();
+        let (to_td, to) = setup();
+        write_log(&from_td, "worker.log", "worker\n");
+
+        let options = Options {
+            dry_run: true,
+            ..Default::default()
+        };
+        let todo = names(&["worker.log", "build.log"]);
+        let moved = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, options)
+            .await
+            .unwrap();
+
+        assert_eq!(moved.moved, names(&["worker.log"]));
+        assert_eq!(read_log(&from, "worker.log").await, "worker\n");
+        assert_eq!(std::fs::read_dir(to_td.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_discover() {
+        let (td, mgr) = setup();
+        for name in ["worker.log", "build.log", "build.log.1", "build.log.2"] {
+            write_log(&td, name, "content\n");
+        }
+        // Not found, since build.log.3 is missing.
+        write_log(&td, "build.log.4", "content\n");
+
+        assert_eq!(
+            discover_log_names(&mgr, CODEBASE, RUN_ID).await.unwrap(),
+            names(&["worker.log", "build.log", "build.log.1", "build.log.2"])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_discover_none() {
+        let (_td, mgr) = setup();
+        assert!(discover_log_names(&mgr, CODEBASE, RUN_ID)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_missing_skipped() {
+        let (from_td, from) = setup();
+        let (_to_td, to) = setup();
+        write_log(&from_td, "build.log", "build\n");
+
+        let todo = names(&["worker.log", "build.log"]);
+        let moved = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, Options::default())
+            .await
+            .unwrap();
+
+        assert_eq!(moved.moved, names(&["build.log"]));
+        assert!(!to.has_log(CODEBASE, RUN_ID, "worker.log").await.unwrap());
+        assert_eq!(read_log(&to, "build.log").await, "build\n");
+    }
+
+    #[tokio::test]
+    async fn test_import_failure_keeps_source() {
+        let (from_td, from) = setup();
+        write_log(&from_td, "worker.log", "worker\n");
+        // A destination that is a regular file can't hold any logs.
+        let to_td = TempDir::new().unwrap();
+        let to_path = to_td.path().join("file");
+        std::fs::write(&to_path, "").unwrap();
+        let to = FileSystemLogFileManager::new(&to_path).unwrap();
+
+        let todo = names(&["worker.log"]);
+        let err = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, Options::default())
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, Error::Log { action: "import", name, .. } if name == "worker.log"),
+            "{:?}",
+            err
+        );
+        assert_eq!(read_log(&from, "worker.log").await, "worker\n");
+    }
+
+    #[tokio::test]
+    async fn test_move_compressed() {
+        let (_from_td, from) = setup();
+        let (_to_td, to) = setup();
+        let orig = TempDir::new().unwrap();
+        let orig_path = orig.path().join("build.log");
+        std::fs::write(&orig_path, "build\n").unwrap();
+        from.import_log(CODEBASE, RUN_ID, orig_path.to_str().unwrap(), None, None)
+            .await
+            .unwrap();
+
+        let todo = names(&["build.log"]);
+        let moved = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, Options::default())
+            .await
+            .unwrap();
+
+        assert_eq!(moved.moved, todo);
+        assert!(moved.skipped.is_empty());
+        assert_eq!(read_log(&to, "build.log").await, "build\n");
+        assert!(!from.has_log(CODEBASE, RUN_ID, "build.log").await.unwrap());
+    }
+
+    /// Every file below a directory, with its content.
+    fn snapshot(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+        let mut files = Vec::new();
+        let mut todo = vec![dir.to_path_buf()];
+        while let Some(dir) = todo.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    todo.push(path);
+                } else {
+                    let content = std::fs::read(&path).unwrap();
+                    files.push((path, content));
+                }
+            }
+        }
+        files.sort();
+        files
+    }
+
+    async fn import(mgr: &FileSystemLogFileManager, name: &str, content: &str) {
+        let orig = TempDir::new().unwrap();
+        let orig_path = orig.path().join(name);
+        std::fs::write(&orig_path, content).unwrap();
+        mgr.import_log(CODEBASE, RUN_ID, orig_path.to_str().unwrap(), None, None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_destination_has_log() {
+        let (from_td, from) = setup();
+        let (to_td, to) = setup();
+        write_log(&from_td, "worker.log", "worker\n");
+        write_log(&from_td, "build.log", "build\n");
+        write_log(&from_td, "build.log.1", "build 1\n");
+        write_log(&to_td, "worker.log", "other worker\n");
+        import(&to, "build.log", "other build\n").await;
+        let before = (snapshot(from_td.path()), snapshot(to_td.path()));
+
+        let todo = names(&["worker.log", "build.log"]);
+        for dry_run in [true, false] {
+            let options = Options {
+                dry_run,
+                ..Default::default()
+            };
+            let outcome = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, options)
+                .await
+                .unwrap();
+
+            assert!(outcome.moved.is_empty());
+            assert_eq!(outcome.skipped, todo);
+            assert_eq!((snapshot(from_td.path()), snapshot(to_td.path())), before);
+        }
+
+        // A log that the destination does not have is still moved.
+        let todo = names(&["worker.log", "build.log", "build.log.1"]);
+        let outcome = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, Options::default())
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.moved, names(&["build.log.1"]));
+        assert_eq!(outcome.skipped, names(&["worker.log", "build.log"]));
+        assert_eq!(read_log(&to, "build.log.1").await, "build 1\n");
+        assert_eq!(read_log(&to, "worker.log").await, "other worker\n");
+        assert_eq!(read_log(&to, "build.log").await, "other build\n");
+        assert!(!from.has_log(CODEBASE, RUN_ID, "build.log.1").await.unwrap());
+        assert_eq!(read_log(&from, "worker.log").await, "worker\n");
+        assert_eq!(read_log(&from, "build.log").await, "build\n");
+    }
+
+    #[tokio::test]
+    async fn test_destination_only() {
+        let (_from_td, from) = setup();
+        let (to_td, to) = setup();
+        write_log(&to_td, "worker.log", "worker\n");
+
+        let todo = names(&["worker.log"]);
+        let outcome = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, Options::default())
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, Outcome::default());
+        assert_eq!(read_log(&to, "worker.log").await, "worker\n");
+    }
+
+    #[tokio::test]
+    async fn test_same_directory() {
+        let (td, from) = setup();
+        let other = TempDir::new().unwrap();
+        let link = other.path().join("link");
+        std::os::unix::fs::symlink(td.path(), &link).unwrap();
+        write_log(&td, "worker.log", "worker\n");
+        import(&from, "build.log", "build\n").await;
+        let before = snapshot(td.path());
+        assert_eq!(before.len(), 2);
+
+        let todo = names(&["worker.log", "build.log"]);
+        for to_path in [td.path(), link.as_path()] {
+            let to = FileSystemLogFileManager::new(to_path).unwrap();
+            for keep in [false, true] {
+                let options = Options {
+                    keep,
+                    ..Default::default()
+                };
+                let outcome = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, options)
+                    .await
+                    .unwrap();
+
+                assert!(outcome.moved.is_empty());
+                assert_eq!(outcome.skipped, todo);
+                assert_eq!(snapshot(td.path()), before);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_args() {
+        let args = Args::try_parse_from(["janitor-migrate-logs", "/from", "gs://to"]).unwrap();
+        assert_eq!(args.config, std::path::PathBuf::from("janitor.conf"));
+        assert_eq!(args.from_location, "/from");
+        assert_eq!(args.to_location, "gs://to");
+        assert_eq!(args.concurrency.get(), 100);
+        assert!(!args.dry_run);
+        assert!(!args.keep);
+
+        let args = Args::try_parse_from([
+            "janitor-migrate-logs",
+            "--config=other.conf",
+            "--dry-run",
+            "--keep",
+            "--concurrency=5",
+            "/from",
+            "/to",
+        ])
+        .unwrap();
+        assert_eq!(args.config, std::path::PathBuf::from("other.conf"));
+        assert_eq!(args.concurrency.get(), 5);
+        assert!(args.dry_run);
+        assert!(args.keep);
+    }
+
+    #[test]
+    fn test_parse_args_invalid() {
+        assert!(Args::try_parse_from(["janitor-migrate-logs"]).is_err());
+        assert!(Args::try_parse_from(["janitor-migrate-logs", "/from"]).is_err());
+        assert!(
+            Args::try_parse_from(["janitor-migrate-logs", "--concurrency=0", "/from", "/to"])
+                .is_err()
+        );
+        assert!(Args::try_parse_from(["janitor-migrate-logs", "/from", ""]).is_err());
+        assert!(Args::try_parse_from(["janitor-migrate-logs", "", "/to"]).is_err());
+    }
+
+    #[cfg(feature = "testing")]
+    async fn setup_database(logfilenames: &str) -> Option<janitor::test_utils::TestDatabase> {
+        let db = janitor::test_utils::TestDatabase::new_optional()
+            .await
+            .unwrap()?;
+        janitor::schema::setup_test_database(&db.pool)
+            .await
+            .unwrap();
+        // The current schema forbids NULL; older databases have such rows.
+        for stmt in [
+            "ALTER TABLE run ALTER COLUMN logfilenames DROP NOT NULL".to_string(),
+            "INSERT INTO codebase (name) VALUES ('codebase')".to_string(),
+            "INSERT INTO change_set (id, campaign) VALUES ('cs', 'lintian-fixes')".to_string(),
+            format!(
+                "INSERT INTO run (id, codebase, suite, change_set, result_code, logfilenames) \
+                 VALUES ('run-1', 'codebase', 'lintian-fixes', 'cs', 'success', {})",
+                logfilenames
+            ),
+        ] {
+            sqlx::query(sqlx::AssertSqlSafe(stmt))
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        Some(db)
+    }
+
+    #[cfg(feature = "testing")]
+    #[tokio::test]
+    async fn test_process_all_runs_records_log_names() {
+        let Some(db) = setup_database("NULL").await else {
+            return;
+        };
+        let pool = &db.pool;
+        let query = "SELECT logfilenames FROM run WHERE id = 'run-1'";
+
+        let (from_td, from) = setup();
+        let (to_td, to) = setup();
+        write_log(&from_td, "worker.log", "worker\n");
+        write_log(&from_td, "build.log", "build\n");
+
+        let options = Options {
+            dry_run: true,
+            ..Default::default()
+        };
+        let result = process_all_runs(pool, &from, &to, 100, options)
+            .await
+            .unwrap();
+
+        assert_eq!(result, (1, 0, 0));
+        let stored: Option<Vec<String>> = sqlx::query_scalar(query).fetch_one(pool).await.unwrap();
+        assert_eq!(stored, None);
+        assert_eq!(read_log(&from, "worker.log").await, "worker\n");
+        assert_eq!(read_log(&from, "build.log").await, "build\n");
+        assert_eq!(std::fs::read_dir(to_td.path()).unwrap().count(), 0);
+
+        let result = process_all_runs(pool, &from, &to, 100, Options::default())
+            .await
+            .unwrap();
+
+        assert_eq!(result, (1, 0, 0));
+        let stored: Vec<String> = sqlx::query_scalar(query).fetch_one(pool).await.unwrap();
+        assert_eq!(stored, names(&["worker.log", "build.log"]));
+        assert_eq!(read_log(&to, "build.log").await, "build\n");
+        assert!(!from.has_log(CODEBASE, RUN_ID, "worker.log").await.unwrap());
+    }
+
+    #[cfg(feature = "testing")]
+    #[tokio::test]
+    async fn test_process_all_runs_counts_failures() {
+        let Some(db) = setup_database("ARRAY['worker.log']").await else {
+            return;
+        };
+        let (from_td, from) = setup();
+        write_log(&from_td, "worker.log", "worker\n");
+        let to_td = TempDir::new().unwrap();
+        let to_path = to_td.path().join("file");
+        std::fs::write(&to_path, "").unwrap();
+        let to = FileSystemLogFileManager::new(&to_path).unwrap();
+
+        let result = process_all_runs(&db.pool, &from, &to, 100, Options::default())
+            .await
+            .unwrap();
+
+        assert_eq!(result, (1, 1, 0));
+        assert_eq!(read_log(&from, "worker.log").await, "worker\n");
+    }
+
+    #[cfg(feature = "testing")]
+    #[tokio::test]
+    async fn test_process_all_runs_same_directory() {
+        let Some(db) = setup_database("ARRAY['worker.log', 'build.log']").await else {
+            return;
+        };
+        let (td, from) = setup();
+        let to = FileSystemLogFileManager::new(td.path()).unwrap();
+        write_log(&td, "worker.log", "worker\n");
+        import(&from, "build.log", "build\n").await;
+        let before = snapshot(td.path());
+
+        let result = process_all_runs(&db.pool, &from, &to, 100, Options::default())
+            .await
+            .unwrap();
+
+        assert_eq!(result, (1, 0, 2));
+        assert_eq!(snapshot(td.path()), before);
+    }
+}
