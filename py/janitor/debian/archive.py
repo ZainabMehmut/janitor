@@ -408,7 +408,7 @@ async def write_suite_files(
     stamp = mktime(timestamp.timetuple())
 
     r = Release()
-    r["Origin"] = origin
+    r["Origin"] = origin or "Janitor"
     r["Label"] = archive_description
     r["Codename"] = suite_name
     r["Suite"] = suite_name
