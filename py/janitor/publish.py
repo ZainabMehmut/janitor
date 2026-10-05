@@ -29,7 +29,7 @@ import sys
 import time
 import uuid
 import warnings
-from collections.abc import AsyncIterable, Iterator
+from collections.abc import AsyncIterable, Iterable, Iterator
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -3236,6 +3236,7 @@ async def check_existing(
     vcs_managers,
     modify_limit=None,
     unexpected_limit: int = 5,
+    mps: Optional[Iterable[tuple[Forge, MergeProposal, str]]] = None,
 ):
     mps_per_bucket: dict[str, dict[str, int]] = {
         "open": {},
@@ -3260,7 +3261,10 @@ async def check_existing(
     check_only = False
     was_forge_ratelimited = False
 
-    for forge, mp, status in iter_all_mps():
+    if mps is None:
+        mps = iter_all_mps()
+
+    for forge, mp, status in mps:
         status_count[status] += 1
         if forge in forge_rate_limiter:
             if utcnow() < forge_rate_limiter[forge]:
