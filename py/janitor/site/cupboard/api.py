@@ -263,29 +263,10 @@ async def handle_run_reprocess_logs(request):
         )
 
 
-@docs()
-@routes.post("/reprocess-logs", name="admin-reprocess-logs")
-async def handle_reprocess_logs(request):
-    from ...reprocess_logs import (
-        process_dist_log,
-        process_sbuild_log,
-        reprocess_run_logs,
-    )
-
-    check_admin(request)
-    post = await request.post()
-    dry_run = "dry_run" in post
-    reschedule = "reschedule" in post
-    try:
-        run_ids = post.getall("run_id")
-    except KeyError:
-        run_ids = None
-
+async def select_runs_to_reprocess(
+    conn, run_ids=None, campaign=None, description_re=None, min_age=0
+):
     if not run_ids:
-        campaign = post.get("campaign")
-        description_re = post.get("description_re")
-        min_age = int(post.get("min_age", "0"))
-
         args = []
         where = [
             "(result_code = 'build-failed' OR "
@@ -293,7 +274,7 @@ async def handle_reprocess_logs(request):
             "result_code LIKE 'autopkgtest-%' OR "
             "result_code LIKE 'build-%' OR "
             "result_code LIKE 'dist-%' OR "
-            "result_code LIKE 'unpack-%s' OR "
+            "result_code LIKE 'unpack-%' OR "
             "result_code LIKE 'create-session-%' OR "
             "result_code LIKE 'missing-%')"
         ]
@@ -339,9 +320,36 @@ FROM run
 WHERE
   id = ANY($1::text[])
 """
+    return await conn.fetch(query, *args)
+
+
+@docs()
+@routes.post("/reprocess-logs", name="admin-reprocess-logs")
+async def handle_reprocess_logs(request):
+    from ...reprocess_logs import (
+        process_dist_log,
+        process_sbuild_log,
+        reprocess_run_logs,
+    )
+
+    check_admin(request)
+    post = await request.post()
+    dry_run = "dry_run" in post
+    reschedule = "reschedule" in post
+    try:
+        run_ids = post.getall("run_id")
+    except KeyError:
+        run_ids = None
+
     async with request.app["pool"].acquire() as conn:
         try:
-            rows = await conn.fetch(query, *args)
+            rows = await select_runs_to_reprocess(
+                conn,
+                run_ids,
+                campaign=post.get("campaign"),
+                description_re=post.get("description_re"),
+                min_age=0 if run_ids else int(post.get("min_age", "0")),
+            )
         except asyncpg.InvalidRegularExpressionError as e:
             raise web.HTTPBadRequest(text=f"Invalid regex: {e.message}") from e
 
