@@ -870,7 +870,8 @@ async def publish_repository(
         get_packages=partial(retrieve_packages, package_info_provider, builds),
         get_sources=partial(retrieve_sources, package_info_provider, builds),
         suite_name=apt_repository_config.name,
-        archive_description=apt_repository_config.description,
+        archive_description=apt_repository_config.description
+        or f"{apt_repository_config.name} APT repository",
         components=distribution.component,
         arches=ARCHES,
         origin=config.origin,
