@@ -481,6 +481,10 @@ async fn get_policy(
 }
 
 async fn get_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    policies_response(state.conn.clone())
+}
+
+fn policies_response(pool: PgPool) -> axum::response::Response {
     // Stream the response one named_publish_policy at a time instead
     // of buffering the whole table.
     //
@@ -508,19 +512,20 @@ async fn get_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     struct PolicyRow {
         name: String,
         rate_limit_bucket: Option<String>,
-        role: String,
-        mode: String,
+        role: Option<String>,
+        mode: Option<String>,
         frequency_days: Option<i32>,
+        ord: Option<i64>,
     }
 
-    let pool = state.conn.clone();
     let stream = async_stream::try_stream! {
         let mut rows = sqlx::query_as::<_, PolicyRow>(
             r#"
             SELECT npp.name, npp.rate_limit_bucket,
-                   pp.role, pp.mode::text AS mode, pp.frequency_days
+                   pp.role, pp.mode::text AS mode, pp.frequency_days, pp.ord
               FROM named_publish_policy npp
-              CROSS JOIN UNNEST(npp.per_branch_policy) AS pp
+              LEFT JOIN UNNEST(npp.per_branch_policy) WITH ORDINALITY
+                   AS pp(role, mode, frequency_days, ord) ON TRUE
              ORDER BY npp.name
             "#,
         )
@@ -564,6 +569,7 @@ async fn get_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 role,
                 mode,
                 frequency_days,
+                ord,
             } = row?;
 
             if current_name.as_deref() != Some(&name) {
@@ -579,7 +585,14 @@ async fn get_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                     per_branch: HashMap::new(),
                 });
             }
-            if let Some(doc) = current_doc.as_mut() {
+            // A policy without per-branch entries comes back as one row with a NULL ord.
+            if let (Some(doc), Some(_)) = (current_doc.as_mut(), ord) {
+                let (role, mode) = match (role, mode) {
+                    (Some(role), Some(mode)) => Ok((role, mode)),
+                    _ => Err(sqlx::Error::Decode(
+                        format!("policy {} has an entry without a role or mode", name).into(),
+                    )),
+                }?;
                 doc.per_branch.insert(
                     role,
                     PerBranchPolicy {
