@@ -3119,12 +3119,12 @@ async fn compute_resume_from(
         .await
     {
         Ok(Some(info)) if !resume_branch_url_usable(&resume_branch_url) => {
-            log::info!(
-                "Not resuming {}/{} from run {}: resume branch {} requires authentication",
-                assignment.queue_item.codebase,
-                assignment.queue_item.campaign,
-                info.run_id,
-                resume_branch_url,
+            crate::resume::note_resume_branch_skipped(
+                &assignment.queue_item.codebase,
+                &assignment.queue_item.campaign,
+                &info.run_id,
+                &resume_branch_url,
+                crate::resume::SKIP_REQUIRES_AUTHENTICATION,
             );
             None
         }
