@@ -480,6 +480,10 @@ async fn get_policy(
 }
 
 async fn get_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    policies_response(state.conn.clone())
+}
+
+fn policies_response(pool: PgPool) -> axum::response::Response {
     // Stream the response one named_publish_policy at a time instead
     // of buffering the whole table.
     //
@@ -503,14 +507,13 @@ async fn get_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     use bytes::Bytes;
     use sqlx::Row;
     use std::convert::Infallible;
-    let pool = state.conn.clone();
     let stream = async_stream::try_stream! {
         let mut rows = sqlx::query(
             r#"
             SELECT npp.name, npp.rate_limit_bucket,
                    pp.role, pp.mode::text AS mode, pp.frequency_days
               FROM named_publish_policy npp
-              CROSS JOIN UNNEST(npp.per_branch_policy) AS pp
+              LEFT JOIN UNNEST(npp.per_branch_policy) AS pp ON TRUE
              ORDER BY npp.name
             "#,
         )
@@ -551,8 +554,8 @@ async fn get_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             let row = row?;
             let name: String = row.try_get("name")?;
             let rate_limit_bucket: Option<String> = row.try_get("rate_limit_bucket")?;
-            let role: String = row.try_get("role")?;
-            let mode: String = row.try_get("mode")?;
+            let role: Option<String> = row.try_get("role")?;
+            let mode: Option<String> = row.try_get("mode")?;
             let frequency_days: Option<i32> = row.try_get("frequency_days")?;
 
             if current_name.as_deref() != Some(&name) {
@@ -568,7 +571,8 @@ async fn get_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                     per_branch: HashMap::new(),
                 });
             }
-            if let Some(doc) = current_doc.as_mut() {
+            // A policy without per-branch entries comes back as one row of NULLs.
+            if let (Some(doc), Some(role), Some(mode)) = (current_doc.as_mut(), role, mode) {
                 doc.per_branch.insert(
                     role,
                     PerBranchPolicy {
