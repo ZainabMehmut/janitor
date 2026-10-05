@@ -25,7 +25,12 @@ import pytest
 from debian.deb822 import Release
 
 from janitor.config import read_string as read_config_string
-from janitor.debian.archive import HashedFileWriter, create_app, write_suite_files
+from janitor.debian.archive import (
+    HashedFileWriter,
+    create_app,
+    publish_repository,
+    write_suite_files,
+)
 
 
 async def create_client(aiohttp_client, config=None):
@@ -101,3 +106,58 @@ async def test_write_suite_files_leaves_no_partial_gpg_files_on_signing_failure(
         assert os.path.exists(os.path.join(base_path, "Release"))
         assert not os.path.exists(os.path.join(base_path, "Release.gpg"))
         assert not os.path.exists(os.path.join(base_path, "InRelease"))
+
+
+async def _write_release(base_path, origin):
+    await write_suite_files(
+        str(base_path),
+        get_packages=_no_entries,
+        get_sources=_no_entries,
+        suite_name="test",
+        archive_description="Test",
+        components=["main"],
+        arches=["amd64"],
+        origin=origin,
+        gpg_context=None,
+    )
+    with open(base_path / "Release") as f:
+        return Release(f)
+
+
+async def test_write_suite_files_defaults_origin_when_unset(tmp_path):
+    config = read_config_string("")
+    assert config.origin is None
+    r = await _write_release(tmp_path, config.origin)
+    assert r["Origin"] == "Janitor"
+
+
+async def test_write_suite_files_keeps_configured_origin(tmp_path):
+    config = read_config_string('origin: "janitor.example.com"')
+    r = await _write_release(tmp_path, config.origin)
+    assert r["Origin"] == "janitor.example.com"
+
+
+async def _publish_release(dists_dir, apt_repository):
+    config = read_config_string(
+        'origin: "janitor.example.com" '
+        'distribution { name: "unstable" component: "main" } '
+        f"apt_repository {{ {apt_repository} }}"
+    )
+    await publish_repository(
+        str(dists_dir), None, None, config, config.apt_repository[0], None
+    )
+    with open(dists_dir / "lintian-fixes" / "Release") as f:
+        return Release(f)
+
+
+async def test_publish_repository_defaults_label_when_no_description(tmp_path):
+    r = await _publish_release(tmp_path, 'name: "lintian-fixes" base: "unstable"')
+    assert r["Label"] == "lintian-fixes APT repository"
+
+
+async def test_publish_repository_keeps_configured_description(tmp_path):
+    r = await _publish_release(
+        tmp_path,
+        'name: "lintian-fixes" base: "unstable" description: "Lintian fixes"',
+    )
+    assert r["Label"] == "Lintian fixes"
