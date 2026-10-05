@@ -37,6 +37,7 @@ from janitor.site import (
 )
 from janitor.site.cupboard import create_app
 from janitor.site.cupboard.api import create_app as create_api_app
+from janitor.site.cupboard.api import select_runs_to_reprocess
 from janitor.site.cupboard.publish import iter_publish_history
 
 from .conftest import _insert_codebase, _insert_run
@@ -601,3 +602,25 @@ async def test_reprocess_logs_bulk_invalid_regex(
     client = await create_api_client(aiohttp_client, db, user=ADMIN_USER)
     resp = await client.post("/reprocess-logs", data={"description_re": "("})
     assert resp.status == 400
+
+
+async def test_reprocess_logs_bulk_selects_every_unpack_code(db):
+    async with db.acquire() as conn:
+        now = utcnow()
+        for run_id, result_code in [
+            ("patch", "unpack-patch-application-failed"),
+            ("upstream", "unpack-unexpected-local-upstream-changes"),
+            ("other", "success"),
+        ]:
+            await _insert_codebase(conn, run_id)
+            await _insert_run(
+                conn,
+                run_id=run_id,
+                codebase=run_id,
+                start_time=now - timedelta(minutes=30),
+                finish_time=now,
+                result_code=result_code,
+            )
+        rows = await select_runs_to_reprocess(conn)
+
+    assert sorted(row["id"] for row in rows) == ["patch", "upstream"]
