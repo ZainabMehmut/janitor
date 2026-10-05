@@ -233,3 +233,31 @@ async def test_check_existing_drops_a_forge_backoff_that_has_expired(
 
     assert mp.read_attempts == 1
     assert forge not in forge_rate_limiter
+
+
+class _UnreadableMergeProposal(_StubMergeProposal):
+    """A proposal whose forge answers the read with an unexpected status."""
+
+    def get_source_revision(self):
+        self.read_attempts += 1
+        raise publish.UnexpectedHttpStatus(self.url, 502)
+
+
+async def test_check_existing_keeps_going_after_an_unexpected_status(
+    con, monkeypatch
+) -> None:
+    forge = cast(Forge, _StubForge())
+    mp = _UnreadableMergeProposal()
+    _one_proposal(monkeypatch, forge, mp)
+
+    await publish.check_existing(
+        conn=con,
+        redis=None,
+        config=None,
+        publish_worker=None,
+        bucket_rate_limiter=publish.NonRateLimiter(),
+        forge_rate_limiter={},
+        vcs_managers=None,
+    )
+
+    assert mp.read_attempts == 1
