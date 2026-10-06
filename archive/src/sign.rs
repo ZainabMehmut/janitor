@@ -44,15 +44,10 @@ enum SignMode {
 }
 
 async fn run_gpg(input: &[u8], cfg: &GpgConfig, mode: SignMode) -> ArchiveResult<Vec<u8>> {
-    let mut cmd = Command::new("gpg");
+    let mut cmd = gpg_command(cfg);
     cmd.arg("--batch").arg("--yes").arg("--armor");
-    cmd.arg("--local-user").arg(&cfg.key_id);
-    if let Some(home) = &cfg.gpg_home {
-        cmd.arg("--homedir").arg(home);
-    }
-    if let Some(passphrase) = &cfg.passphrase {
-        cmd.arg("--pinentry-mode").arg("loopback");
-        cmd.arg("--passphrase").arg(passphrase);
+    if let Some(key_id) = &cfg.key_id {
+        cmd.arg("--local-user").arg(key_id);
     }
     match mode {
         SignMode::Detach => cmd.arg("--detach-sign"),
@@ -95,6 +90,75 @@ async fn run_gpg(input: &[u8], cfg: &GpgConfig, mode: SignMode) -> ArchiveResult
     Ok(output.stdout)
 }
 
+fn gpg_command(cfg: &GpgConfig) -> Command {
+    let mut cmd = Command::new("gpg");
+    if let Some(home) = &cfg.gpg_home {
+        cmd.arg("--homedir").arg(home);
+    }
+    cmd
+}
+
+async fn gpg_output(mut cmd: Command) -> ArchiveResult<Vec<u8>> {
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| ArchiveError::RepositoryGeneration(format!("spawn gpg: {}", e)))?;
+    if !output.status.success() {
+        return Err(ArchiveError::RepositoryGeneration(format!(
+            "gpg exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(output.stdout)
+}
+
+/// Export the armored public key(s) used for signing: `key_id` if set,
+/// otherwise every key that has a secret key in the keyring.
+pub async fn export_public_keys(cfg: &GpgConfig) -> ArchiveResult<String> {
+    let key_ids = match &cfg.key_id {
+        Some(key_id) => vec![key_id.clone()],
+        None => {
+            let mut cmd = gpg_command(cfg);
+            cmd.args(["--batch", "--with-colons", "--list-secret-keys"]);
+            let listing = gpg_output(cmd).await?;
+            secret_key_fingerprints(&String::from_utf8_lossy(&listing))
+        }
+    };
+    if key_ids.is_empty() {
+        return Err(ArchiveError::RepositoryGeneration(
+            "no secret keys in gpg keyring".to_string(),
+        ));
+    }
+    let mut cmd = gpg_command(cfg);
+    cmd.args(["--batch", "--armor", "--export"]).args(&key_ids);
+    let exported = gpg_output(cmd).await?;
+    String::from_utf8(exported)
+        .map_err(|e| ArchiveError::RepositoryGeneration(format!("gpg export output: {}", e)))
+}
+
+/// Fingerprints of the primary keys in `gpg --with-colons
+/// --list-secret-keys` output.
+fn secret_key_fingerprints(listing: &str) -> Vec<String> {
+    let mut fingerprints = Vec::new();
+    let mut in_primary = false;
+    for line in listing.lines() {
+        let fields: Vec<&str> = line.split(':').collect();
+        match fields[0] {
+            "sec" => in_primary = true,
+            "fpr" if in_primary => {
+                if let Some(fpr) = fields.get(9) {
+                    fingerprints.push(fpr.to_string());
+                }
+                in_primary = false;
+            }
+            "ssb" => in_primary = false,
+            _ => {}
+        }
+    }
+    fingerprints
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,13 +178,28 @@ mod tests {
     async fn missing_gpg_key_returns_error() {
         let empty_home = tempfile::tempdir().unwrap();
         let cfg = GpgConfig {
-            key_id: "0000000000000000".to_string(),
+            key_id: Some("0000000000000000".to_string()),
             gpg_home: Some(empty_home.path().to_path_buf()),
-            passphrase: None,
             detached_signature: true,
             clearsign: true,
         };
         let result = run_gpg(b"Origin: test\n", &cfg, SignMode::Detach).await;
         assert!(result.is_err(), "expected gpg to fail with no such key");
+    }
+
+    #[test]
+    fn secret_key_fingerprints_skips_subkeys() {
+        let listing = "\
+sec:u:255:22:AAAAAAAAAAAAAAAA:1700000000:::u:::scESC:::+:::ed25519:::0:
+fpr:::::::::0123456789ABCDEF0123456789ABCDEF01234567:
+grp:::::::::1111111111111111111111111111111111111111:
+uid:u::::1700000000::HASH::Test <test@example.com>::::::::::0:
+ssb:u:255:18:BBBBBBBBBBBBBBBB:1700000000::::::e:::+:::cv25519::
+fpr:::::::::FEDCBA9876543210FEDCBA9876543210FEDCBA98:
+";
+        assert_eq!(
+            secret_key_fingerprints(listing),
+            vec!["0123456789ABCDEF0123456789ABCDEF01234567".to_string()]
+        );
     }
 }

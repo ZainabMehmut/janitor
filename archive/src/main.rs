@@ -7,7 +7,7 @@ use tracing::{error, info, warn};
 
 use janitor::redis::RedisConfig;
 use janitor_archive::{
-    config::ArchiveConfig,
+    config::{ArchiveConfig, GpgConfig},
     database::ArchiveDatabase,
     error::ArchiveResult,
     manager::GeneratorManager,
@@ -38,9 +38,9 @@ struct Cli {
     #[arg(long)]
     cache_directory: Option<PathBuf>,
 
-    /// Dists directory (required for generation and serving).
+    /// Dists directory.
     #[arg(long)]
-    dists_directory: Option<PathBuf>,
+    dists_directory: PathBuf,
 
     /// Use Google Cloud logging.
     #[arg(long)]
@@ -50,13 +50,13 @@ struct Cli {
     #[arg(long)]
     no_gpg: bool,
 
+    /// GPG key to sign with (defaults to gpg's default key).
+    #[arg(long, conflicts_with = "no_gpg")]
+    gpg_key_id: Option<String>,
+
     /// Show more detailed output.
     #[arg(long)]
     verbose: bool,
-
-    /// Database connection URL (overrides config file).
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: Option<String>,
 
     /// Bind address (legacy alias for --listen-address:--port).
     #[arg(short, long)]
@@ -97,84 +97,72 @@ async fn main() -> ArchiveResult<()> {
             .unwrap_or(false);
     janitor::logging::init_logging(gcp, debug);
 
-    // Load configuration
-    use janitor::shared_config::{ConfigLoader, ConfigSource};
-    let config = if cli.config.exists() {
-        info!("Loading configuration from: {:?}", cli.config);
-        ArchiveConfig::from_sources(&[
-            ConfigSource::File(cli.config.clone()),
-            ConfigSource::Environment,
-        ])?
-    } else {
-        warn!("Configuration file not found, using environment");
-        ArchiveConfig::from_sources(&[ConfigSource::Defaults, ConfigSource::Environment])?
-    };
+    let janitor_config = janitor::config::read_file(&cli.config).map_err(|e| {
+        janitor_archive::error::ArchiveError::InvalidConfiguration(format!(
+            "Failed to load config from {}: {}",
+            cli.config.display(),
+            e
+        ))
+    })?;
+    let locations = Locations::from_janitor_config(&janitor_config)?;
 
-    // Ensure dists directory exists if provided.
-    if let Some(ref dists_dir) = cli.dists_directory {
-        if let Err(e) = std::fs::create_dir_all(dists_dir) {
-            error!("Failed to create dists directory {:?}: {}", dists_dir, e);
-            return Err(janitor_archive::error::ArchiveError::Io(e));
-        }
+    if let Err(e) = std::fs::create_dir_all(&cli.dists_directory) {
+        error!(
+            "Failed to create dists directory {:?}: {}",
+            cli.dists_directory, e
+        );
+        return Err(janitor_archive::error::ArchiveError::Io(e));
     }
 
-    // The web server requires --dists-directory; standalone subcommands
-    // that don't need it are allowed to omit it.
+    let gpg = (!cli.no_gpg).then(|| GpgConfig::new(cli.gpg_key_id.clone()));
+    let config = ArchiveConfig::from_janitor_config(janitor_config, &cli.dists_directory, gpg)?;
+
     match cli.command {
         Some(Cmd::Generate { ref suite }) => {
-            generate_repositories(&config, suite.as_deref()).await?;
+            generate_repositories(&config, &locations, suite.as_deref()).await?;
         }
         Some(Cmd::Serve) | None => {
-            if cli.dists_directory.is_none() {
-                error!(
-                    "--dists-directory is required when running the web server. \
-                     Pass --dists-directory=<path> or run the 'generate' subcommand."
-                );
-                return Err(janitor_archive::error::ArchiveError::InvalidConfiguration(
-                    "--dists-directory is required".to_string(),
-                ));
-            }
-            // With `--no-gpg`, strip the GPG config so every downstream
-            // sign_release() call turns into a no-op.
-            //
-            // Rebase the per-repository `base_path` onto
-            // `--dists-directory` so all writers/readers agree. Each
-            // apt_repository lives under `<dists_directory>/<name>`.
-            // Without this rebase the config's compiled-in
-            // `archive_path/name` locations win silently and
-            // `--dists-directory` becomes documentation.
-            let mut config = config;
-            if cli.no_gpg {
-                config.gpg = None;
-            }
-            if let Some(ref dists_dir) = cli.dists_directory {
-                config.archive_path = dists_dir.clone();
-                for (name, repo) in config.repositories.iter_mut() {
-                    repo.base_path = dists_dir.join(name);
-                }
-            }
-            start_web_server(&cli, &config).await?;
+            start_web_server(&cli, &config, &locations).await?;
         }
         Some(Cmd::Cleanup) => {
-            cleanup_repositories(&config).await?;
+            cleanup_repositories(&config, &locations).await?;
         }
     }
 
     Ok(())
 }
 
-/// Resolve the artifact-manager URL for the loaded config.
-///
-/// The URL is split across `artifact_manager_url` (archive-specific)
-/// and `external_services.artifact_service_url` (shared);
-/// `artifact_manager_url()` resolves that precedence. Falls back to
-/// "local://" for deployments that never set either, treating the
-/// current directory as the artifact store.
-fn artifact_location(config: &ArchiveConfig) -> String {
-    config
-        .artifact_manager_url()
-        .map(str::to_string)
-        .unwrap_or_else(|| "local://".to_string())
+/// Service locations taken from `janitor.conf`.
+struct Locations {
+    database: String,
+    redis: Option<String>,
+    artifacts: String,
+}
+
+impl Locations {
+    fn from_janitor_config(config: &janitor::config::Config) -> ArchiveResult<Self> {
+        let database = config.database_location.clone().ok_or_else(|| {
+            janitor_archive::error::ArchiveError::InvalidConfiguration(
+                "database_location must be set".to_string(),
+            )
+        })?;
+        Ok(Self {
+            database,
+            redis: config.redis_location.clone(),
+            // Without an artifact_location, treat the current
+            // directory as the artifact store.
+            artifacts: config
+                .artifact_location
+                .clone()
+                .unwrap_or_else(|| "local://".to_string()),
+        })
+    }
+
+    async fn connect_database(&self) -> ArchiveResult<sqlx::PgPool> {
+        sqlx::PgPool::connect(&self.database)
+            .await
+            .map_err(janitor_archive::error::ArchiveError::Database)
+    }
 }
 
 /// Build a RepositoryGenerator wired for signing when GPG is
@@ -185,11 +173,12 @@ fn artifact_location(config: &ArchiveConfig) -> String {
 /// same wiring.
 async fn build_generator(
     config: &ArchiveConfig,
+    locations: &Locations,
     db_pool: sqlx::PgPool,
     cache_directory: Option<PathBuf>,
 ) -> ArchiveResult<RepositoryGenerator> {
     let scanner =
-        Arc::new(PackageScanner::with_cache(&artifact_location(config), cache_directory).await?);
+        Arc::new(PackageScanner::with_cache(&locations.artifacts, cache_directory).await?);
     let database = Arc::new(ArchiveDatabase::new(db_pool));
     let repo_config = RepositoryGenerationConfig::default();
     let mut generator = match config.gpg.clone() {
@@ -203,16 +192,13 @@ async fn build_generator(
 }
 
 /// Generate repositories.
-async fn generate_repositories(config: &ArchiveConfig, suite: Option<&str>) -> ArchiveResult<()> {
-    let database_url = config.base.database.as_ref().ok_or_else(|| {
-        janitor_archive::error::ArchiveError::InvalidConfiguration(
-            "No database URL configured".to_string(),
-        )
-    })?;
-    let db_pool = sqlx::PgPool::connect(&database_url.url)
-        .await
-        .map_err(janitor_archive::error::ArchiveError::Database)?;
-    let generator = build_generator(config, db_pool, None).await?;
+async fn generate_repositories(
+    config: &ArchiveConfig,
+    locations: &Locations,
+    suite: Option<&str>,
+) -> ArchiveResult<()> {
+    let db_pool = locations.connect_database().await?;
+    let generator = build_generator(config, locations, db_pool, None).await?;
 
     if let Some(suite_name) = suite {
         if let Some(repo_config) = config.repositories.get(suite_name) {
@@ -234,7 +220,11 @@ async fn generate_repositories(config: &ArchiveConfig, suite: Option<&str>) -> A
 }
 
 /// Start the web server and spawn the runner pub/sub listener.
-async fn start_web_server(cli: &Cli, config: &ArchiveConfig) -> ArchiveResult<()> {
+async fn start_web_server(
+    cli: &Cli,
+    config: &ArchiveConfig,
+    locations: &Locations,
+) -> ArchiveResult<()> {
     // Compose the bind address from --listen-address and --port;
     // `--bind` is accepted as an override for deployments that pass
     // a single socket string.
@@ -244,33 +234,26 @@ async fn start_web_server(cli: &Cli, config: &ArchiveConfig) -> ArchiveResult<()
         .unwrap_or_else(|| format!("{}:{}", cli.listen_address, cli.port));
     info!("Starting web server on: {}", bind_address);
 
-    let database_url = cli
-        .database_url
-        .clone()
-        .or_else(|| config.base.database.as_ref().map(|d| d.url.clone()))
-        .ok_or_else(|| {
-            janitor_archive::error::ArchiveError::InvalidConfiguration(
-                "No database URL configured".to_string(),
-            )
-        })?;
-
-    let db_pool = sqlx::PgPool::connect(&database_url)
-        .await
-        .map_err(janitor_archive::error::ArchiveError::Database)?;
+    let db_pool = locations.connect_database().await?;
 
     // Build shared components for the GeneratorManager and the web service.
     // All scanners share the same cache directory so a Packages/
     // Sources scan performed by one code path is reusable by the
     // others.
     let scanner_for_manager =
-        PackageScanner::with_cache(&artifact_location(config), cli.cache_directory.clone()).await?;
+        PackageScanner::with_cache(&locations.artifacts, cli.cache_directory.clone()).await?;
     let database_for_manager = ArchiveDatabase::new(db_pool.clone());
     // Build a RepositoryGenerator that signs Release when GPG is
     // configured. `--no-gpg` has already stripped `config.gpg` at
     // this point, so a value of None means the operator explicitly
     // opted out.
-    let generator_for_manager =
-        build_generator(config, db_pool.clone(), cli.cache_directory.clone()).await?;
+    let generator_for_manager = build_generator(
+        config,
+        locations,
+        db_pool.clone(),
+        cli.cache_directory.clone(),
+    )
+    .await?;
 
     let generator_manager = Arc::new(
         GeneratorManager::new(
@@ -292,8 +275,8 @@ async fn start_web_server(cli: &Cli, config: &ArchiveConfig) -> ArchiveResult<()
 
     // Wire the runner 'result' pub/sub listener to the generator
     // manager.
-    if let Some(redis_cfg) = config.base.redis.as_ref() {
-        let redis_config = RedisConfig::new(redis_cfg.url.clone());
+    if let Some(redis_url) = locations.redis.as_ref() {
+        let redis_config = RedisConfig::new(redis_url.clone());
         match RedisSubscriber::new(redis_config, generator_manager.clone()).await {
             Ok(mut subscriber) => match subscriber.listen_to_runner().await {
                 Ok(_handle) => info!("Runner pub/sub listener started"),
@@ -329,13 +312,19 @@ async fn start_web_server(cli: &Cli, config: &ArchiveConfig) -> ArchiveResult<()
     // manager already owns the other instances). Must be GPG-aware
     // for the same reason as the manager's generator: on-demand and
     // /publish paths call through it too.
-    let generator = build_generator(config, db_pool.clone(), cli.cache_directory.clone()).await?;
+    let generator = build_generator(
+        config,
+        locations,
+        db_pool.clone(),
+        cli.cache_directory.clone(),
+    )
+    .await?;
 
     // Initialize web service
     let web_service = ArchiveWebService::with_publish_observer(
         config.clone(),
         generator,
-        PackageScanner::with_cache(&artifact_location(config), cli.cache_directory.clone()).await?,
+        PackageScanner::with_cache(&locations.artifacts, cli.cache_directory.clone()).await?,
         ArchiveDatabase::new(db_pool),
         generator_manager,
         last_publish_times,
@@ -346,17 +335,10 @@ async fn start_web_server(cli: &Cli, config: &ArchiveConfig) -> ArchiveResult<()
 }
 
 /// Clean up old repository files.
-async fn cleanup_repositories(config: &ArchiveConfig) -> ArchiveResult<()> {
-    let database_url = config.base.database.as_ref().ok_or_else(|| {
-        janitor_archive::error::ArchiveError::InvalidConfiguration(
-            "No database URL configured".to_string(),
-        )
-    })?;
-    let db_pool = sqlx::PgPool::connect(&database_url.url)
-        .await
-        .map_err(janitor_archive::error::ArchiveError::Database)?;
+async fn cleanup_repositories(config: &ArchiveConfig, locations: &Locations) -> ArchiveResult<()> {
+    let db_pool = locations.connect_database().await?;
     let database = Arc::new(ArchiveDatabase::new(db_pool));
-    let scanner = Arc::new(PackageScanner::new(&artifact_location(config)).await?);
+    let scanner = Arc::new(PackageScanner::new(&locations.artifacts).await?);
     let repo_config = RepositoryGenerationConfig::default();
     let generator = RepositoryGenerator::new(scanner, database, repo_config);
 

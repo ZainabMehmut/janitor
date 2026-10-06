@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 use janitor_archive::config::GpgConfig;
-use janitor_archive::sign::sign_release;
+use janitor_archive::sign::{export_public_keys, sign_release};
 use tempfile::TempDir;
 
 const RELEASE_BODY: &[u8] = b"Origin: test\nLabel: test\nSuite: test\nCodename: test\n";
@@ -91,9 +91,8 @@ async fn sign_release_produces_verifiable_signatures() {
     let (gpg_home, repo_dir, key_id) = make_signing_fixture().await;
 
     let cfg = GpgConfig {
-        key_id,
+        key_id: Some(key_id),
         gpg_home: Some(gpg_home.path().to_path_buf()),
-        passphrase: None,
         detached_signature: true,
         clearsign: true,
     };
@@ -139,9 +138,8 @@ async fn sign_release_detached_only_skips_inrelease() {
     let (gpg_home, repo_dir, key_id) = make_signing_fixture().await;
 
     let cfg = GpgConfig {
-        key_id,
+        key_id: Some(key_id),
         gpg_home: Some(gpg_home.path().to_path_buf()),
-        passphrase: None,
         detached_signature: true,
         clearsign: false,
     };
@@ -179,9 +177,8 @@ async fn sign_release_clearsign_only_skips_detached() {
     let (gpg_home, repo_dir, key_id) = make_signing_fixture().await;
 
     let cfg = GpgConfig {
-        key_id,
+        key_id: Some(key_id),
         gpg_home: Some(gpg_home.path().to_path_buf()),
-        passphrase: None,
         detached_signature: false,
         clearsign: true,
     };
@@ -208,9 +205,8 @@ async fn sign_release_both_flags_off_is_noop() {
     let (gpg_home, repo_dir, key_id) = make_signing_fixture().await;
 
     let cfg = GpgConfig {
-        key_id,
+        key_id: Some(key_id),
         gpg_home: Some(gpg_home.path().to_path_buf()),
-        passphrase: None,
         detached_signature: false,
         clearsign: false,
     };
@@ -221,4 +217,39 @@ async fn sign_release_both_flags_off_is_noop() {
 
     assert!(!repo_dir.path().join("Release.gpg").exists());
     assert!(!repo_dir.path().join("InRelease").exists());
+}
+
+/// No `key_id`: gpg signs with its default secret key, and
+/// `export_public_keys` returns that key.
+#[tokio::test]
+async fn sign_release_with_default_key() {
+    let (gpg_home, repo_dir, _key_id) = make_signing_fixture().await;
+
+    let cfg = GpgConfig {
+        gpg_home: Some(gpg_home.path().to_path_buf()),
+        ..GpgConfig::new(None)
+    };
+
+    sign_release(repo_dir.path(), RELEASE_BODY, &cfg)
+        .await
+        .expect("sign_release");
+    assert!(verify(
+        gpg_home.path(),
+        "--",
+        &repo_dir.path().join("InRelease")
+    ));
+
+    let exported = export_public_keys(&cfg).await.expect("export_public_keys");
+    assert!(exported.starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----"));
+}
+
+/// An empty keyring has nothing to export.
+#[tokio::test]
+async fn export_public_keys_fails_without_secret_keys() {
+    let gpg_home = TempDir::new().unwrap();
+    let cfg = GpgConfig {
+        gpg_home: Some(gpg_home.path().to_path_buf()),
+        ..GpgConfig::new(None)
+    };
+    assert!(export_public_keys(&cfg).await.is_err());
 }

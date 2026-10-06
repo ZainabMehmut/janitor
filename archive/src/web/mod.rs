@@ -142,7 +142,7 @@ impl ArchiveWebService {
 
     /// Create the Axum router with all routes.
     pub fn router(&self) -> Router {
-        let router = Router::new()
+        Router::new()
             // Plain "ok" health endpoint. No health aggregation --
             // the periodic services keep their own /health state
             // internally.
@@ -226,16 +226,7 @@ impl ArchiveWebService {
             // axum 0.8 `{*name}` syntax (was `*path` in 0.7).
             .route("/pool/{*path}", get(serve_pool_file))
             .route("/metrics", get(shared::metrics_ok))
-            .with_state(self.state.clone());
-
-        // Apply standard middleware. Currently a no-op beyond what
-        // individual handlers already do.
-        if let Some(ref web_config) = self.state.config.base.web {
-            shared::apply_standard_middleware(router, web_config)
-        } else {
-            let default_web_config = janitor::shared_config::WebConfig::default();
-            shared::apply_standard_middleware(router, &default_web_config)
-        }
+            .with_state(self.state.clone())
     }
 
     /// Start the web service on the specified address.
@@ -733,96 +724,42 @@ async fn archive_ready_handler(State(state): State<AppState>) -> Response {
 
 /// Serve GPG public key.
 async fn serve_gpg_key(State(state): State<AppState>) -> Result<Response, StatusCode> {
-    if let Some(gpg_config) = &state.config.gpg {
-        // Try to export the public key using gpg command
-        let mut cmd = tokio::process::Command::new("gpg");
-
-        // Set GPG home directory if specified
-        if let Some(gpg_home) = &gpg_config.gpg_home {
-            cmd.arg("--homedir").arg(gpg_home);
-        }
-
-        // Export the public key in ASCII armor format
-        cmd.args(["--armor", "--export", &gpg_config.key_id]);
-
-        match cmd.output().await {
-            Ok(output) => {
-                if output.status.success() {
-                    let key_data = String::from_utf8_lossy(&output.stdout);
-
-                    if key_data.starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----") {
-                        let mut headers = HeaderMap::new();
-                        headers.insert(
-                            "Content-Type",
-                            HeaderValue::from_static("application/pgp-keys"),
-                        );
-                        headers.insert(
-                            "Cache-Control",
-                            HeaderValue::from_static("public, max-age=86400"), // 24 hours
-                        );
-
-                        Ok((headers, key_data.to_string()).into_response())
-                    } else {
-                        warn!(
-                            "GPG export returned unexpected output for key {}",
-                            gpg_config.key_id
-                        );
-                        Err(StatusCode::INTERNAL_SERVER_ERROR)
-                    }
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    warn!(
-                        "GPG export failed for key {}: {}",
-                        gpg_config.key_id, stderr
-                    );
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            }
-            Err(e) => {
-                warn!("Failed to execute gpg command: {}", e);
-                Err(StatusCode::INTERNAL_SERVER_ERROR)
-            }
-        }
-    } else {
+    let Some(gpg_config) = &state.config.gpg else {
         debug!("No GPG configuration available");
-        Err(StatusCode::NOT_FOUND)
-    }
+        return Err(StatusCode::NOT_FOUND);
+    };
+    let key_data = crate::sign::export_public_keys(gpg_config)
+        .await
+        .map_err(|e| {
+            warn!("Failed to export GPG public key: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "Content-Type",
+        HeaderValue::from_static("application/pgp-keys"),
+    );
+    headers.insert(
+        "Cache-Control",
+        HeaderValue::from_static("public, max-age=86400"), // 24 hours
+    );
+    Ok((headers, key_data).into_response())
 }
 
-/// `GET /pgp_keys` -- return the configured PGP public keys as a
-/// JSON array of armored strings.
-///
-/// The archive config currently carries a single key_id, so the
-/// array will have 0 or 1 entries. When no GPG is configured,
-/// returns an empty JSON array.
+/// `GET /pgp_keys` -- return the signing PGP public keys as a JSON
+/// array of armored strings. When no GPG is configured, returns an
+/// empty JSON array.
 async fn handle_pgp_keys(State(state): State<AppState>) -> Response {
-    let mut keys: Vec<String> = Vec::new();
-    if let Some(gpg_config) = &state.config.gpg {
-        let mut cmd = tokio::process::Command::new("gpg");
-        if let Some(gpg_home) = &gpg_config.gpg_home {
-            cmd.arg("--homedir").arg(gpg_home);
-        }
-        cmd.args(["--armor", "--export", &gpg_config.key_id]);
-        match cmd.output().await {
-            Ok(output) if output.status.success() => {
-                let key_data = String::from_utf8_lossy(&output.stdout).into_owned();
-                if key_data.starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----") {
-                    keys.push(key_data);
-                }
-            }
-            Ok(output) => {
-                warn!(
-                    "GPG export failed for key {}: {}",
-                    gpg_config.key_id,
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-            Err(e) => {
-                warn!("Failed to execute gpg command: {}", e);
-            }
+    let Some(gpg_config) = &state.config.gpg else {
+        return Json(Vec::<String>::new()).into_response();
+    };
+    match crate::sign::export_public_keys(gpg_config).await {
+        Ok(key_data) => Json(vec![key_data]).into_response(),
+        Err(e) => {
+            warn!("Failed to export GPG public keys: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
         }
     }
-    Json(keys).into_response()
 }
 
 /// Helper function to serve component files.
@@ -1354,7 +1291,6 @@ mod tests {
                 codename: "lintian-fixes".to_string(),
                 architectures: vec!["amd64".to_string()],
                 components: vec!["main".to_string()],
-                base_url: "http://x/".to_string(),
                 base_path: PathBuf::from("/x"),
                 by_hash: true,
             },
