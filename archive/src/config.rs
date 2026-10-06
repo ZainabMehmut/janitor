@@ -1,5 +1,6 @@
 //! Archive configuration, derived from the textproto `janitor.conf`.
 
+use crate::error::ArchiveError;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,18 +26,13 @@ impl ArchiveConfig {
         cfg: janitor::config::Config,
         dists_directory: &Path,
         gpg: Option<GpgConfig>,
-    ) -> Self {
+    ) -> Result<Self, ArchiveError> {
         let default_architectures = default_architectures();
         let repositories = cfg
             .apt_repository
             .iter()
             .map(|proto| {
-                // Pull components from the campaign's target
-                // distribution when we can, so periodic and /publish
-                // emit exactly the configured components. Falls back
-                // to `main`.
-                let components = components_for_apt_repo(&cfg, proto)
-                    .unwrap_or_else(|| vec!["main".to_string()]);
+                let components = components_for_apt_repo(&cfg, proto)?;
                 let repo = apt_repository_config_from_proto(
                     proto,
                     dists_directory,
@@ -44,16 +40,16 @@ impl ArchiveConfig {
                     &components,
                     cfg.origin(),
                 );
-                (repo.name.clone(), repo)
+                Ok((repo.name.clone(), repo))
             })
-            .collect();
-        Self {
+            .collect::<Result<_, ArchiveError>>()?;
+        Ok(Self {
             repositories,
             gpg,
             archive_path: dists_directory.to_path_buf(),
             default_architectures,
             runtime_config: Some(Arc::new(cfg)),
-        }
+        })
     }
 
     /// Get a repository configuration by name
@@ -66,25 +62,26 @@ fn default_architectures() -> Vec<String> {
     vec!["amd64".to_string(), "source".to_string()]
 }
 
-/// Derive the components an apt_repository serves from the base
-/// distribution declared on its first `select`ed campaign. Returns
-/// None when the config doesn't wire enough of `select -> campaign
-/// -> debian_build -> distribution` for us to make the call.
+/// The components an apt_repository serves: those of the
+/// distribution named by its `base`.
 fn components_for_apt_repo(
     cfg: &janitor::config::Config,
     proto: &janitor::config::AptRepository,
-) -> Option<Vec<String>> {
-    let campaign_name = proto.select.first().and_then(|s| s.campaign.as_deref())?;
-    let campaign = cfg.get_campaign(campaign_name)?;
-    if !campaign.has_debian_build() {
-        return None;
-    }
-    let base_distribution = campaign.debian_build().base_distribution.as_deref()?;
-    let dist = cfg.get_distribution(base_distribution)?;
-    if dist.component.is_empty() {
-        return None;
-    }
-    Some(dist.component.to_vec())
+) -> Result<Vec<String>, ArchiveError> {
+    let base = proto.base.as_deref().ok_or_else(|| {
+        ArchiveError::InvalidConfiguration(format!(
+            "apt_repository {} has no base distribution",
+            proto.name()
+        ))
+    })?;
+    let dist = cfg.get_distribution(base).ok_or_else(|| {
+        ArchiveError::InvalidConfiguration(format!(
+            "apt_repository {} has unknown base distribution {}",
+            proto.name(),
+            base
+        ))
+    })?;
+    Ok(dist.component.to_vec())
 }
 
 /// Build an `AptRepositoryConfig` from a textproto `apt_repository`
@@ -295,15 +292,20 @@ distribution {
   component: "main"
   component: "contrib"
 }
+distribution {
+  name: "bookworm"
+  component: "main"
+}
 campaign {
   name: "lintian-fixes"
   debian_build {
-    base_distribution: "unstable"
+    base_distribution: "bookworm"
     build_distribution: "lintian-fixes"
   }
 }
 apt_repository {
   name: "lintian-fixes"
+  base: "unstable"
   description: "Builds of lintian fixes"
   select { campaign: "lintian-fixes" }
 }
@@ -311,7 +313,7 @@ apt_repository {
         )
         .unwrap();
         let dists = Path::new("/srv/dists");
-        let config = ArchiveConfig::from_janitor_config(cfg, dists, None);
+        let config = ArchiveConfig::from_janitor_config(cfg, dists, None).unwrap();
 
         assert_eq!(config.archive_path, dists);
         assert!(config.gpg.is_none());
@@ -324,5 +326,32 @@ apt_repository {
         assert_eq!(repo.components, vec!["main", "contrib"]);
         assert_eq!(repo.architectures, vec!["amd64", "source"]);
         assert!(repo.by_hash);
+    }
+
+    #[test]
+    fn test_from_janitor_config_rejects_unknown_base() {
+        let cfg = janitor::config::read_string(
+            r#"
+apt_repository {
+  name: "lintian-fixes"
+  base: "unstable"
+}
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            ArchiveConfig::from_janitor_config(cfg, Path::new("/srv/dists"), None),
+            Err(ArchiveError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[test]
+    fn test_from_janitor_config_rejects_missing_base() {
+        let cfg =
+            janitor::config::read_string("apt_repository { name: \"lintian-fixes\" }").unwrap();
+        assert!(matches!(
+            ArchiveConfig::from_janitor_config(cfg, Path::new("/srv/dists"), None),
+            Err(ArchiveError::InvalidConfiguration(_))
+        ));
     }
 }

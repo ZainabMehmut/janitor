@@ -115,7 +115,7 @@ async fn main() -> ArchiveResult<()> {
     }
 
     let gpg = (!cli.no_gpg).then(|| GpgConfig::new(cli.gpg_key_id.clone()));
-    let config = ArchiveConfig::from_janitor_config(janitor_config, &cli.dists_directory, gpg);
+    let config = ArchiveConfig::from_janitor_config(janitor_config, &cli.dists_directory, gpg)?;
 
     match cli.command {
         Some(Cmd::Generate { ref suite }) => {
