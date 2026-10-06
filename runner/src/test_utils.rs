@@ -439,6 +439,7 @@ pub async fn create_test_app_state_with_config(
         health_checker,
         public_apt_archive_location: None,
         public_vcs_managers: Arc::new(public_vcs_managers),
+        public_dep_server_url: None,
         avoid_hosts: Vec::new(),
     }))
 }

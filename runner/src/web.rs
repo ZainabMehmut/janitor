@@ -3621,6 +3621,7 @@ async fn assign_work_internal(
         chroot: Option<String>,
         #[serde(rename = "build-extra-repositories")]
         extra_repositories: Vec<String>,
+        dep_server_url: Option<String>,
     }
 
     let (build_target, build_cfg) = if let Some(dcfg) = campaign_config.debian_build.as_ref() {
@@ -3670,6 +3671,7 @@ async fn assign_work_internal(
                         .collect()
                 })
                 .unwrap_or_default(),
+            dep_server_url: state.public_dep_server_url.clone(),
         };
 
         (
@@ -3677,7 +3679,10 @@ async fn assign_work_internal(
             serde_json::to_value(&build_assignment).expect("DebianBuildAssignment is plain data"),
         )
     } else {
-        ("generic", json!({}))
+        (
+            "generic",
+            json!({ "dep_server_url": state.public_dep_server_url }),
+        )
     };
 
     let codemod = json!({

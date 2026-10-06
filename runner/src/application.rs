@@ -18,11 +18,13 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ApplicationBuilder {
     config: janitor::config::Config,
     debug: bool,
+    gcp_logging: bool,
     run_timeout_minutes: u64,
     avoid_hosts: Vec<String>,
     public_vcs_location: Option<String>,
     backup_directory: Option<PathBuf>,
     public_apt_archive_location: Option<String>,
+    public_dep_server_url: Option<String>,
 }
 
 impl ApplicationBuilder {
@@ -31,11 +33,13 @@ impl ApplicationBuilder {
         Self {
             config,
             debug: false,
+            gcp_logging: false,
             run_timeout_minutes: 60,
             avoid_hosts: Vec::new(),
             public_vcs_location: None,
             backup_directory: None,
             public_apt_archive_location: None,
+            public_dep_server_url: None,
         }
     }
 
@@ -67,6 +71,13 @@ impl ApplicationBuilder {
         self
     }
 
+    /// Set the dependency server URL handed to workers. Corresponds to
+    /// the `--public-dep-server-url` CLI flag.
+    pub fn with_public_dep_server_url(mut self, url: Option<String>) -> Self {
+        self.public_dep_server_url = url;
+        self
+    }
+
     /// Set the public VCS location used for URLs handed to workers:
     /// a base URL serving `git/` and `bzr/`, or `git=URL,bzr=URL`.
     /// Corresponds to the required `--public-vcs-location` CLI flag.
@@ -92,6 +103,13 @@ impl ApplicationBuilder {
     /// Enable debug logging.
     pub fn with_debug(mut self, debug: bool) -> Self {
         self.debug = debug;
+        self
+    }
+
+    /// Log to Google Cloud Logging. Corresponds to the
+    /// `--gcp-logging` CLI flag.
+    pub fn with_gcp_logging(mut self, gcp_logging: bool) -> Self {
+        self.gcp_logging = gcp_logging;
         self
     }
 
@@ -138,10 +156,14 @@ impl ApplicationBuilder {
     /// Build and initialize the application.
     pub async fn build(self) -> Result<Application, ApplicationError> {
         // Initialize tracing and logging first
-        let tracing_config = self.tracing_config();
-        crate::tracing::init_tracing(&tracing_config).map_err(|e| {
-            ApplicationError::Configuration(format!("Failed to initialize tracing: {}", e))
-        })?;
+        if self.gcp_logging {
+            janitor::logging::init_logging(true, self.debug);
+        } else {
+            let tracing_config = self.tracing_config();
+            crate::tracing::init_tracing(&tracing_config).map_err(|e| {
+                ApplicationError::Configuration(format!("Failed to initialize tracing: {}", e))
+            })?;
+        }
 
         log::info!("Initializing Janitor Runner application...");
 
@@ -316,6 +338,7 @@ impl ApplicationBuilder {
             health_checker,
             public_apt_archive_location: self.public_apt_archive_location,
             public_vcs_managers: Arc::new(public_vcs_managers),
+            public_dep_server_url: self.public_dep_server_url,
             avoid_hosts: self.avoid_hosts,
         });
 
