@@ -1781,23 +1781,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
-name = "differ-py"
-version = "0.0.0"
-dependencies = [
- "breezyshim",
- "chrono",
- "janitor-differ",
- "janitor-publish",
- "log",
- "pyo3",
- "pyo3-async-runtimes",
- "pyo3-log",
- "pythonize",
- "serde_json",
- "silver-platter",
-]
-
-[[package]]
 name = "difflib"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5654,20 +5637,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "publish-py"
-version = "0.0.0"
-dependencies = [
- "breezyshim",
- "chrono",
- "janitor-publish",
- "log",
- "pyo3",
- "pyo3-log",
- "silver-platter",
- "url",
-]
-
-[[package]]
 name = "pyo3"
 version = "0.28.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5773,16 +5742,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "toml 0.9.12+spec-1.1.0",
-]
-
-[[package]]
-name = "pythonize"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b79f670c9626c8b651c0581011b57b6ba6970bb69faf01a7c4c0cfc81c43f95"
-dependencies = [
- "pyo3",
- "serde",
 ]
 
 [[package]]
@@ -6232,17 +6191,6 @@ dependencies = [
  "redis 0.32.7",
  "thiserror 2.0.20",
  "tokio",
-]
-
-[[package]]
-name = "runner-py"
-version = "0.0.0"
-dependencies = [
- "breezyshim",
- "janitor-runner",
- "pyo3",
- "pyo3-log",
- "silver-platter",
 ]
 
 [[package]]

@@ -14,23 +14,16 @@ check_untyped_defs = true
 module = [
     # No type hints yet
     "gpg.*",
-    "aioredlock.*",
-    "diffoscope.*",
-    "ruamel.*",
     "aiohttp_apispec.*",
-    "launchpadlib.*",
     "mimeparse.*",
     "google.cloud.logging.*",
-    "klaus.*",
     "aiohttp_debugtoolbar.*",
     "fakeredis.*",
-    "aiohttp_wsgi.*",
     # https://github.com/MagicStack/asyncpg/issues/387
     "asyncpg.*",
     "testing.*",
     "boto3.*",
     "pytest_asyncio.*",
-    "silver_platter.*",
 ]
 ignore_missing_imports = true
 
@@ -71,23 +64,16 @@ dependencies = [
     "aiohttp-jinja2",
     "aiohttp-openmetrics",
     "aiojobs",
-    "aioredlock",
     "aiozipkin",
     "asyncpg",
-    "backoff",
     "breezy[git,launchpad,workspace]<4",
-    "bs4",
-    "dulwich",
     #"gpg", # Using python3-gpg instead ~ https://github.com/jelmer/janitor/issues/931
     "iso8601",
     "jinja2",
-    "launchpadlib",
-    "paramiko",
     "pygments",
     "python-mimeparse",
     "redis>=4.2.0",
     "setuptools-rust",
-    "silver-platter",
     "uvloop",
     "yarl",
 ]
@@ -98,42 +84,6 @@ file = "README.md"
 content-type = "text/markdown"
 
 [project.optional-dependencies]
-# Janitor service (./Dockerfile_archive)
-archive = [
-    "python-debian",
-]
-# Janitor service (./Dockerfile_auto_upload)
-auto-upload = [
-    "python-debian",
-]
-# Janitor service (./Dockerfile_bzr_store)
-bzr-store = [
-    "loggerhead",
-    "python-debian",
-]
-# Janitor service (./Dockerfile_differ)
-differ = [
-    "diffoscope",
-    "python-debian",
-]
-# Janitor service (./Dockerfile_git_store)
-git-store = [
-    "aiohttp-wsgi",
-    "flask",
-    "klaus@git+https://github.com/jonashaag/klaus",
-    "python-debian",
-]
-# Janitor service (./Dockerfile_mail_filter)
-mail-filter = [
-]
-# Janitor service (./Dockerfile_publish)
-publish = [
-    "python-debian",
-]
-# Janitor service (./Dockerfile_runner)
-runner = [
-    "python-debian",
-]
 # Janitor service (./Dockerfile_site)
 site = [
     "python-debian",
@@ -151,7 +101,6 @@ typing = [
     "python-debian",
     "pytest",
     "google-cloud-logging",
-    "types-flask",
     "types-Pygments",
 ]
 
@@ -197,18 +146,8 @@ s3 = [
 ]
 
 [project.scripts]
-janitor-auto-upload = "janitor.debian.auto_upload:main"
-janitor-archive = "janitor.debian.archive:main"
-janitor-bzr-store = "janitor.bzr_store:main"
-janitor-differ = "janitor.differ:main"
-janitor-git-store = "janitor.git_store:main"
-#janitor-mail-filter == rust
-#janitor-ognibuild = "ognibuild.dep_server:main" # rust
-janitor-publish = "janitor.publish:main"
-janitor-runner = "janitor.runner:main"
 janitor-site = "janitor.site.simple:main"
 janitor-webhook = "janitor.site.webhook:main"
-#janitor-worker == rust
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

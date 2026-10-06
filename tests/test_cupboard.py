@@ -25,7 +25,6 @@ from yarl import URL
 
 from janitor import utcnow
 from janitor.config import read_string as read_config_string
-from janitor.runner import store_change_set, store_run
 from janitor.site import (
     TEMPLATE_ENV,
     classify_result_code,
@@ -208,29 +207,21 @@ async def _insert_codebase(conn, name):
 async def _insert_run(
     conn, *, run_id, codebase, campaign="mycampaign", start_time, finish_time
 ):
-    await store_change_set(conn, run_id, campaign=campaign)
-    await store_run(
-        conn,
-        run_id=run_id,
-        codebase=codebase,
-        campaign=campaign,
-        vcs_type="git",
-        subpath="",
-        start_time=start_time,
-        finish_time=finish_time,
-        command="true",
-        result_code="success",
-        codemod_result={},
-        main_branch_revision=b"revid",
-        revision=b"revid",
-        description=None,
-        context=None,
-        instigated_context=None,
-        logfilenames=[],
-        value=1,
-        change_set=run_id,
-        worker_name=None,
-        branch_url=f"https://example.com/{codebase}.git",
+    await conn.execute(
+        "INSERT INTO change_set (id, campaign) VALUES ($1, $2)", run_id, campaign
+    )
+    await conn.execute(
+        "INSERT INTO run (id, command, result_code, start_time, finish_time, "
+        "main_branch_revision, revision, result, suite, vcs_type, branch_url, "
+        "subpath, logfilenames, value, change_set, codebase) "
+        "VALUES ($1, 'true', 'success', $2, $3, 'revid', 'revid', '{}', $4, "
+        "'git', $5, '', '{}', 1, $1, $6)",
+        run_id,
+        start_time,
+        finish_time,
+        campaign,
+        f"https://example.com/{codebase}.git",
+        codebase,
     )
 
 
@@ -492,7 +483,9 @@ async def test_history_limit_zero_lists_no_runs(aiohttp_client, db):
 
 async def test_publish_history_limit_zero_lists_nothing(con):
     await con.execute("INSERT INTO codebase (name) VALUES ('foo')")
-    await store_change_set(con, "cs1", campaign="mycampaign")
+    await con.execute(
+        "INSERT INTO change_set (id, campaign) VALUES ('cs1', 'mycampaign')"
+    )
     await con.execute(
         "INSERT INTO publish (id, change_set, target_branch_url, mode, "
         "result_code, codebase) VALUES "
