@@ -141,20 +141,18 @@ struct Locations {
 
 impl Locations {
     fn from_janitor_config(config: &janitor::config::Config) -> ArchiveResult<Self> {
-        let database = config.database_location.clone().ok_or_else(|| {
-            janitor_archive::error::ArchiveError::InvalidConfiguration(
-                "database_location must be set".to_string(),
-            )
-        })?;
+        let required = |value: &Option<String>, name: &str| {
+            value.clone().ok_or_else(|| {
+                janitor_archive::error::ArchiveError::InvalidConfiguration(format!(
+                    "{} must be set",
+                    name
+                ))
+            })
+        };
         Ok(Self {
-            database,
+            database: required(&config.database_location, "database_location")?,
             redis: config.redis_location.clone(),
-            // Without an artifact_location, treat the current
-            // directory as the artifact store.
-            artifacts: config
-                .artifact_location
-                .clone()
-                .unwrap_or_else(|| "local://".to_string()),
+            artifacts: required(&config.artifact_location, "artifact_location")?,
         })
     }
 
@@ -348,4 +346,30 @@ async fn cleanup_repositories(config: &ArchiveConfig, locations: &Locations) -> 
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Locations;
+
+    #[test]
+    fn locations_require_artifact_location() {
+        let mut config = janitor::config::read_string(
+            r#"
+database_location: "postgresql://localhost/janitor"
+artifact_location: "/srv/artifacts"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Locations::from_janitor_config(&config).unwrap().artifacts,
+            "/srv/artifacts"
+        );
+
+        config.artifact_location = None;
+        assert!(matches!(
+            Locations::from_janitor_config(&config),
+            Err(janitor_archive::error::ArchiveError::InvalidConfiguration(_))
+        ));
+    }
 }

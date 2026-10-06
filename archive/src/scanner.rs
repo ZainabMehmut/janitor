@@ -73,8 +73,8 @@ pub struct PackageScanner {
 impl PackageScanner {
     /// Create a new package scanner from an artifact-manager URL.
     ///
-    /// The URL is passed straight to `get_artifact_manager`, so any
-    /// supported scheme works (`local://...`, `gs://...`, etc.).
+    /// The location is passed straight to `get_artifact_manager`, so
+    /// it is either a `gs://` URL or a local path.
     pub async fn new(artifact_location: &str) -> ArchiveResult<Self> {
         Self::with_cache(artifact_location, None).await
     }
@@ -596,11 +596,14 @@ mod tests {
     /// rely on this layout.
     #[tokio::test]
     async fn scanner_disk_cache_paths_are_stable() {
+        let store = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
-        let scanner =
-            super::PackageScanner::with_cache("local://", Some(cache.path().to_path_buf()))
-                .await
-                .unwrap();
+        let scanner = super::PackageScanner::with_cache(
+            &store.path().display().to_string(),
+            Some(cache.path().to_path_buf()),
+        )
+        .await
+        .unwrap();
 
         let expected_pkg = cache.path().join("binary-amd64").join("run-1");
         assert_eq!(
@@ -617,7 +620,10 @@ mod tests {
     /// re-scan".
     #[tokio::test]
     async fn scanner_no_cache_returns_none_paths() {
-        let scanner = super::PackageScanner::new("local://").await.unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let scanner = super::PackageScanner::new(&store.path().display().to_string())
+            .await
+            .unwrap();
         assert!(scanner
             .packages_cache_path("run-1", Some("amd64"))
             .is_none());
@@ -630,11 +636,14 @@ mod tests {
     /// be regenerated rather than cached.
     #[tokio::test]
     async fn scanner_cache_needs_arch_for_packages() {
+        let store = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
-        let scanner =
-            super::PackageScanner::with_cache("local://", Some(cache.path().to_path_buf()))
-                .await
-                .unwrap();
+        let scanner = super::PackageScanner::with_cache(
+            &store.path().display().to_string(),
+            Some(cache.path().to_path_buf()),
+        )
+        .await
+        .unwrap();
         assert!(scanner.packages_cache_path("run-1", None).is_none());
     }
 
@@ -755,7 +764,7 @@ mod tests {
             .unwrap();
     }
 
-    /// End-to-end: seed a `local://` artifact store with a fake
+    /// End-to-end: seed a local artifact store with a fake
     /// `.deb`, run `scan_deb_contents_for_build`, and verify we get
     /// `(package_name, file_list)` back. Contents-<arch>
     /// generation calls into this same path.
