@@ -166,8 +166,9 @@ impl Release {
         Ok(Self { inner, files })
     }
 
-    /// Convert the Release to a string, applying file checksums.
-    pub fn to_string(&self) -> String {
+    /// The underlying Release with the checksum lists filled in from
+    /// `self.files`.
+    fn with_checksums(&self) -> debian_control::lossy::apt::Release {
         let mut inner = self.inner.clone();
 
         // Build checksum lists from self.files
@@ -231,7 +232,7 @@ impl Release {
             inner.checksums_sha512 = Some(sha512);
         }
 
-        inner.to_string()
+        inner
     }
 }
 
@@ -269,7 +270,7 @@ impl fmt::Debug for Release {
 
 impl fmt::Display for Release {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self.with_checksums())
     }
 }
 
