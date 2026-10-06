@@ -2312,6 +2312,37 @@ mod tests {
     };
     use std::collections::HashMap;
 
+    /// With a fixed limit `get_max_open` reports the configured limit, so the
+    /// `BucketRateLimit` body built from it carries `max_open`.
+    #[test]
+    fn test_bucket_rate_limit_fixed_limiter_reports_max_open() {
+        use crate::rate_limiter::{FixedRateLimiter, RateLimiter};
+        use janitor::publish::MergeProposalStatus;
+
+        let mut limiter: Box<dyn RateLimiter> = Box::new(FixedRateLimiter::new(3));
+        limiter.set_mps_per_bucket(&maplit::hashmap! {
+            MergeProposalStatus::Open => maplit::hashmap! { "lintian-fixes".to_string() => 1 },
+        });
+
+        let open = limiter
+            .get_stats()
+            .and_then(|s| s.per_bucket.get("lintian-fixes").copied());
+        let max_open = limiter.get_max_open("lintian-fixes");
+        assert_eq!(max_open, Some(3));
+        assert_eq!(limiter.get_max_open("never-seen"), Some(3));
+
+        let body = serde_json::to_value(&super::BucketRateLimit {
+            open,
+            max_open,
+            remaining: crate::rate_limit_remaining(open, max_open),
+        })
+        .unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"open": 1, "max_open": 3, "remaining": 2})
+        );
+    }
+
     /// Closed -> closed in any combination is a no-op update.
     /// CLOSED_STATUSES is `[closed, abandoned, rejected, applied]`,
     /// so all 16 ordered pairs should classify as NoOpUpdate.
