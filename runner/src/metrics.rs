@@ -24,9 +24,35 @@ lazy_static! {
 
     /// Active runs gauge
     pub static ref ACTIVE_RUNS: IntGaugeVec = register_int_gauge_vec!(
-        "janitor_runner_active_runs",
-        "Number of currently active runs",
+        "active_runs",
+        "Number of active runs",
         &["worker"]
+    ).unwrap();
+
+    /// Number of runs handed out to workers.
+    pub static ref RUN_COUNT: IntCounter = register_int_counter!(
+        "run_count_total",
+        "Number of runs executed."
+    ).unwrap();
+
+    /// Assignment requests, by worker.
+    pub static ref ASSIGNMENT_COUNT: IntCounterVec = register_int_counter_vec!(
+        "assignments_total",
+        "Number of assignments handed out",
+        &["worker"]
+    ).unwrap();
+
+    /// Assignment requests that found the queue empty.
+    pub static ref QUEUE_EMPTY_COUNT: IntCounter = register_int_counter!(
+        "queue_empty_total",
+        "Number of times the queue was empty when an assignment was requested"
+    ).unwrap();
+
+    /// Hosts that were found to be rate limiting us.
+    pub static ref RATE_LIMITED_COUNT: IntCounterVec = register_int_counter_vec!(
+        "rate_limited_host_total",
+        "Rate limiting per host",
+        &["host"]
     ).unwrap();
 
     /// Queue metrics
@@ -45,18 +71,18 @@ lazy_static! {
         "Last time a batch job successfully finished"
     ).unwrap();
 
-    /// Run completion metrics
-    pub static ref RUNS_COMPLETED_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "janitor_runner_runs_completed_total",
-        "Total number of completed runs",
-        &["campaign", "result_code", "worker"]
+    /// Finished runs, by campaign and result code.
+    pub static ref RUN_RESULT_COUNT: IntCounterVec = register_int_counter_vec!(
+        "result_total",
+        "Result counts",
+        &["campaign", "result_code"]
     ).unwrap();
 
-    /// Run duration
-    pub static ref RUN_DURATION: HistogramVec = register_histogram_vec!(
-        "janitor_runner_run_duration_seconds",
-        "Run duration in seconds",
-        &["campaign", "result_code"]
+    /// Duration of finished runs, in seconds.
+    pub static ref BUILD_DURATION: HistogramVec = register_histogram_vec!(
+        "build_duration",
+        "Build duration",
+        &["campaign"]
     ).unwrap();
 
     /// Database operation metrics
@@ -208,12 +234,12 @@ impl MetricsCollector {
     }
 
     /// Record run completion
-    pub fn record_run_completion(campaign: &str, result_code: &str, worker: &str, duration: f64) {
-        RUNS_COMPLETED_TOTAL
-            .with_label_values(&[campaign, result_code, worker])
-            .inc();
-        RUN_DURATION
+    pub fn record_run_completion(campaign: &str, result_code: &str, duration: f64) {
+        RUN_RESULT_COUNT
             .with_label_values(&[campaign, result_code])
+            .inc();
+        BUILD_DURATION
+            .with_label_values(&[campaign])
             .observe(duration);
     }
 
@@ -293,6 +319,7 @@ impl MetricsCollector {
 
     /// Collect and return all metrics in Prometheus format
     pub fn collect_metrics() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        register_unlabelled_metrics();
         let encoder = TextEncoder::new();
         let metric_families = prometheus::gather();
         Ok(encoder.encode_to_string(&metric_families)?)
@@ -308,6 +335,14 @@ impl MetricsCollector {
             .with_label_values(&[version, &build_time, &rust_version])
             .set(1.0);
     }
+}
+
+/// Register the metrics without labels, so that they are exported
+/// (as zero) before their first use, like the Python runner did.
+fn register_unlabelled_metrics() {
+    lazy_static::initialize(&RUN_COUNT);
+    lazy_static::initialize(&QUEUE_EMPTY_COUNT);
+    lazy_static::initialize(&LAST_SUCCESS_GAUGE);
 }
 
 /// Initialize metrics system.
