@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
 
@@ -385,59 +384,48 @@ pub(crate) fn deb_architecture(filename: &str) -> Option<String> {
     Some(arch.to_string())
 }
 
+/// Run `program` with `args` followed by `td`, logging its stderr,
+/// and return its stdout. A non-zero exit is an error.
+async fn run_dpkg_scan(program: &str, args: &[&str], td: &Path) -> Result<Vec<u8>, String> {
+    let output = Command::new(program)
+        .args(args)
+        .arg(td)
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run {}: {}", program, e))?;
+    let prefix = format!("{}: ", program);
+    for line in output
+        .stderr
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.is_empty())
+    {
+        handle_log_line(line.strip_prefix(prefix.as_bytes()).unwrap_or(line));
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "{} exited with {}: {}",
+            program,
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output.stdout)
+}
+
 /// Invoke `dpkg-scanpackages` against a directory and return its
 /// raw stdout bytes. Kept separate from parsing so the disk cache
 /// can persist the exact bytes for reuse.
 async fn run_dpkg_scanpackages(td: &Path, arch: Option<&str>) -> ArchiveResult<Vec<u8>> {
-    let mut args = Vec::new();
-    if let Some(arch) = arch {
-        args.extend(["-a", arch]);
-    }
-
-    let mut proc = Command::new("dpkg-scanpackages")
-        .arg(td)
-        .args(&args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            ArchiveError::PackageScanning(format!("Failed to spawn dpkg-scanpackages: {}", e))
-        })?;
-
-    let stdout = proc
-        .stdout
-        .take()
-        .ok_or_else(|| ArchiveError::PackageScanning("Failed to open stdout".to_string()))?;
-    let stderr = proc
-        .stderr
-        .take()
-        .ok_or_else(|| ArchiveError::PackageScanning("Failed to open stderr".to_string()))?;
-
-    let mut stdout_reader = BufReader::new(stdout);
-    let stderr_reader = BufReader::new(stderr);
-
-    let mut buf = Vec::new();
-    stdout_reader
-        .read_to_end(&mut buf)
+    // Options must precede the directory; anything after it is taken
+    // as the override file.
+    let args = match arch {
+        Some(arch) => vec!["-a", arch],
+        None => vec![],
+    };
+    run_dpkg_scan("dpkg-scanpackages", &args, td)
         .await
-        .map_err(ArchiveError::Io)?;
-
-    // Drain stderr in a spawned task so process exit isn't blocked
-    // on the pipe.
-    tokio::spawn(async move {
-        let mut lines = stderr_reader.lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let line = line.as_bytes();
-            if line.starts_with(b"dpkg-scanpackages: ") {
-                let line = &line[b"dpkg-scanpackages: ".len()..];
-                handle_log_line(line);
-            } else {
-                handle_log_line(line);
-            }
-        }
-    });
-
-    Ok(buf)
+        .map_err(ArchiveError::PackageScanning)
 }
 
 /// Parse the raw output of `dpkg-scanpackages` into `Package`
@@ -466,47 +454,9 @@ async fn scan_packages_in_directory(td: &Path, arch: Option<&str>) -> ArchiveRes
 /// raw stdout bytes. Separated from parsing for the same
 /// disk-caching reason as `run_dpkg_scanpackages`.
 async fn run_dpkg_scansources(td: &Path) -> ArchiveResult<Vec<u8>> {
-    let mut proc = Command::new("dpkg-scansources")
-        .arg(td)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            ArchiveError::SourceScanning(format!("Failed to spawn dpkg-scansources: {}", e))
-        })?;
-
-    let stdout = proc
-        .stdout
-        .take()
-        .ok_or_else(|| ArchiveError::SourceScanning("Failed to open stdout".to_string()))?;
-    let stderr = proc
-        .stderr
-        .take()
-        .ok_or_else(|| ArchiveError::SourceScanning("Failed to open stderr".to_string()))?;
-
-    let mut stdout_reader = BufReader::new(stdout);
-    let stderr_reader = BufReader::new(stderr);
-
-    let mut buf = Vec::new();
-    stdout_reader
-        .read_to_end(&mut buf)
+    run_dpkg_scan("dpkg-scansources", &[], td)
         .await
-        .map_err(ArchiveError::Io)?;
-
-    tokio::spawn(async move {
-        let mut lines = stderr_reader.lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let line = line.as_bytes();
-            if line.starts_with(b"dpkg-scansources: ") {
-                let line = &line[b"dpkg-scansources: ".len()..];
-                handle_log_line(line);
-            } else {
-                handle_log_line(line);
-            }
-        }
-    });
-
-    Ok(buf)
+        .map_err(ArchiveError::SourceScanning)
 }
 
 fn parse_sources_bytes(bytes: &[u8]) -> ArchiveResult<Vec<Source>> {
@@ -588,6 +538,50 @@ mod tests {
     fn pool_directory_layout_is_stable() {
         let got = super::pool_directory("unstable", "hello", "abc-123");
         assert_eq!(got, "unstable/pkg/hello/abc-123");
+    }
+
+    /// Build `<dir>/<package>_1.0_<arch>.deb` with dpkg-deb.
+    fn build_deb(dir: &std::path::Path, package: &str, arch: &str) {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("DEBIAN")).unwrap();
+        std::fs::write(
+            root.path().join("DEBIAN/control"),
+            format!(
+                "Package: {}\nVersion: 1.0\nArchitecture: {}\nMaintainer: Test <test@example.com>\nDescription: test\n",
+                package, arch
+            ),
+        )
+        .unwrap();
+        let status = std::process::Command::new("dpkg-deb")
+            .args(["--build", "--root-owner-group"])
+            .arg(root.path())
+            .arg(dir.join(format!("{}_1.0_{}.deb", package, arch)))
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn scan_packages_filters_by_arch() {
+        let dir = tempfile::tempdir().unwrap();
+        build_deb(dir.path(), "hello", "amd64");
+        build_deb(dir.path(), "hello-arm", "arm64");
+        let packages = super::scan_packages_in_directory(dir.path(), Some("amd64"))
+            .await
+            .unwrap();
+        let names: Vec<_> = packages.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["hello"]);
+    }
+
+    #[tokio::test]
+    async fn scan_packages_fails_when_dpkg_scanpackages_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        assert!(matches!(
+            super::scan_packages_in_directory(&missing, None).await,
+            Err(super::ArchiveError::PackageScanning(_))
+        ));
     }
 
     /// Disk cache layout: `<cache>/binary-<arch>/<run_id>` for
