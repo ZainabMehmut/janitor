@@ -18,14 +18,8 @@ clap = { workspace = true, features = ["derive", "env"] }
 futures-util = "0.3"
 git2 = "0.18"
 http = "1.1"
-janitor = { path = ".." }
+janitor = { path = "..", features = ["otlp"] }
 nix = { workspace = true, features = ["signal"] }
-opentelemetry = "0.33"
-opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
-# OTLP-over-HTTP: zipkin now accepts OTLP natively, and the dedicated
-# zipkin exporter crate is deprecated. http-proto keeps the dep tree
-# off tonic/grpc.
-opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
 prometheus = { version = "0.14.0", features = ["process"] }
 pyo3 = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
@@ -38,7 +32,6 @@ tokio = { version = "1.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tower-http = { version = "0.5", features = ["compression-gzip", "cors", "fs", "limit", "timeout", "trace"] }
 tracing = "0.1"
-tracing-opentelemetry = "0.34"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]

@@ -8,6 +8,8 @@ pub mod debdiff;
 pub mod error;
 pub mod logging;
 pub mod logs;
+#[cfg(feature = "otlp")]
+pub mod otlp;
 pub mod pagination;
 pub mod prometheus;
 pub mod publish;
