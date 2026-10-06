@@ -15,6 +15,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::RwLock;
+use tower_http::trace::TraceLayer;
 use tracing::{debug, info, warn};
 
 use crate::config::ArchiveConfig;
@@ -226,6 +227,8 @@ impl ArchiveWebService {
             // axum 0.8 `{*name}` syntax (was `*path` in 0.7).
             .route("/pool/{*path}", get(serve_pool_file))
             .route("/metrics", get(shared::metrics_ok))
+            // One span per request, exported when zipkin_address is set.
+            .layer(TraceLayer::new_for_http())
             .with_state(self.state.clone())
     }
 

@@ -15,6 +15,7 @@ use janitor_archive::{
     redis::RedisSubscriber,
     repository::{RepositoryGenerationConfig, RepositoryGenerator},
     scanner::PackageScanner,
+    tracing_setup,
     web::ArchiveWebService,
 };
 
@@ -84,8 +85,7 @@ enum Cmd {
 async fn main() -> ArchiveResult<()> {
     let cli = Cli::parse();
 
-    // Initialize logging via the janitor crate's shared helper.
-    // `--verbose` -> DEBUG level; `--gcp-logging` -> JSON layer for
+    // `--verbose` -> DEBUG level; `--gcp-logging` -> JSON output for
     // GCP log ingestion.
     let debug = cli.verbose
         || std::env::var("DEBUG")
@@ -95,12 +95,26 @@ async fn main() -> ArchiveResult<()> {
         || std::env::var("LOG_JSON")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-    janitor::logging::init_logging(gcp, debug);
 
     let janitor_config = janitor::config::read_file(&cli.config).map_err(|e| {
         janitor_archive::error::ArchiveError::InvalidConfiguration(format!(
             "Failed to load config from {}: {}",
             cli.config.display(),
+            e
+        ))
+    })?;
+
+    // Hold the guard until the end of main so queued spans flush on
+    // shutdown.
+    let _tracing_guard = tracing_setup::init(
+        "janitor.debian.archive",
+        debug,
+        gcp,
+        janitor_config.zipkin_address.as_deref(),
+    )
+    .map_err(|e| {
+        janitor_archive::error::ArchiveError::InvalidConfiguration(format!(
+            "Failed to initialise tracing: {}",
             e
         ))
     })?;
