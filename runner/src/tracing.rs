@@ -178,8 +178,18 @@ impl Default for PerformanceLoggingConfig {
     }
 }
 
+/// Service name spans are exported under, as in the Python runner.
+pub const SERVICE_NAME: &str = "janitor.runner";
+
 /// Initialize tracing and logging system.
-pub fn init_tracing(config: &TracingConfig) -> Result<(), TracingError> {
+///
+/// When `zipkin_address` is set, spans are also exported there; the
+/// returned guard must then be kept alive for as long as the runner
+/// runs.
+pub fn init_tracing(
+    config: &TracingConfig,
+    zipkin_address: Option<&str>,
+) -> Result<Option<janitor::otlp::TracerGuard>, TracingError> {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
 
     let registry = Registry::default();
@@ -189,6 +199,8 @@ pub fn init_tracing(config: &TracingConfig) -> Result<(), TracingError> {
         .map_err(|e| TracingError::Configuration(format!("Invalid log level: {}", e)))?;
 
     let registry = registry.with(env_filter);
+    let (otlp_layer, otlp_guard) = span_export_layer(zipkin_address)?;
+    let registry = registry.with(otlp_layer);
 
     // Add console output if enabled
     if config.console_output {
@@ -233,10 +245,45 @@ pub fn init_tracing(config: &TracingConfig) -> Result<(), TracingError> {
     log::info!("JSON format: {}", config.json_format);
     log::info!(
         "Distributed tracing: {}",
-        config.tracing.enable_distributed_tracing
+        zipkin_address.unwrap_or("disabled")
     );
 
-    Ok(())
+    Ok(otlp_guard)
+}
+
+/// A layer exporting spans to `zipkin_address`, or no layer when it
+/// is unset.
+#[allow(clippy::type_complexity)]
+fn span_export_layer<S>(
+    zipkin_address: Option<&str>,
+) -> Result<
+    (
+        Option<impl tracing_subscriber::Layer<S>>,
+        Option<janitor::otlp::TracerGuard>,
+    ),
+    TracingError,
+>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    let Some(address) = zipkin_address else {
+        return Ok((None, None));
+    };
+    let (layer, guard) = janitor::otlp::layer(SERVICE_NAME, address)
+        .map_err(|e| TracingError::Configuration(e.to_string()))?;
+    Ok((Some(layer), Some(guard)))
+}
+
+/// Set up only span export to `zipkin_address`, for when log output
+/// is handled elsewhere (e.g. by GCP logging).
+pub fn init_span_export(zipkin_address: &str) -> Result<janitor::otlp::TracerGuard, TracingError> {
+    use tracing_subscriber::{layer::SubscriberExt, Registry};
+
+    let (layer, guard) = janitor::otlp::layer(SERVICE_NAME, zipkin_address)
+        .map_err(|e| TracingError::Configuration(e.to_string()))?;
+    tracing::subscriber::set_global_default(Registry::default().with(layer))
+        .map_err(|e| TracingError::Initialization(e.to_string()))?;
+    Ok(guard)
 }
 
 /// Initialize structured logging with static fields.
@@ -517,6 +564,32 @@ mod tests {
         assert!(config.include_process_info);
         assert!(config.include_hostname);
         assert!(!config.include_source_location);
+    }
+
+    #[test]
+    fn test_span_export_skipped_without_zipkin_address() {
+        let (layer, guard) =
+            span_export_layer::<tracing_subscriber::Registry>(None).expect("no export");
+        assert!(layer.is_none());
+        assert!(guard.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_span_export_with_zipkin_address() {
+        let (layer, guard) = span_export_layer::<tracing_subscriber::Registry>(Some(
+            "http://localhost:9411/v1/traces",
+        ))
+        .expect("export layer");
+        assert!(layer.is_some());
+        assert!(guard.is_some());
+    }
+
+    #[test]
+    fn test_span_export_rejects_bad_zipkin_address() {
+        assert!(matches!(
+            span_export_layer::<tracing_subscriber::Registry>(Some("not a url")),
+            Err(TracingError::Configuration(_))
+        ));
     }
 
     #[tokio::test]
