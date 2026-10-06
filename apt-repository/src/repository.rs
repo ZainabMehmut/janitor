@@ -36,6 +36,9 @@ pub struct Repository {
     pub compressions: Vec<Compression>,
     /// Hash algorithms to use.
     pub hash_algorithms: Vec<HashAlgorithm>,
+    /// Number of files to keep in each by-hash directory when pruning
+    /// it after writing new indices, or `None` to never prune.
+    pub by_hash_keep: Option<usize>,
 }
 
 impl Repository {
@@ -109,6 +112,9 @@ impl Repository {
                 // Create by-hash directory structure if enabled
                 if self.acquire_by_hash {
                     self.create_by_hash_links(&arch_dir, &packages_files)?;
+                    if let Some(keep_count) = self.by_hash_keep {
+                        self.cleanup_by_hash_files(&arch_dir, keep_count)?;
+                    }
                 }
             }
 
@@ -137,6 +143,9 @@ impl Repository {
             // Create by-hash directory structure if enabled
             if self.acquire_by_hash {
                 self.create_by_hash_links(&source_dir, &sources_files)?;
+                if let Some(keep_count) = self.by_hash_keep {
+                    self.cleanup_by_hash_files(&source_dir, keep_count)?;
+                }
             }
         }
 
@@ -216,26 +225,20 @@ impl Repository {
 
         for algorithm in &self.hash_algorithms {
             let by_hash_dir = base_dir.join("by-hash").join(algorithm.as_str());
-            if !by_hash_dir.exists() {
-                continue;
+            let mut entries = Vec::new();
+            for entry in fs::read_dir(&by_hash_dir)? {
+                let entry = entry?;
+                if entry.file_type()?.is_file() {
+                    let modified = entry.metadata()?.modified()?;
+                    entries.push((entry, modified));
+                }
             }
 
-            let mut entries: Vec<_> = fs::read_dir(&by_hash_dir)?
-                .filter_map(|entry| entry.ok())
-                .filter(|entry| entry.file_type().is_ok_and(|ft| ft.is_file()))
-                .collect();
-
             // Sort by modification time (newest first)
-            entries.sort_by_key(|entry| {
-                entry
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .unwrap_or(std::time::UNIX_EPOCH)
-            });
-            entries.reverse();
+            entries.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
 
             // Remove old files
-            for entry in entries.iter().skip(keep_count) {
+            for (entry, _) in entries.iter().skip(keep_count) {
                 fs::remove_file(entry.path())?;
             }
         }
@@ -281,6 +284,7 @@ impl RepositoryBuilder {
                 acquire_by_hash: true,
                 compressions: DEFAULT_COMPRESSIONS.to_vec(),
                 hash_algorithms: DEFAULT_HASH_ALGORITHMS.to_vec(),
+                by_hash_keep: None,
             },
         }
     }
@@ -360,6 +364,13 @@ impl RepositoryBuilder {
     /// Set hash algorithms.
     pub fn hash_algorithms(mut self, hash_algorithms: Vec<HashAlgorithm>) -> Self {
         self.repository.hash_algorithms = hash_algorithms;
+        self
+    }
+
+    /// Prune each by-hash directory down to the `keep_count` newest
+    /// files after writing new indices into it.
+    pub fn by_hash_keep(mut self, keep_count: usize) -> Self {
+        self.repository.by_hash_keep = Some(keep_count);
         self
     }
 

@@ -290,6 +290,14 @@ impl RepositoryGenerator {
                     .collect(),
             );
 
+        // Like the Python archive, keep the newest 4 * compressions
+        // files in each by-hash directory.
+        let repo_builder = if self.config.by_hash {
+            repo_builder.by_hash_keep(4 * self.config.compressions.len().max(1))
+        } else {
+            repo_builder
+        };
+
         let repository = repo_builder
             .build()
             .map_err(|e| ArchiveError::RepositoryGeneration(e.to_string()))?;
@@ -328,39 +336,6 @@ impl RepositoryGenerator {
             .map_err(|e| ArchiveError::RepositoryGeneration(e.to_string()))?;
 
         info!("Successfully generated repository: {}", repo_config.name);
-
-        // Prune old by-hash files. Called per (component, arch) with
-        // `4 * compressions.len()` as the keep count. Without this
-        // the by-hash directories grow unboundedly and eventually
-        // swamp inode budgets.
-        if self.config.by_hash {
-            let keep_count = 4 * self.config.compressions.len().max(1);
-            let base_path = &repo_config.base_path;
-            for component in &repo_config.components {
-                for arch in &repo_config.architectures {
-                    let arch_dir = base_path.join(component).join(format!("binary-{}", arch));
-                    if let Err(e) = async_repo
-                        .cleanup_by_hash_files_async(&arch_dir, keep_count)
-                        .await
-                    {
-                        warn!(
-                            "cleanup_by_hash_files_async failed for {:?}: {}",
-                            arch_dir, e
-                        );
-                    }
-                }
-                let source_dir = base_path.join(component).join("source");
-                if let Err(e) = async_repo
-                    .cleanup_by_hash_files_async(&source_dir, keep_count)
-                    .await
-                {
-                    warn!(
-                        "cleanup_by_hash_files_async failed for {:?}: {}",
-                        source_dir, e
-                    );
-                }
-            }
-        }
 
         // Generate Contents-<arch> files and splice the new entries
         // into the Release file. Must run *before* signing so the
