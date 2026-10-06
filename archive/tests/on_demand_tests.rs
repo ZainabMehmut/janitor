@@ -18,7 +18,7 @@ async fn build_app(pool: sqlx::PgPool) -> (axum::Router, TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = ArchiveConfig::default();
     config.archive_path = tmp.path().to_path_buf();
-    let location = format!("local://{}", tmp.path().display());
+    let location = tmp.path().display().to_string();
 
     let scanner_for_gen = PackageScanner::new(&location).await.unwrap();
     let database_for_gen = ArchiveDatabase::new(pool.clone());
