@@ -279,6 +279,42 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_branch_exception_rate_limited_invalid_retry_after() {
+        for retry_after in [None, Some(f64::INFINITY)] {
+            let err = BranchOpenError::RateLimited {
+                url: Url::parse("https://example.com").unwrap(),
+                description: "Too many requests".to_string(),
+                retry_after,
+            };
+            let failure =
+                convert_branch_exception(&Url::parse("https://example.com").unwrap(), err);
+            assert_eq!(failure.code, "too-many-requests");
+            assert_eq!(failure.retry_after, None);
+        }
+    }
+
+    #[test]
+    fn test_retry_after_duration() {
+        assert_eq!(retry_after_duration(0.0), Ok(chrono::Duration::zero()));
+        assert_eq!(
+            retry_after_duration(1.5),
+            Ok(chrono::Duration::milliseconds(1500))
+        );
+        assert_eq!(
+            retry_after_duration(1e10),
+            Ok(chrono::Duration::seconds(10_000_000_000))
+        );
+    }
+
+    #[test]
+    fn test_retry_after_duration_invalid() {
+        for secs in [-1.0, f64::INFINITY, f64::NEG_INFINITY, 1e15] {
+            assert_eq!(retry_after_duration(secs), Err(InvalidRetryAfter(secs)));
+        }
+        assert!(retry_after_duration(f64::NAN).is_err());
+    }
+
+    #[test]
     fn test_convert_branch_exception_missing() {
         let err = BranchOpenError::Missing {
             url: Url::parse("https://example.com/repo").unwrap(),
