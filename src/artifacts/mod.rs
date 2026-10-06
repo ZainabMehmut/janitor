@@ -179,18 +179,18 @@ pub async fn store_artifacts_with_backup(
         Err(Error::ArtifactsMissing) => unreachable!(),
         Err(e) => {
             log::warn!("Unable to upload artifacts for {}: {}", run_id, e);
-            if let Some(backup_manager) = backup_manager {
-                backup_manager
-                    .store_artifacts(run_id, from_dir, names)
-                    .await?;
-                log::info!(
-                    "Uploading results to backup artifact location {:?}",
-                    backup_manager
-                );
-            } else {
+            let Some(backup_manager) = backup_manager else {
                 log::warn!("No backup artifact manager set.");
-            }
-            Err(e)
+                return Err(e);
+            };
+            backup_manager
+                .store_artifacts(run_id, from_dir, names)
+                .await?;
+            log::info!(
+                "Uploading results to backup artifact location {:?}",
+                backup_manager
+            );
+            Ok(())
         }
     }
 }
@@ -280,6 +280,46 @@ mod tests {
             Err(e) => e,
         };
         assert!(matches!(err, Error::ArtifactsMissing | Error::IoError(_)));
+    }
+
+    /// When the primary manager fails, storing in the backup manager
+    /// counts as success.
+    #[tokio::test]
+    async fn store_with_backup_primary_failure_uses_backup() {
+        let primary_dir = tempfile::tempdir().unwrap();
+        let primary = LocalArtifactManager::new(primary_dir.path()).unwrap();
+        // Remove the primary's directory so storing there fails.
+        drop(primary_dir);
+        let backup_dir = tempfile::tempdir().unwrap();
+        let backup = LocalArtifactManager::new(backup_dir.path()).unwrap();
+
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("out.txt"), b"body").unwrap();
+
+        store_artifacts_with_backup(&primary, Some(&backup), src.path(), "run-1", None)
+            .await
+            .unwrap();
+
+        let mut backup_out = backup.get_artifact("run-1", "out.txt").await.unwrap();
+        let mut backup_contents = Vec::new();
+        backup_out.read_to_end(&mut backup_contents).unwrap();
+        assert_eq!(backup_contents, b"body");
+    }
+
+    /// Without a backup manager the primary's error is returned.
+    #[tokio::test]
+    async fn store_with_backup_primary_failure_without_backup_errors() {
+        let primary_dir = tempfile::tempdir().unwrap();
+        let primary = LocalArtifactManager::new(primary_dir.path()).unwrap();
+        drop(primary_dir);
+
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("out.txt"), b"body").unwrap();
+
+        let err = store_artifacts_with_backup(&primary, None, src.path(), "run-1", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::IoError(_)), "got {err:?}");
     }
 
     /// `upload_backup_artifacts` migrates everything from backup to
