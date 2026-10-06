@@ -150,14 +150,11 @@ impl Default for WatchdogConfig {
 }
 
 impl WatchdogConfig {
-    /// Build a watchdog config from the runner's [`WorkerConfig`],
-    /// inheriting the rest from [`Default`]. Pulls the
-    /// `default_timeout` (in seconds) from the runner-level
-    /// `run_timeout_minutes` so deployments can bump it via the
-    /// `WORKER_RUN_TIMEOUT_MINUTES` env var without recompiling.
-    pub fn from_worker_config(worker: &crate::config::WorkerConfig) -> Self {
+    /// Build a watchdog config from the runner's `--run-timeout` (in
+    /// minutes), inheriting the rest from [`Default`].
+    pub fn from_run_timeout_minutes(run_timeout_minutes: u64) -> Self {
         Self {
-            default_timeout: worker.run_timeout_minutes * 60,
+            default_timeout: run_timeout_minutes * 60,
             ..Self::default()
         }
     }
@@ -767,7 +764,7 @@ pub struct RunHealthStatus {
 /// scheduler's per-codebase estimate. The scheduler estimate is used
 /// as a floor on top of `default_timeout`, never as an upper bound on
 /// its own (see `check_timeout` for the rationale). Pulled out as a
-/// free function so the wiring of `WORKER_RUN_TIMEOUT_MINUTES` into
+/// free function so the wiring of `--run-timeout` into
 /// this calculation is unit-testable without constructing a full
 /// `Watchdog`.
 fn compute_run_deadline_secs(config: &WatchdogConfig, estimate_secs: u64) -> u64 {
@@ -904,18 +901,14 @@ mod tests {
         assert_eq!(map.get("run-b"), Some(&t(1500)));
     }
 
-    /// `from_worker_config` converts the runner-level minute field
+    /// `from_run_timeout_minutes` converts the runner-level minute field
     /// into the watchdog's second-granularity `default_timeout`. Pin
     /// the conversion so a future refactor can't silently swap
     /// minutes for seconds, and confirm unrelated fields keep their
     /// `Default` values.
     #[test]
-    fn test_watchdog_config_from_worker_config_minutes_to_seconds() {
-        let worker = crate::config::WorkerConfig {
-            run_timeout_minutes: 240,
-            ..crate::config::WorkerConfig::default()
-        };
-        let cfg = WatchdogConfig::from_worker_config(&worker);
+    fn test_watchdog_config_from_run_timeout_minutes_to_seconds() {
+        let cfg = WatchdogConfig::from_run_timeout_minutes(240);
         assert_eq!(cfg.default_timeout, 240 * 60);
         let defaults = WatchdogConfig::default();
         assert_eq!(cfg.check_interval, defaults.check_interval);
@@ -929,16 +922,11 @@ mod tests {
     /// `compute_run_deadline_secs` uses the configured default as a
     /// floor: a missing-or-tiny scheduler estimate must never make
     /// the watchdog kill a run sooner than the deployment configured.
-    /// The floor is what the `WORKER_RUN_TIMEOUT_MINUTES` env var
-    /// actually controls (issue #130).
+    /// The floor is what `--run-timeout` actually controls (issue #130).
     #[test]
     fn test_watchdog_deadline_uses_default_as_floor() {
-        let worker = crate::config::WorkerConfig {
-            run_timeout_minutes: 240, // 4h
-            ..crate::config::WorkerConfig::default()
-        };
-        let cfg = WatchdogConfig::from_worker_config(&worker);
-        // No estimate -> exactly the default floor, in seconds.
+        let cfg = WatchdogConfig::from_run_timeout_minutes(240); // 4h
+                                                                 // No estimate -> exactly the default floor, in seconds.
         assert_eq!(compute_run_deadline_secs(&cfg, 0), 240 * 60);
         // Estimate below floor -> clamped up to floor.
         assert_eq!(compute_run_deadline_secs(&cfg, 30 * 60), 240 * 60);

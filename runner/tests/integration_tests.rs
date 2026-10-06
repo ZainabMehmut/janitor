@@ -1,58 +1,17 @@
 //! Integration tests for the Janitor Runner.
 
-use janitor::shared_config::ConfigLoader;
-use janitor_runner::{application::Application, config::RunnerConfig};
+use janitor_runner::application::Application;
 use serial_test::serial;
-use std::time::Duration;
-use tokio::time::timeout;
 
 /// Test configuration for integration tests.
-fn test_config() -> RunnerConfig {
-    use janitor::shared_config::{DatabaseConfig, RedisConfig, WebConfig};
-
-    let mut config = RunnerConfig::default();
-
-    // Configure base service settings
-    config.base.database = Some(DatabaseConfig {
-        url: "postgresql://localhost/janitor_test".to_string(),
-        max_connections: 5,
-        min_connections: Some(1),
-        connection_timeout_seconds: 10,
-        query_timeout_seconds: 30,
-        idle_timeout_seconds: Some(300),
-        max_lifetime_seconds: Some(1800),
-        enable_sql_logging: false,
-    });
-
-    // Redis is required by validate() so the ActiveRunStore can back
-    // /finish uploads across runner restarts.
-    config.base.redis = Some(RedisConfig {
-        url: "redis://localhost".to_string(),
-        ..Default::default()
-    });
-
-    config.base.web = Some(WebConfig {
-        port: 9999,
-        listen_address: "127.0.0.1".to_string(),
-        request_timeout_seconds: 30,
-        max_request_size_bytes: 1024 * 1024,
-        public_port: Some(9999),
-        enable_cors: false,
-        enable_request_logging: true,
-        enable_compression: true,
-        enable_http2: true,
-        keep_alive_seconds: Some(75),
-        workers: None,
-    });
-
-    config.application.name = "janitor-runner-test".to_string();
-    config.application.environment = "test".to_string();
-
-    // Worker authentication is on by default; provide a test secret so
-    // validate() passes.
-    config.worker.shared_secret = Some("test-secret".to_string());
-
-    config
+fn test_config() -> janitor::config::Config {
+    janitor::config::read_string(
+        r#"
+database_location: "postgresql://localhost/janitor_test"
+redis_location: "redis://localhost"
+"#,
+    )
+    .unwrap()
 }
 
 #[tokio::test]
@@ -61,7 +20,10 @@ async fn test_application_lifecycle() {
     // Test the complete application lifecycle: build, start, health check, shutdown
 
     let config = test_config();
-    let app = Application::builder_from_config(config).build().await;
+    let app = Application::builder(config)
+        .with_public_vcs_location("http://localhost:9923/".to_string())
+        .build()
+        .await;
 
     // Application should build successfully (or fail with expected database error)
     match app {
@@ -110,39 +72,6 @@ async fn test_application_lifecycle() {
             );
         }
     }
-}
-
-#[tokio::test]
-async fn test_configuration_loading() {
-    // RunnerConfig::default() leaves database/web as None -- they're opt-in.
-    // Use the test_config() helper that builds a populated config explicitly.
-    let config = test_config();
-
-    assert!(config.base.database.is_some());
-    if let Some(ref db_config) = config.base.database {
-        assert!(db_config.url.contains("postgresql://"));
-    }
-    assert!(config.base.web.is_some());
-    assert_eq!(config.application.name, "janitor-runner-test");
-
-    // Test configuration validation
-    assert!(config.validate().is_ok());
-
-    // Test invalid configuration
-    let mut invalid_config = config.clone();
-    if let Some(ref mut db) = invalid_config.base.database {
-        db.url = "".to_string();
-    }
-    assert!(invalid_config.validate().is_err());
-
-    // Test that configuration is properly structured
-    assert!(config
-        .base
-        .database
-        .as_ref()
-        .unwrap()
-        .url
-        .contains("postgresql://"));
 }
 
 #[tokio::test]
@@ -327,7 +256,10 @@ async fn test_graceful_shutdown() {
     // Test graceful shutdown functionality
 
     let config = test_config();
-    let app = Application::builder_from_config(config).build().await;
+    let app = Application::builder(config)
+        .with_public_vcs_location("http://localhost:9923/".to_string())
+        .build()
+        .await;
 
     if let Ok(app) = app {
         // Test that shutdown doesn't panic
@@ -400,7 +332,10 @@ async fn test_system_integration() {
     use janitor_runner::metrics::MetricsCollector;
 
     let config = test_config();
-    let app_result = Application::builder_from_config(config).build().await;
+    let app_result = Application::builder(config)
+        .with_public_vcs_location("http://localhost:9923/".to_string())
+        .build()
+        .await;
 
     match app_result {
         Ok(app) => {
@@ -436,20 +371,4 @@ async fn test_system_integration() {
             println!("Application initialization failed (expected in CI): {}", e);
         }
     }
-}
-
-/// Helper to run integration tests with timeout
-#[tokio::test]
-async fn test_timeout_protection() {
-    // Ensure tests don't hang indefinitely
-    let test_future = async {
-        // Use the fully-populated test_config, not default, since default
-        // does not include filesystem paths and so does not validate.
-        let config = test_config();
-        config.validate()
-    };
-
-    let result = timeout(Duration::from_secs(5), test_future).await;
-    assert!(result.is_ok(), "Test should complete within timeout");
-    assert!(result.unwrap().is_ok(), "Configuration should be valid");
 }

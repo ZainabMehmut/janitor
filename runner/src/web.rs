@@ -12,7 +12,6 @@ use axum::{
     Extension, Json, Router,
 };
 use chrono::Utc;
-use janitor::shared_config::ConfigLoader;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -545,22 +544,7 @@ async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .map(|r| r.to_json())
         .collect();
 
-    // Avoid-hosts come from `JANITOR_AVOID_HOSTS` (CSV), or from the
-    // runner config at `$RUNNER_CONFIG`; same resolution order as
-    // `assign_work_internal`.
-    let avoid_hosts: Vec<String> = if let Ok(env) = std::env::var("JANITOR_AVOID_HOSTS") {
-        parse_avoid_hosts_csv(&env)
-    } else if let Ok(path) = std::env::var("RUNNER_CONFIG") {
-        match crate::config::RunnerConfig::from_file(&path) {
-            Ok(cfg) => cfg.worker.avoid_hosts,
-            Err(e) => {
-                log::debug!("status: failed to load runner config {}: {}", path, e);
-                Vec::new()
-            }
-        }
-    } else {
-        Vec::new()
-    };
+    let avoid_hosts = &state.avoid_hosts;
 
     // Rate-limited hosts come from Redis; emit an ISO-8601 timestamp
     // per host so downstream tooling can compare to `now()`.
@@ -901,20 +885,43 @@ pub(crate) enum AssignmentValidation {
     NotInVcs,
 }
 
-/// Parse a comma-separated list of hosts from the
-/// `JANITOR_AVOID_HOSTS` environment variable. Empty entries
-/// (consecutive commas or trailing commas) are dropped, and
-/// whitespace around each entry is trimmed. Returns an empty Vec
-/// when the input is empty or all-whitespace. Pulled out of
-/// `assign_work_internal` so the parsing rules can be exhaustively
-/// tested without touching the env.
-pub(crate) fn parse_avoid_hosts_csv(input: &str) -> Vec<String> {
-    input
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
+/// Name of the branch the VCS store caches a codebase's main branch
+/// under: `<vendor>/latest` for Debian builds, `main` otherwise. None
+/// when the Debian vendor can't be determined.
+fn cache_branch_name(
+    campaign_config: &CampaignConfig,
+    config: &janitor::config::Config,
+) -> Option<String> {
+    let Some(debian_config) = &campaign_config.debian_build else {
+        return Some("main".to_string());
+    };
+    let vendor = config
+        .get_distribution(&debian_config.base_distribution)
+        .and_then(|d| d.vendor.clone());
+    #[cfg(feature = "debian")]
+    let vendor = vendor.or_else(|| crate::dpkg_vendor().map(|v| v.to_lowercase()));
+    Some(format!("{}/latest", vendor?))
+}
+
+/// The cached branch URL and target repository URL handed to the
+/// worker, from the public VCS store for the codebase's VCS type.
+/// Both are None when the store doesn't serve that VCS.
+fn worker_vcs_urls(
+    managers: &HashMap<janitor::vcs::VcsType, Box<dyn janitor::vcs::VcsManager>>,
+    vcs_type: Option<&str>,
+    codebase: &str,
+    cache_branch_name: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let Some(manager) = vcs_type
+        .and_then(|t| t.parse::<janitor::vcs::VcsType>().ok())
+        .and_then(|t| managers.get(&t))
+    else {
+        return (None, None);
+    };
+    (
+        cache_branch_name.map(|name| manager.get_branch_url(codebase, name).to_string()),
+        Some(manager.get_repository_url(codebase).to_string()),
+    )
 }
 
 /// Pure decision matrix for assignment validation. Inputs:
@@ -3144,27 +3151,7 @@ async fn assign_work_internal(
     worker_name: String,
     request: AssignRequest,
 ) -> impl IntoResponse {
-    // JANITOR_AVOID_HOSTS overrides the config-file `avoid_hosts` list.
-    let mut excluded_hosts: Vec<String> =
-        if let Ok(avoid_hosts_env) = std::env::var("JANITOR_AVOID_HOSTS") {
-            parse_avoid_hosts_csv(&avoid_hosts_env)
-        } else if let Ok(runner_config_path) = std::env::var("RUNNER_CONFIG") {
-            // Try to load runner-specific config if available
-            match crate::config::RunnerConfig::from_file(&runner_config_path) {
-                Ok(runner_config) => runner_config.worker.avoid_hosts,
-                Err(e) => {
-                    log::warn!(
-                        "Failed to load runner config from {}: {}",
-                        runner_config_path,
-                        e
-                    );
-                    vec![]
-                }
-            }
-        } else {
-            // Default to empty list
-            vec![]
-        };
+    let mut excluded_hosts = state.avoid_hosts.clone();
     if let Some(client_exclusions) = request.exclude_hosts.as_ref() {
         for host in client_exclusions {
             if !excluded_hosts.contains(host) {
@@ -3544,20 +3531,19 @@ async fn assign_work_internal(
     // See janitor/src/api/worker.rs::Assignment for the exact shape.
     let (extra_env, clean_command) = janitor::utils::splitout_env(&assignment.queue_item.command);
 
-    // Config is protobuf-generated; fields are accessed via methods.
-    // `git_location()` returns "" when unset.
-    let public_vcs_location = state.config.git_location();
-    let target_repo_url = format!(
-        "{}/{}",
-        public_vcs_location.trim_end_matches('/'),
-        assignment.queue_item.codebase
+    let cache_branch = cache_branch_name(&campaign_config, &state.config);
+    if cache_branch.is_none() {
+        log::error!(
+            "Unable to determine vendor for {}; not sending a cached branch URL",
+            assignment.queue_item.codebase
+        );
+    }
+    let (cached_url, target_repo_url) = worker_vcs_urls(
+        &state.public_vcs_managers,
+        assignment.vcs_info.vcs_type.as_deref(),
+        &assignment.queue_item.codebase,
+        cache_branch.as_deref(),
     );
-
-    let cached_url = assignment
-        .vcs_info
-        .branch_url
-        .clone()
-        .map(|_| target_repo_url.clone());
 
     // Colocated branches the worker must fetch alongside the main
     // branch (`upstream`, `pristine-tar`, … for Debian packaging).
@@ -3597,7 +3583,10 @@ async fn assign_work_internal(
         "default-empty": campaign_config.default_empty,
     });
 
-    let target_repository = json!({ "url": target_repo_url });
+    let target_repository = json!({
+        "url": target_repo_url,
+        "vcs_type": assignment.vcs_info.vcs_type,
+    });
 
     // Environment merged from config committer + command prefix
     // (DEB_UPDATE_CHANGELOG=auto ...). Copy into both codemod and
@@ -3632,6 +3621,7 @@ async fn assign_work_internal(
         chroot: Option<String>,
         #[serde(rename = "build-extra-repositories")]
         extra_repositories: Vec<String>,
+        dep_server_url: Option<String>,
     }
 
     let (build_target, build_cfg) = if let Some(dcfg) = campaign_config.debian_build.as_ref() {
@@ -3681,6 +3671,7 @@ async fn assign_work_internal(
                         .collect()
                 })
                 .unwrap_or_default(),
+            dep_server_url: state.public_dep_server_url.clone(),
         };
 
         (
@@ -3688,7 +3679,10 @@ async fn assign_work_internal(
             serde_json::to_value(&build_assignment).expect("DebianBuildAssignment is plain data"),
         )
     } else {
-        ("generic", json!({}))
+        (
+            "generic",
+            json!({ "dep_server_url": state.public_dep_server_url }),
+        )
     };
 
     let codemod = json!({
@@ -4045,6 +4039,7 @@ mod tests {
         assignment_validation_outcome, candidate_preflight, main_branch_name, AssignmentValidation,
         CandidatePreflight,
     };
+    use crate::CampaignConfig;
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -4100,42 +4095,72 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_avoid_hosts_csv_simple() {
+    fn test_worker_vcs_urls_inserts_vcs_segment() {
+        let managers = janitor::vcs::get_vcs_managers("https://janitor.example.com/").unwrap();
         assert_eq!(
-            super::parse_avoid_hosts_csv("github.com,gitlab.com"),
-            vec!["github.com".to_string(), "gitlab.com".to_string()],
+            super::worker_vcs_urls(&managers, Some("git"), "foo", Some("debian/latest")),
+            (
+                Some("https://janitor.example.com/git/foo,branch=debian/latest".to_string()),
+                Some("https://janitor.example.com/git/foo".to_string()),
+            )
+        );
+        assert_eq!(
+            super::worker_vcs_urls(&managers, Some("bzr"), "foo", None),
+            (
+                None,
+                Some("https://janitor.example.com/bzr/foo".to_string())
+            )
         );
     }
 
     #[test]
-    fn test_parse_avoid_hosts_csv_trims_whitespace() {
+    fn test_worker_vcs_urls_unsupported_vcs() {
+        let managers = janitor::vcs::get_vcs_managers("git=https://git.example.com/").unwrap();
         assert_eq!(
-            super::parse_avoid_hosts_csv(" github.com , gitlab.com  "),
-            vec!["github.com".to_string(), "gitlab.com".to_string()],
+            super::worker_vcs_urls(&managers, Some("bzr"), "foo", Some("main")),
+            (None, None)
+        );
+        assert_eq!(
+            super::worker_vcs_urls(&managers, None, "foo", Some("main")),
+            (None, None)
         );
     }
 
     #[test]
-    fn test_parse_avoid_hosts_csv_drops_empty_entries() {
+    fn test_cache_branch_name() {
+        let config = janitor::config::read_string(
+            r#"
+distribution {
+  name: "unstable"
+  vendor: "Debian"
+}
+"#,
+        )
+        .unwrap();
+        let generic = CampaignConfig {
+            generic_build: None,
+            debian_build: None,
+            force_build: false,
+            default_empty: false,
+        };
         assert_eq!(
-            super::parse_avoid_hosts_csv("github.com,,gitlab.com,"),
-            vec!["github.com".to_string(), "gitlab.com".to_string()],
+            super::cache_branch_name(&generic, &config),
+            Some("main".to_string())
         );
-    }
-
-    #[test]
-    fn test_parse_avoid_hosts_csv_empty_input() {
-        let empty: Vec<String> = Vec::new();
-        assert_eq!(super::parse_avoid_hosts_csv(""), empty);
-        assert_eq!(super::parse_avoid_hosts_csv("   "), empty);
-        assert_eq!(super::parse_avoid_hosts_csv(",,,"), empty);
-    }
-
-    #[test]
-    fn test_parse_avoid_hosts_csv_single_entry() {
+        let debian = CampaignConfig {
+            debian_build: Some(crate::builder::DebianBuildConfig {
+                base_distribution: "unstable".to_string(),
+                build_distribution: None,
+                build_suffix: None,
+                build_command: None,
+                chroot: None,
+                extra_build_distribution: vec![],
+            }),
+            ..generic
+        };
         assert_eq!(
-            super::parse_avoid_hosts_csv("github.com"),
-            vec!["github.com".to_string()],
+            super::cache_branch_name(&debian, &config),
+            Some("Debian/latest".to_string())
         );
     }
 

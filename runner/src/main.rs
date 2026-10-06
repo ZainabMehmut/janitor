@@ -15,7 +15,7 @@ struct Args {
 
     #[clap(long, default_value = "janitor.conf")]
     /// Path to configuration.
-    config: Option<PathBuf>,
+    config: PathBuf,
 
     #[clap(long)]
     /// Backup directory to write files to if artifact or log manager is unreachable.
@@ -23,12 +23,15 @@ struct Args {
 
     #[clap(long)]
     /// Public vcs location (used for URLs handed to worker).
-    /// If omitted, `git_location` from the config file is used.
-    public_vcs_location: Option<String>,
+    public_vcs_location: String,
 
     #[clap(long)]
     /// Base location for our own APT archive
     public_apt_archive_location: Option<String>,
+
+    #[clap(long)]
+    /// URL of the dependency server handed to workers.
+    public_dep_server_url: Option<String>,
 
     #[clap(flatten)]
     logging: janitor::logging::LoggingArgs,
@@ -40,6 +43,17 @@ struct Args {
     #[clap(long)]
     /// Avoid processing runs on a host (e.g. 'salsa.debian.org')
     avoid_host: Vec<String>,
+
+    // The Python runner accepted these but never used them; they're
+    // kept so existing deployments don't fail to start.
+    #[clap(long, hide = true)]
+    pre_check: Option<String>,
+
+    #[clap(long, hide = true)]
+    post_check: Option<String>,
+
+    #[clap(long, hide = true)]
+    use_cached_only: bool,
 }
 
 #[tokio::main]
@@ -51,41 +65,37 @@ async fn main() -> Result<(), i32> {
     // subscriber here (LoggingArgs::init installs env_logger, which
     // conflicts with the tracing-subscriber registry later).
 
-    // Build application from config file or use defaults
-    let config_path = args.config.unwrap_or_else(|| PathBuf::from("janitor.conf"));
+    let unused_flags = [
+        ("--pre-check", args.pre_check.is_some()),
+        ("--post-check", args.post_check.is_some()),
+        ("--use-cached-only", args.use_cached_only),
+    ];
+    for (flag, _) in unused_flags.iter().filter(|(_, set)| *set) {
+        eprintln!("warning: {} has no effect and will be removed", flag);
+    }
 
-    let mut app_builder = if config_path.exists() {
-        Application::builder_from_file(&config_path).map_err(|e| {
-            eprintln!(
-                "Failed to load config from {}: {}",
-                config_path.display(),
-                e
-            );
+    #[cfg(feature = "gcp")]
+    let gcp_logging = args.logging.gcp_logging;
+    #[cfg(not(feature = "gcp"))]
+    let gcp_logging = false;
+
+    let app_builder = Application::builder_from_file(&args.config)
+        .map_err(|e| {
+            eprintln!("{}", e);
             1
         })?
-    } else {
-        log::info!(
-            "Config file {} not found, using defaults",
-            config_path.display()
-        );
-        Application::builder()
-    };
-
-    // Store values before moving args
-    let listen_address = args.listen_address.clone();
-    let port = args.port;
-    let public_port = args.public_port;
-
-    // Override config with command line arguments
-    app_builder = app_builder
-        .with_listen_address(args.listen_address)
-        .with_port(args.port)
         .with_debug(args.logging.debug)
+        .with_gcp_logging(gcp_logging)
         .with_backup_directory(args.backup_directory)
         .with_public_apt_archive_location(args.public_apt_archive_location)
         .with_public_vcs_location(args.public_vcs_location)
+        .with_public_dep_server_url(args.public_dep_server_url)
         .with_run_timeout_minutes(args.run_timeout)
         .with_avoid_hosts(args.avoid_host);
+
+    let listen_address = args.listen_address;
+    let port = args.port;
+    let public_port = args.public_port;
 
     // Build and initialize the application
     let app = app_builder.build().await.map_err(|e| {

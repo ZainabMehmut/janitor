@@ -44,8 +44,6 @@ pub mod auth;
 pub mod backchannel;
 /// Module for build system implementations.
 pub mod builder;
-/// Runner configuration.
-pub mod config;
 /// Module for generating configuration files.
 pub mod config_generator;
 /// Database operations.
@@ -75,10 +73,6 @@ pub mod test_utils;
 /// Test helpers for database-dependent tests
 #[cfg(test)]
 pub mod test_helpers;
-
-/// Config migration tests
-#[cfg(test)]
-mod config_migration_test;
 
 /// Generate environment variables for committing changes.
 ///
@@ -1715,6 +1709,15 @@ pub struct AppState {
     /// line for the worker; when None, no extra apt sources are
     /// sent.
     pub public_apt_archive_location: Option<String>,
+    /// VCS stores as seen by workers -- supplied via
+    /// `--public-vcs-location`.
+    pub public_vcs_managers: Arc<HashMap<janitor::vcs::VcsType, Box<dyn janitor::vcs::VcsManager>>>,
+    /// URL of the dependency server handed to workers -- supplied
+    /// via `--public-dep-server-url`.
+    pub public_dep_server_url: Option<String>,
+    /// Hosts to avoid when assigning work -- supplied via
+    /// `--avoid-host`.
+    pub avoid_hosts: Vec<String>,
 }
 
 /// Overall health of a component or the runner service as a whole,

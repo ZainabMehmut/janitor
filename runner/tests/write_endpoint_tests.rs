@@ -1390,6 +1390,12 @@ async fn assign_response_envelope_has_all_documented_fields() {
     assert!(assignment["codemod"].is_object(), "codemod: {assignment}");
     assert!(assignment["env"].is_object(), "env: {assignment}");
     assert!(assignment["build"].is_object(), "build: {assignment}");
+    // Python always sent dep_server_url, null when unset.
+    assert_eq!(
+        assignment["build"]["config"].get("dep_server_url"),
+        Some(&serde_json::Value::Null),
+        "build.config: {assignment}"
+    );
 
     // Legacy wrapper-shape keys we still emit for downstream code
     // that reads them (test fixtures, logs).

@@ -1,89 +1,64 @@
 //! Application initialization and orchestration for the runner.
 
 use crate::{
-    config::RunnerConfig,
     database::RunnerDatabase,
-    error_tracking::{ErrorTracker, ErrorTrackingConfig},
+    error_tracking::{ErrorSeverity, ErrorTracker, ErrorTrackingConfig},
     metrics::MetricsCollector,
     vcs::RunnerVcsManager,
     AppState,
 };
-use janitor::shared_config::ConfigLoader;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
 
-/// Application configuration combining all subsystem configurations.
-#[derive(Debug, Clone)]
-pub struct ApplicationConfig {
-    /// Core runner configuration using shared config modules
-    pub runner_config: RunnerConfig,
-    /// Error tracking configuration.
-    pub error_tracking_config: ErrorTrackingConfig,
-    /// Metrics collection interval.
-    pub metrics_interval: Duration,
-    /// Enable graceful shutdown handling.
-    pub enable_graceful_shutdown: bool,
-    /// Shutdown timeout.
-    pub shutdown_timeout: Duration,
-}
-
-impl Default for ApplicationConfig {
-    fn default() -> Self {
-        Self {
-            runner_config: RunnerConfig::default(),
-            error_tracking_config: ErrorTrackingConfig::default(),
-            metrics_interval: Duration::from_secs(30),
-            enable_graceful_shutdown: true,
-            shutdown_timeout: Duration::from_secs(30),
-        }
-    }
-}
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Application builder for configuring and initializing the runner.
 pub struct ApplicationBuilder {
-    config: RunnerConfig,
-    backup_directory: Option<std::path::PathBuf>,
+    config: janitor::config::Config,
+    debug: bool,
+    gcp_logging: bool,
+    run_timeout_minutes: u64,
+    avoid_hosts: Vec<String>,
+    public_vcs_location: Option<String>,
+    backup_directory: Option<PathBuf>,
     public_apt_archive_location: Option<String>,
-}
-
-impl Default for ApplicationBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
+    public_dep_server_url: Option<String>,
 }
 
 impl ApplicationBuilder {
-    /// Empty builder using `RunnerConfig::default()`.
-    pub fn new() -> Self {
-        Self {
-            config: RunnerConfig::default(),
-            backup_directory: None,
-            public_apt_archive_location: None,
-        }
-    }
-
-    /// Builder seeded with an existing config.
-    pub fn from_config(config: RunnerConfig) -> Self {
+    /// Builder seeded with the janitor configuration.
+    pub fn new(config: janitor::config::Config) -> Self {
         Self {
             config,
+            debug: false,
+            gcp_logging: false,
+            run_timeout_minutes: 60,
+            avoid_hosts: Vec::new(),
+            public_vcs_location: None,
             backup_directory: None,
             public_apt_archive_location: None,
+            public_dep_server_url: None,
         }
     }
 
-    /// Load config from a file and use it to seed the builder.
+    /// Load the janitor configuration file and use it to seed the builder.
     pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self, ApplicationError> {
-        let config = RunnerConfig::from_file(path).map_err(|e| {
-            ApplicationError::Configuration(format!("Failed to load config: {}", e))
+        let config = janitor::config::read_file(path.as_ref()).map_err(|e| {
+            ApplicationError::Configuration(format!(
+                "Failed to load config from {}: {}",
+                path.as_ref().display(),
+                e
+            ))
         })?;
-        Ok(Self::from_config(config))
+        Ok(Self::new(config))
     }
 
     /// Set the backup directory used when the main artifact manager is
     /// unreachable. When set, a periodic task drains the directory into
     /// the main artifact manager every 15 minutes.
-    pub fn with_backup_directory(mut self, path: Option<std::path::PathBuf>) -> Self {
+    pub fn with_backup_directory(mut self, path: Option<PathBuf>) -> Self {
         self.backup_directory = path;
         self
     }
@@ -96,101 +71,114 @@ impl ApplicationBuilder {
         self
     }
 
-    /// Override the config file's `public_vcs_location` (used for URLs
-    /// handed to workers). Corresponds to the `--public-vcs-location`
-    /// CLI flag. A `None` leaves whatever the config file set.
-    pub fn with_public_vcs_location(mut self, url: Option<String>) -> Self {
-        if let Some(url) = url {
-            self.config.vcs.public_vcs_location = Some(url);
-        }
+    /// Set the dependency server URL handed to workers. Corresponds to
+    /// the `--public-dep-server-url` CLI flag.
+    pub fn with_public_dep_server_url(mut self, url: Option<String>) -> Self {
+        self.public_dep_server_url = url;
         self
     }
 
-    /// Override the config file's watchdog run timeout (in minutes).
-    /// Corresponds to the `--run-timeout` CLI flag.
+    /// Set the public VCS location used for URLs handed to workers:
+    /// a base URL serving `git/` and `bzr/`, or `git=URL,bzr=URL`.
+    /// Corresponds to the required `--public-vcs-location` CLI flag.
+    pub fn with_public_vcs_location(mut self, location: String) -> Self {
+        self.public_vcs_location = Some(location);
+        self
+    }
+
+    /// Set the watchdog run timeout (in minutes). Corresponds to the
+    /// `--run-timeout` CLI flag.
     pub fn with_run_timeout_minutes(mut self, minutes: u64) -> Self {
-        self.config.worker.run_timeout_minutes = minutes;
+        self.run_timeout_minutes = minutes;
         self
     }
 
-    /// Override the config file's `worker.avoid_hosts`. Corresponds to
-    /// the `--avoid-host` CLI flag (repeatable). An empty vec leaves
-    /// whatever the config file set.
+    /// Set the hosts to avoid when assigning work. Corresponds to the
+    /// `--avoid-host` CLI flag (repeatable).
     pub fn with_avoid_hosts(mut self, hosts: Vec<String>) -> Self {
-        if !hosts.is_empty() {
-            self.config.worker.avoid_hosts = hosts;
-        }
+        self.avoid_hosts = hosts;
         self
     }
 
-    /// Set the database URL.
-    pub fn with_database_url(mut self, url: String) -> Self {
-        self.config.base.database = Some(janitor::shared_config::DatabaseConfig {
-            url,
-            ..Default::default()
-        });
-        self
-    }
-
-    /// Set the Redis URL for coordination.
-    pub fn with_redis_url(mut self, url: Option<String>) -> Self {
-        if let Some(url) = url {
-            self.config.base.redis = Some(janitor::shared_config::RedisConfig {
-                url,
-                ..Default::default()
-            });
-        } else {
-            self.config.base.redis = None;
-        }
-        self
-    }
-
-    /// Set the web server port.
-    pub fn with_port(mut self, port: u16) -> Self {
-        if self.config.base.web.is_none() {
-            self.config.base.web = Some(janitor::shared_config::WebConfig::default());
-        }
-        if let Some(ref mut web) = self.config.base.web {
-            web.port = port;
-        }
-        self
-    }
-
-    /// Set the listen address.
-    pub fn with_listen_address(mut self, address: String) -> Self {
-        if self.config.base.web.is_none() {
-            self.config.base.web = Some(janitor::shared_config::WebConfig::default());
-        }
-        if let Some(ref mut web) = self.config.base.web {
-            web.listen_address = address;
-        }
-        self
-    }
-
-    /// Enable debug mode.
+    /// Enable debug logging.
     pub fn with_debug(mut self, debug: bool) -> Self {
-        // Add debug to application config - we need to add this field
-        self.config.application.environment = if debug {
-            "development".to_string()
-        } else {
-            "production".to_string()
-        };
+        self.debug = debug;
         self
+    }
+
+    /// Log to Google Cloud Logging. Corresponds to the
+    /// `--gcp-logging` CLI flag.
+    pub fn with_gcp_logging(mut self, gcp_logging: bool) -> Self {
+        self.gcp_logging = gcp_logging;
+        self
+    }
+
+    fn validate(&self) -> Result<(), ApplicationError> {
+        // Both stores are hard requirements: the DB backs every
+        // handler, and the ActiveRunStore is Redis-backed so worker
+        // /finish uploads survive runner restarts.
+        if self.config.database_location.is_none() {
+            return Err(ApplicationError::Configuration(
+                "database_location must be set".to_string(),
+            ));
+        }
+        if self.config.redis_location.is_none() {
+            return Err(ApplicationError::Configuration(
+                "redis_location must be set".to_string(),
+            ));
+        }
+        if self.run_timeout_minutes == 0 {
+            return Err(ApplicationError::Configuration(
+                "run timeout must be greater than 0".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn tracing_config(&self) -> crate::tracing::TracingConfig {
+        crate::tracing::TracingConfig {
+            log_level: if self.debug { "debug" } else { "info" }.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn error_tracking_config() -> ErrorTrackingConfig {
+        ErrorTrackingConfig {
+            max_errors_in_memory: 1000,
+            log_to_file: false,
+            error_log_path: None,
+            enable_stack_traces: true,
+            min_severity: ErrorSeverity::Warning,
+            enable_correlation: true,
+        }
     }
 
     /// Build and initialize the application.
     pub async fn build(self) -> Result<Application, ApplicationError> {
         // Initialize tracing and logging first
-        let tracing_config = self.config.tracing_config();
-        crate::tracing::init_tracing(&tracing_config).map_err(|e| {
-            ApplicationError::Configuration(format!("Failed to initialize tracing: {}", e))
-        })?;
+        if self.gcp_logging {
+            janitor::logging::init_logging(true, self.debug);
+        } else {
+            let tracing_config = self.tracing_config();
+            crate::tracing::init_tracing(&tracing_config).map_err(|e| {
+                ApplicationError::Configuration(format!("Failed to initialize tracing: {}", e))
+            })?;
+        }
 
         log::info!("Initializing Janitor Runner application...");
 
-        self.config.validate_config().map_err(|e| {
-            ApplicationError::Configuration(format!("Configuration validation failed: {}", e))
+        self.validate()?;
+
+        let public_vcs_location = self.public_vcs_location.as_deref().ok_or_else(|| {
+            ApplicationError::Configuration("public VCS location must be set".to_string())
         })?;
+        let public_vcs_managers =
+            janitor::vcs::get_vcs_managers(public_vcs_location).map_err(|e| {
+                ApplicationError::Configuration(format!(
+                    "Invalid public VCS location {}: {}",
+                    public_vcs_location, e
+                ))
+            })?;
 
         // Initialize metrics first so other systems can use them
         log::info!("Initializing metrics collection...");
@@ -199,11 +187,11 @@ impl ApplicationBuilder {
 
         // Initialize error tracking
         log::info!("Initializing error tracking...");
-        let error_tracking_config = self.config.error_tracking_config();
+        let error_tracking_config = Self::error_tracking_config();
         let error_tracker = Arc::new(ErrorTracker::new(error_tracking_config));
 
         log::info!("Initializing database connection...");
-        let janitor_config = self.config.to_janitor_config();
+        let janitor_config = self.config;
         let database_pool = match janitor::state::create_pool(&janitor_config).await {
             Ok(pool) => pool,
             Err(e) => {
@@ -224,7 +212,7 @@ impl ApplicationBuilder {
         let database = Arc::new(
             RunnerDatabase::new_with_redis_url(
                 database_pool,
-                self.config.redis().map(|r| r.url.clone()),
+                janitor_config.redis_location.clone(),
             )
             .await
             .map_err(|e| {
@@ -312,7 +300,7 @@ impl ApplicationBuilder {
         // salsa.debian.org/janitor-team/janitor.debian.net#117).
         let redis_client = database.redis().cloned().ok_or_else(|| {
             ApplicationError::Configuration(
-                "Redis is required for active-runs persistence; configure base.redis.url"
+                "Redis is required for active-runs persistence; configure redis_location"
                     .to_string(),
             )
         })?;
@@ -348,14 +336,17 @@ impl ApplicationBuilder {
             security_service,
             resume_service,
             health_checker,
-            public_apt_archive_location: self.public_apt_archive_location.clone(),
+            public_apt_archive_location: self.public_apt_archive_location,
+            public_vcs_managers: Arc::new(public_vcs_managers),
+            public_dep_server_url: self.public_dep_server_url,
+            avoid_hosts: self.avoid_hosts,
         });
 
         log::info!("Janitor Runner application initialized successfully");
 
         Ok(Application {
             state: app_state,
-            config: self.config,
+            run_timeout_minutes: self.run_timeout_minutes,
             backup_directory: self.backup_directory,
         })
     }
@@ -365,22 +356,17 @@ impl ApplicationBuilder {
 pub struct Application {
     /// Application state.
     pub state: Arc<AppState>,
-    /// Application configuration.
-    config: RunnerConfig,
+    /// Watchdog run timeout in minutes.
+    run_timeout_minutes: u64,
     /// Optional backup artifact directory, polled by a periodic task
     /// that drains it into the main artifact manager.
     backup_directory: Option<std::path::PathBuf>,
 }
 
 impl Application {
-    /// Create a new application builder.
-    pub fn builder() -> ApplicationBuilder {
-        ApplicationBuilder::new()
-    }
-
     /// Create a new application builder from configuration.
-    pub fn builder_from_config(config: RunnerConfig) -> ApplicationBuilder {
-        ApplicationBuilder::from_config(config)
+    pub fn builder(config: janitor::config::Config) -> ApplicationBuilder {
+        ApplicationBuilder::new(config)
     }
 
     /// Create a new application builder from config file.
@@ -411,7 +397,7 @@ impl Application {
         // abandoned on process exit.
         let watchdog_state = self.state.clone();
         let watchdog_config =
-            crate::watchdog::WatchdogConfig::from_worker_config(&self.config.worker);
+            crate::watchdog::WatchdogConfig::from_run_timeout_minutes(self.run_timeout_minutes);
         tokio::spawn(async move {
             let mut watchdog = crate::watchdog::Watchdog::new(
                 watchdog_state.database.clone(),
@@ -562,7 +548,7 @@ impl Application {
         };
 
         // Apply timeout to shutdown process
-        tokio::time::timeout(self.config.shutdown_timeout(), shutdown_future)
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, shutdown_future)
             .await
             .map_err(|_| ApplicationError::ShutdownTimeout)?
     }
@@ -726,27 +712,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_application_config_default() {
-        let config = ApplicationConfig::default();
-        // Default config may not have database configured
-        assert!(config.enable_graceful_shutdown);
-        assert_eq!(config.shutdown_timeout, Duration::from_secs(30));
+    fn test_builder_from_textproto_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("janitor.conf");
+        std::fs::write(
+            &path,
+            r#"
+database_location: "postgresql://test/janitor"
+redis_location: "redis://localhost:6379"
+campaign {
+  name: "lintian-fixes"
+  branch_name: "lintian-fixes"
+}
+"#,
+        )
+        .unwrap();
+
+        let builder = ApplicationBuilder::from_file(&path).unwrap();
+        assert_eq!(
+            builder.config.database_location.as_deref(),
+            Some("postgresql://test/janitor")
+        );
+        assert_eq!(
+            builder.config.redis_location.as_deref(),
+            Some("redis://localhost:6379")
+        );
+        assert_eq!(builder.config.campaign.len(), 1);
+        builder.validate().unwrap();
     }
 
-    #[tokio::test]
-    async fn test_application_builder() {
-        let builder = Application::builder()
-            .with_database_url("postgresql://test/janitor".to_string())
-            .with_redis_url(Some("redis://localhost:6379".to_string()));
+    #[test]
+    fn test_builder_from_file_rejects_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("janitor.conf");
+        std::fs::write(&path, "[database]\nurl = \"postgresql://test/janitor\"\n").unwrap();
 
-        // We can't actually build without a real database, but we can test the builder pattern
-        assert_eq!(
-            builder.config.database().unwrap().url,
-            "postgresql://test/janitor"
-        );
-        assert_eq!(
-            builder.config.redis().as_ref().map(|r| &r.url),
-            Some(&"redis://localhost:6379".to_string())
-        );
+        assert!(matches!(
+            ApplicationBuilder::from_file(&path),
+            Err(ApplicationError::Configuration(_))
+        ));
+    }
+
+    #[test]
+    fn test_validate_requires_database_and_redis() {
+        let mut config = janitor::config::Config::new();
+        config.redis_location = Some("redis://localhost".to_string());
+        assert!(ApplicationBuilder::new(config.clone()).validate().is_err());
+
+        config.database_location = Some("postgresql://localhost/janitor".to_string());
+        config.redis_location = None;
+        assert!(ApplicationBuilder::new(config.clone()).validate().is_err());
+
+        config.redis_location = Some("redis://localhost".to_string());
+        ApplicationBuilder::new(config.clone()).validate().unwrap();
+
+        assert!(ApplicationBuilder::new(config)
+            .with_run_timeout_minutes(0)
+            .validate()
+            .is_err());
     }
 }
