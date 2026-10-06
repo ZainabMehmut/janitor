@@ -5,7 +5,8 @@ use crate::{
     AptRepositoryError, HashedFile, PackageFile, Release, ReleaseBuilder, Repository, Result,
     SourceFile,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tempfile::TempPath;
 use tokio::fs;
 
 /// Async version of the Repository with tokio support.
@@ -58,6 +59,11 @@ impl AsyncRepository {
 
         let mut release = release_builder.build()?;
 
+        // Index files are written to temporary files and only renamed
+        // into place once every index has been generated, so a failure
+        // leaves the previous indices in place.
+        let mut pending: Vec<(TempPath, PathBuf)> = Vec::new();
+
         // Generate files for each component and architecture
         for component in &self.inner.components {
             // Create component directory
@@ -76,7 +82,7 @@ impl AsyncRepository {
                 let packages = package_provider
                     .get_packages(&self.inner.suite, component, arch)
                     .await?;
-                let packages_files = self
+                let (packages_files, temp_paths) = self
                     .write_compressed_file_async(
                         &arch_dir,
                         "Packages",
@@ -99,9 +105,14 @@ impl AsyncRepository {
 
                 // Create by-hash directory structure if enabled
                 if self.inner.acquire_by_hash {
-                    self.create_by_hash_links_async(&arch_dir, &packages_files)
+                    self.create_by_hash_links_async(&arch_dir, &packages_files, &temp_paths)
                         .await?;
                 }
+                pending.extend(
+                    temp_paths
+                        .into_iter()
+                        .zip(packages_files.iter().map(|file| arch_dir.join(&file.path))),
+                );
             }
 
             // Generate source package files
@@ -113,7 +124,7 @@ impl AsyncRepository {
             let sources = source_provider
                 .get_sources(&self.inner.suite, component)
                 .await?;
-            let sources_files = self
+            let (sources_files, temp_paths) = self
                 .write_compressed_file_async(&source_dir, "Sources", sources.to_string().as_bytes())
                 .await?;
 
@@ -132,9 +143,18 @@ impl AsyncRepository {
 
             // Create by-hash directory structure if enabled
             if self.inner.acquire_by_hash {
-                self.create_by_hash_links_async(&source_dir, &sources_files)
+                self.create_by_hash_links_async(&source_dir, &sources_files, &temp_paths)
                     .await?;
             }
+            pending.extend(
+                temp_paths
+                    .into_iter()
+                    .zip(sources_files.iter().map(|file| source_dir.join(&file.path))),
+            );
+        }
+
+        for (temp_path, path) in pending {
+            temp_path.persist(&path).map_err(|e| e.error)?;
         }
 
         // Write the Release file
@@ -144,19 +164,21 @@ impl AsyncRepository {
         Ok(release)
     }
 
-    /// Write a file with multiple compression formats asynchronously.
+    /// Write a file with multiple compression formats to temporary
+    /// files in `dir`. Returns the hashed file records along with the
+    /// temporary paths, which the caller renames into place.
     async fn write_compressed_file_async<P: AsRef<Path>>(
         &self,
         dir: P,
         basename: &str,
         content: &[u8],
-    ) -> Result<Vec<HashedFile>> {
+    ) -> Result<(Vec<HashedFile>, Vec<TempPath>)> {
         let dir = dir.as_ref();
         let mut files = Vec::new();
+        let mut temp_paths = Vec::new();
 
         for &compression in &self.inner.compressions {
             let filename = format!("{}{}", basename, compression.extension());
-            let filepath = dir.join(&filename);
 
             // Compress the content
             let compressed_content = compression.compress(content)?;
@@ -165,23 +187,29 @@ impl AsyncRepository {
             let (size, hashes) =
                 crate::hash::hash_data(&compressed_content, &self.inner.hash_algorithms);
 
-            // Write the file asynchronously
-            fs::write(&filepath, &compressed_content).await?;
+            let temp_path = tempfile::Builder::new()
+                .prefix(&filename)
+                .tempfile_in(dir)?
+                .into_temp_path();
+            fs::write(&temp_path, &compressed_content).await?;
 
             // Create the hashed file record
             let mut hashed_file = HashedFile::new(filename, size);
             hashed_file.hashes = hashes;
             files.push(hashed_file);
+            temp_paths.push(temp_path);
         }
 
-        Ok(files)
+        Ok((files, temp_paths))
     }
 
-    /// Create by-hash directory structure and links asynchronously.
+    /// Copy each of `files`, whose contents are at `sources`, into the
+    /// by-hash directory structure.
     async fn create_by_hash_links_async<P: AsRef<Path>>(
         &self,
         base_dir: P,
         files: &[HashedFile],
+        sources: &[TempPath],
     ) -> Result<()> {
         let base_dir = base_dir.as_ref();
 
@@ -191,13 +219,9 @@ impl AsyncRepository {
                 .await
                 .map_err(|e| AptRepositoryError::DirectoryCreation(e.to_string()))?;
 
-            for file in files {
+            for (file, source_path) in files.iter().zip(sources) {
                 if let Some(hash) = file.get_hash(algorithm) {
-                    let source_path = base_dir.join(&file.path);
-                    let hash_path = by_hash_dir.join(hash);
-
-                    // Copy the file to the by-hash location
-                    fs::copy(&source_path, &hash_path).await?;
+                    fs::copy(source_path, by_hash_dir.join(hash)).await?;
                 }
             }
         }
@@ -441,6 +465,101 @@ mod tests {
         assert_eq!(release.origin(), Some("Test".to_string()));
         assert_eq!(release.suite(), Some("test".to_string()));
         assert!(!release.files().is_empty());
+    }
+
+    struct FailingSourceProvider;
+
+    #[async_trait::async_trait]
+    impl AsyncSourceProvider for FailingSourceProvider {
+        async fn get_sources(&self, _suite: &str, _component: &str) -> Result<SourceFile> {
+            Err(AptRepositoryError::InvalidSourceData("broken".to_string()))
+        }
+    }
+
+    fn package_provider_with(name: &str) -> AsyncMemoryPackageProvider {
+        let mut provider = AsyncMemoryPackageProvider::new();
+        let mut packages = PackageFile::new();
+        packages.add_package(crate::packages::new_package(
+            name, "1.0.0", "amd64", "test.deb", 1024,
+        ));
+        provider.add_packages("test", "main", "amd64", packages);
+        provider
+    }
+
+    fn test_repository() -> AsyncRepository {
+        AsyncRepository::new(
+            RepositoryBuilder::new()
+                .origin("Test")
+                .suite("test")
+                .architectures(vec!["amd64".to_string()])
+                .components(vec!["main".to_string()])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_failed_generation_keeps_old_indices() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        let async_repo = test_repository();
+
+        async_repo
+            .generate_repository(
+                repo_path,
+                &package_provider_with("old-pkg"),
+                &AsyncMemorySourceProvider::new(),
+            )
+            .await
+            .unwrap();
+        let old_packages = fs::read_to_string(repo_path.join("main/binary-amd64/Packages"))
+            .await
+            .unwrap();
+        let old_release = fs::read_to_string(repo_path.join("Release")).await.unwrap();
+
+        async_repo
+            .generate_repository(
+                repo_path,
+                &package_provider_with("new-pkg"),
+                &FailingSourceProvider,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            fs::read_to_string(repo_path.join("main/binary-amd64/Packages"))
+                .await
+                .unwrap(),
+            old_packages
+        );
+        assert_eq!(
+            fs::read_to_string(repo_path.join("Release")).await.unwrap(),
+            old_release
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generation_leaves_no_temporary_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        test_repository()
+            .generate_repository(
+                repo_path,
+                &package_provider_with("test-pkg"),
+                &AsyncMemorySourceProvider::new(),
+            )
+            .await
+            .unwrap();
+
+        let mut entries: Vec<String> = std::fs::read_dir(repo_path.join("main/binary-amd64"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec!["Packages", "Packages.bz2", "Packages.gz", "by-hash"]
+        );
     }
 
     #[tokio::test]
