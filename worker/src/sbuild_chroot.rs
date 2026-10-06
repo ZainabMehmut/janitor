@@ -23,6 +23,7 @@ pub enum Error {
     NoCacheDirectory,
     LinkBlocked(PathBuf),
     BuildFailed(String),
+    Interrupted,
     Io(PathBuf, std::io::Error),
     InvalidChrootName(String),
     IncompatibleChrootMode(String),
@@ -87,6 +88,7 @@ impl std::fmt::Display for Error {
                 path.display()
             ),
             Error::BuildFailed(e) => write!(f, "{}", e),
+            Error::Interrupted => write!(f, "interrupted by a signal"),
             Error::Io(path, e) => write!(f, "{}: {}", path.display(), e),
             Error::InvalidChrootName(name) => write!(f, "invalid chroot name: {:?}", name),
             Error::IncompatibleChrootMode(e) => write!(f, "{}", e),
@@ -423,6 +425,75 @@ pub fn run_command_with_input(command: &[String], input: Option<&str>) -> Result
         )));
     }
     Ok(())
+}
+
+/// Runs commands and stops them when SIGINT or SIGTERM arrives.
+pub struct InterruptibleRunner {
+    runtime: tokio::runtime::Runtime,
+    sigint: tokio::signal::unix::Signal,
+    sigterm: tokio::signal::unix::Signal,
+}
+
+impl InterruptibleRunner {
+    /// Start catching SIGINT and SIGTERM, for the rest of the life of the process.
+    pub fn new() -> std::io::Result<Self> {
+        use tokio::signal::unix::{signal, SignalKind};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()?;
+        let (sigint, sigterm) = {
+            let _guard = runtime.enter();
+            (
+                signal(SignalKind::interrupt())?,
+                signal(SignalKind::terminate())?,
+            )
+        };
+        Ok(Self {
+            runtime,
+            sigint,
+            sigterm,
+        })
+    }
+
+    /// Run a command line; on a signal, stop it, wait and return `Error::Interrupted`.
+    pub fn run(&mut self, command: &[String]) -> Result<(), Error> {
+        let unable = |e| Error::BuildFailed(format!("unable to run {}: {}", command[0], e));
+        let Self {
+            runtime,
+            sigint,
+            sigterm,
+        } = self;
+        let status = runtime.block_on(async {
+            let mut child = tokio::process::Command::new(&command[0])
+                .args(&command[1..])
+                .spawn()
+                .map_err(unable)?;
+            tokio::select! {
+                status = child.wait() => return status.map_err(unable),
+                _ = sigint.recv() => {}
+                _ = sigterm.recv() => {}
+            }
+            if let Some(pid) = child.id() {
+                // SIGTERM rather than SIGKILL, so that the command can clean up
+                let pid = nix::unistd::Pid::from_raw(pid as i32);
+                let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
+            }
+            // A second signal kills a command that does not stop
+            tokio::select! {
+                _ = child.wait() => {}
+                _ = sigint.recv() => { let _ = child.kill().await; }
+                _ = sigterm.recv() => { let _ = child.kill().await; }
+            }
+            Err(Error::Interrupted)
+        })?;
+        if !status.success() {
+            return Err(Error::BuildFailed(format!(
+                "{} failed: {}",
+                command[0], status
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Create a scratch directory that sbuild does not take for a chroot.
