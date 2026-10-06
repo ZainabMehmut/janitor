@@ -1,11 +1,10 @@
 //! Minimal shared web helpers for the archive service: a plain
-//! `/health` endpoint, a placeholder `/metrics` endpoint, and a
-//! middleware hook. Kept local so this crate stays self-contained.
+//! `/health` endpoint and a placeholder `/metrics` endpoint. Kept
+//! local so this crate stays self-contained.
 
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
-    Router,
 };
 
 /// `GET /health` -- plain `"ok"` body.
@@ -23,14 +22,4 @@ pub async fn metrics_ok() -> Response {
         String::new(),
     )
         .into_response()
-}
-
-/// No-op middleware application. Returns the router untouched and
-/// leaves per-request concerns (timeouts, logging) to `tower_http`
-/// layers callers explicitly opt into.
-pub fn apply_standard_middleware<S: Clone + Send + Sync + 'static>(
-    router: Router<S>,
-    _web_config: &janitor::shared_config::WebConfig,
-) -> Router<S> {
-    router
 }

@@ -717,7 +717,7 @@ mod tests {
     /// Build a bare-bones ArchiveConfig with the given repositories
     /// and optional protobuf runtime_config. Kept in the test
     /// module because production code goes through
-    /// `from_env_with_prefix` -- the tests need cheap in-memory
+    /// `from_janitor_config` -- the tests need cheap in-memory
     /// construction to exercise `build_campaign_mapping`.
     fn make_archive_config(
         repos: Vec<AptRepositoryConfig>,
@@ -745,7 +745,6 @@ mod tests {
             codename: suite.to_string(),
             architectures: vec!["amd64".to_string()],
             components: vec!["main".to_string()],
-            base_url: format!("http://x/{}", name),
             base_path: PathBuf::from(format!("/tmp/{}", name)),
             by_hash: true,
         }
