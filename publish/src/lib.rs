@@ -1186,10 +1186,15 @@ fn resolve_redirects(url: &url::Url) -> url::Url {
 /// # Arguments
 /// * `url_a` - The first branch URL
 /// * `url_b` - The second branch URL
+/// * `possible_transports` - Optional list of transports to reuse
 ///
 /// # Returns
 /// `true` if the branches match, `false` otherwise
-pub fn branches_match(url_a: Option<&url::Url>, url_b: Option<&url::Url>) -> bool {
+pub fn branches_match(
+    url_a: Option<&url::Url>,
+    url_b: Option<&url::Url>,
+    mut possible_transports: Option<&mut Vec<breezyshim::transport::Transport>>,
+) -> bool {
     use silver_platter::vcs::{open_branch, BranchOpenError};
     if url_a == url_b {
         return true;
@@ -1218,12 +1223,12 @@ pub fn branches_match(url_a: Option<&url::Url>, url_b: Option<&url::Url>) -> boo
     {
         return false;
     }
-    let branch_a = match open_branch(url_a, None, None, None) {
+    let branch_a = match open_branch(url_a, possible_transports.as_deref_mut(), None, None) {
         Ok(branch) => branch,
         Err(BranchOpenError::Missing { .. }) => return false,
         Err(e) => panic!("Unexpected error: {:?}", e),
     };
-    let branch_b = match open_branch(url_b, None, None, None) {
+    let branch_b = match open_branch(url_b, possible_transports, None, None) {
         Ok(branch) => branch,
         Err(BranchOpenError::Missing { .. }) => return false,
         Err(e) => panic!("Unexpected error: {:?}", e),
@@ -3426,7 +3431,13 @@ async fn check_existing_mp(
     // codebase rows are keyed on. We keep parity.
     if rate_limit_bucket.is_none() {
         if let Some(target_url) = &target_branch_url {
-            match crate::state::guess_codebase_from_branch_url(conn, target_url, None).await {
+            match crate::state::guess_codebase_from_branch_url(
+                conn,
+                target_url,
+                possible_transports.as_deref_mut(),
+            )
+            .await
+            {
                 Ok(Some(cb)) => {
                     log::info!(
                         "Guessed codebase ({}) for {} from target branch URL.",
@@ -3994,7 +4005,11 @@ async fn check_existing_mp(
     // proposal against it, so skip.
     let mp_branch = mp_run.branch_url.parse::<url::Url>().ok();
     let last_run_branch = last_run.branch_url.parse::<url::Url>().ok();
-    if !branches_match(mp_branch.as_ref(), last_run_branch.as_ref()) {
+    if !branches_match(
+        mp_branch.as_ref(),
+        last_run_branch.as_ref(),
+        possible_transports.as_deref_mut(),
+    ) {
         log::warn!(
             "{}: Remote branch URL appears to have moved: {:?} -> {:?}",
             mp_url,

@@ -81,6 +81,7 @@ fn branches_match(url_a: Option<&str>, url_b: Option<&str>) -> PyResult<bool> {
     Ok(janitor_publish::branches_match(
         url_a.as_ref(),
         url_b.as_ref(),
+        None,
     ))
 }
 
