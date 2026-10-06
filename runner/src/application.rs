@@ -67,11 +67,11 @@ impl ApplicationBuilder {
         self
     }
 
-    /// Set the public VCS location used for URLs handed to workers.
-    /// Corresponds to the `--public-vcs-location` CLI flag. When unset,
-    /// `git_location` from the config file is used.
-    pub fn with_public_vcs_location(mut self, url: Option<String>) -> Self {
-        self.public_vcs_location = url;
+    /// Set the public VCS location used for URLs handed to workers:
+    /// a base URL serving `git/` and `bzr/`, or `git=URL,bzr=URL`.
+    /// Corresponds to the required `--public-vcs-location` CLI flag.
+    pub fn with_public_vcs_location(mut self, location: String) -> Self {
+        self.public_vcs_location = Some(location);
         self
     }
 
@@ -146,6 +146,17 @@ impl ApplicationBuilder {
         log::info!("Initializing Janitor Runner application...");
 
         self.validate()?;
+
+        let public_vcs_location = self.public_vcs_location.as_deref().ok_or_else(|| {
+            ApplicationError::Configuration("public VCS location must be set".to_string())
+        })?;
+        let public_vcs_managers =
+            janitor::vcs::get_vcs_managers(public_vcs_location).map_err(|e| {
+                ApplicationError::Configuration(format!(
+                    "Invalid public VCS location {}: {}",
+                    public_vcs_location, e
+                ))
+            })?;
 
         // Initialize metrics first so other systems can use them
         log::info!("Initializing metrics collection...");
@@ -289,10 +300,6 @@ impl ApplicationBuilder {
             artifact_manager.clone(),
         ));
 
-        let public_vcs_location = self
-            .public_vcs_location
-            .unwrap_or_else(|| janitor_config.git_location().to_string());
-
         let app_state = Arc::new(AppState {
             database,
             active_runs,
@@ -308,7 +315,7 @@ impl ApplicationBuilder {
             resume_service,
             health_checker,
             public_apt_archive_location: self.public_apt_archive_location,
-            public_vcs_location,
+            public_vcs_managers: Arc::new(public_vcs_managers),
             avoid_hosts: self.avoid_hosts,
         });
 

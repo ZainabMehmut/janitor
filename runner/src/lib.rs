@@ -1709,9 +1709,9 @@ pub struct AppState {
     /// line for the worker; when None, no extra apt sources are
     /// sent.
     pub public_apt_archive_location: Option<String>,
-    /// Base URL of the VCS store as seen by workers -- supplied via
-    /// `--public-vcs-location`, defaulting to `git_location`.
-    pub public_vcs_location: String,
+    /// VCS stores as seen by workers -- supplied via
+    /// `--public-vcs-location`.
+    pub public_vcs_managers: Arc<HashMap<janitor::vcs::VcsType, Box<dyn janitor::vcs::VcsManager>>>,
     /// Hosts to avoid when assigning work -- supplied via
     /// `--avoid-host`.
     pub avoid_hosts: Vec<String>,

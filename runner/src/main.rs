@@ -23,8 +23,7 @@ struct Args {
 
     #[clap(long)]
     /// Public vcs location (used for URLs handed to worker).
-    /// If omitted, `git_location` from the config file is used.
-    public_vcs_location: Option<String>,
+    public_vcs_location: String,
 
     #[clap(long)]
     /// Base location for our own APT archive

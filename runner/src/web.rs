@@ -885,6 +885,45 @@ pub(crate) enum AssignmentValidation {
     NotInVcs,
 }
 
+/// Name of the branch the VCS store caches a codebase's main branch
+/// under: `<vendor>/latest` for Debian builds, `main` otherwise. None
+/// when the Debian vendor can't be determined.
+fn cache_branch_name(
+    campaign_config: &CampaignConfig,
+    config: &janitor::config::Config,
+) -> Option<String> {
+    let Some(debian_config) = &campaign_config.debian_build else {
+        return Some("main".to_string());
+    };
+    let vendor = config
+        .get_distribution(&debian_config.base_distribution)
+        .and_then(|d| d.vendor.clone());
+    #[cfg(feature = "debian")]
+    let vendor = vendor.or_else(|| crate::dpkg_vendor().map(|v| v.to_lowercase()));
+    Some(format!("{}/latest", vendor?))
+}
+
+/// The cached branch URL and target repository URL handed to the
+/// worker, from the public VCS store for the codebase's VCS type.
+/// Both are None when the store doesn't serve that VCS.
+fn worker_vcs_urls(
+    managers: &HashMap<janitor::vcs::VcsType, Box<dyn janitor::vcs::VcsManager>>,
+    vcs_type: Option<&str>,
+    codebase: &str,
+    cache_branch_name: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let Some(manager) = vcs_type
+        .and_then(|t| t.parse::<janitor::vcs::VcsType>().ok())
+        .and_then(|t| managers.get(&t))
+    else {
+        return (None, None);
+    };
+    (
+        cache_branch_name.map(|name| manager.get_branch_url(codebase, name).to_string()),
+        Some(manager.get_repository_url(codebase).to_string()),
+    )
+}
+
 /// Pure decision matrix for assignment validation. Inputs:
 ///
 /// - `campaign_known`: whether the queue item's campaign appears
@@ -3492,17 +3531,19 @@ async fn assign_work_internal(
     // See janitor/src/api/worker.rs::Assignment for the exact shape.
     let (extra_env, clean_command) = janitor::utils::splitout_env(&assignment.queue_item.command);
 
-    let target_repo_url = format!(
-        "{}/{}",
-        state.public_vcs_location.trim_end_matches('/'),
-        assignment.queue_item.codebase
+    let cache_branch = cache_branch_name(&campaign_config, &state.config);
+    if cache_branch.is_none() {
+        log::error!(
+            "Unable to determine vendor for {}; not sending a cached branch URL",
+            assignment.queue_item.codebase
+        );
+    }
+    let (cached_url, target_repo_url) = worker_vcs_urls(
+        &state.public_vcs_managers,
+        assignment.vcs_info.vcs_type.as_deref(),
+        &assignment.queue_item.codebase,
+        cache_branch.as_deref(),
     );
-
-    let cached_url = assignment
-        .vcs_info
-        .branch_url
-        .clone()
-        .map(|_| target_repo_url.clone());
 
     // Colocated branches the worker must fetch alongside the main
     // branch (`upstream`, `pristine-tar`, … for Debian packaging).
@@ -3542,7 +3583,10 @@ async fn assign_work_internal(
         "default-empty": campaign_config.default_empty,
     });
 
-    let target_repository = json!({ "url": target_repo_url });
+    let target_repository = json!({
+        "url": target_repo_url,
+        "vcs_type": assignment.vcs_info.vcs_type,
+    });
 
     // Environment merged from config committer + command prefix
     // (DEB_UPDATE_CHANGELOG=auto ...). Copy into both codemod and
@@ -3990,6 +4034,7 @@ mod tests {
         assignment_validation_outcome, candidate_preflight, main_branch_name, AssignmentValidation,
         CandidatePreflight,
     };
+    use crate::CampaignConfig;
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -4041,6 +4086,76 @@ mod tests {
         assert_eq!(
             assignment_validation_outcome(true, false, true),
             AssignmentValidation::Ok
+        );
+    }
+
+    #[test]
+    fn test_worker_vcs_urls_inserts_vcs_segment() {
+        let managers = janitor::vcs::get_vcs_managers("https://janitor.example.com/").unwrap();
+        assert_eq!(
+            super::worker_vcs_urls(&managers, Some("git"), "foo", Some("debian/latest")),
+            (
+                Some("https://janitor.example.com/git/foo,branch=debian/latest".to_string()),
+                Some("https://janitor.example.com/git/foo".to_string()),
+            )
+        );
+        assert_eq!(
+            super::worker_vcs_urls(&managers, Some("bzr"), "foo", None),
+            (
+                None,
+                Some("https://janitor.example.com/bzr/foo".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn test_worker_vcs_urls_unsupported_vcs() {
+        let managers = janitor::vcs::get_vcs_managers("git=https://git.example.com/").unwrap();
+        assert_eq!(
+            super::worker_vcs_urls(&managers, Some("bzr"), "foo", Some("main")),
+            (None, None)
+        );
+        assert_eq!(
+            super::worker_vcs_urls(&managers, None, "foo", Some("main")),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn test_cache_branch_name() {
+        let config = janitor::config::read_string(
+            r#"
+distribution {
+  name: "unstable"
+  vendor: "Debian"
+}
+"#,
+        )
+        .unwrap();
+        let generic = CampaignConfig {
+            generic_build: None,
+            debian_build: None,
+            force_build: false,
+            default_empty: false,
+        };
+        assert_eq!(
+            super::cache_branch_name(&generic, &config),
+            Some("main".to_string())
+        );
+        let debian = CampaignConfig {
+            debian_build: Some(crate::builder::DebianBuildConfig {
+                base_distribution: "unstable".to_string(),
+                build_distribution: None,
+                build_suffix: None,
+                build_command: None,
+                chroot: None,
+                extra_build_distribution: vec![],
+            }),
+            ..generic
+        };
+        assert_eq!(
+            super::cache_branch_name(&debian, &config),
+            Some("Debian/latest".to_string())
         );
     }
 

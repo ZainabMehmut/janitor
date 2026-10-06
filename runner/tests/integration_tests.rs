@@ -20,7 +20,10 @@ async fn test_application_lifecycle() {
     // Test the complete application lifecycle: build, start, health check, shutdown
 
     let config = test_config();
-    let app = Application::builder(config).build().await;
+    let app = Application::builder(config)
+        .with_public_vcs_location("http://localhost:9923/".to_string())
+        .build()
+        .await;
 
     // Application should build successfully (or fail with expected database error)
     match app {
@@ -253,7 +256,10 @@ async fn test_graceful_shutdown() {
     // Test graceful shutdown functionality
 
     let config = test_config();
-    let app = Application::builder(config).build().await;
+    let app = Application::builder(config)
+        .with_public_vcs_location("http://localhost:9923/".to_string())
+        .build()
+        .await;
 
     if let Ok(app) = app {
         // Test that shutdown doesn't panic
@@ -326,7 +332,10 @@ async fn test_system_integration() {
     use janitor_runner::metrics::MetricsCollector;
 
     let config = test_config();
-    let app_result = Application::builder(config).build().await;
+    let app_result = Application::builder(config)
+        .with_public_vcs_location("http://localhost:9923/".to_string())
+        .build()
+        .await;
 
     match app_result {
         Ok(app) => {

@@ -420,7 +420,8 @@ pub async fn create_test_app_state_with_config(
         artifact_manager.clone(),
     ));
 
-    let public_vcs_location = config.git_location().to_string();
+    let public_vcs_managers =
+        janitor::vcs::get_vcs_managers("http://localhost:9923/").expect("valid test VCS location");
 
     Ok(Arc::new(AppState {
         database: runner_db_arc,
@@ -437,7 +438,7 @@ pub async fn create_test_app_state_with_config(
         resume_service,
         health_checker,
         public_apt_archive_location: None,
-        public_vcs_location,
+        public_vcs_managers: Arc::new(public_vcs_managers),
         avoid_hosts: Vec::new(),
     }))
 }
