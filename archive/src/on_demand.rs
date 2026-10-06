@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use apt_repository::{
     AptRepositoryError, AsyncPackageProvider, AsyncRepository, AsyncSourceProvider, Compression,
-    HashAlgorithm, PackageFile, RepositoryBuilder, Result as AptResult, SourceFile,
+    HashAlgorithm, PackageFile, Repository, RepositoryBuilder, Result as AptResult, SourceFile,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -298,6 +298,44 @@ impl AsyncSourceProvider for PrecomputedSourceProvider {
     }
 }
 
+/// Build the `Repository` used for an on-demand dists tree.
+fn on_demand_repository(
+    origin: &str,
+    description: &str,
+    suite_name: &str,
+    arches: &[String],
+    components: Vec<String>,
+) -> ArchiveResult<Repository> {
+    RepositoryBuilder::new()
+        .origin(origin)
+        .label(description)
+        .suite(suite_name)
+        .codename(suite_name)
+        .architectures(arches.to_vec())
+        .components(components)
+        .acquire_by_hash(true)
+        .compressions(vec![
+            Compression::None,
+            Compression::Gzip,
+            Compression::Bzip2,
+        ])
+        // Compute all four hashes (MD5, SHA1, SHA256, SHA512). The
+        // periodic / /publish path uses the same set -- keep them
+        // aligned so an on-demand tree looks identical to a suite
+        // tree.
+        .hash_algorithms(vec![
+            HashAlgorithm::Md5,
+            HashAlgorithm::Sha1,
+            HashAlgorithm::Sha256,
+            HashAlgorithm::Sha512,
+        ])
+        // Keep 4 generations of each compressed index, like Python.
+        .by_hash_keep(12)
+        .description(description)
+        .build()
+        .map_err(|e: AptRepositoryError| ArchiveError::RepositoryGeneration(e.to_string()))
+}
+
 /// Refresh (or lazily generate) the dists tree for the given
 /// `(kind, id)` under `dists_dir`. Returns `Ok(())` even if nothing
 /// needed to be regenerated -- the caller is expected to then serve
@@ -355,32 +393,13 @@ pub async fn refresh_on_demand_dists(
     let pkg_provider = PrecomputedPackageProvider::new(scanner.clone(), build_infos.clone());
     let src_provider = PrecomputedSourceProvider::new(scanner, build_infos);
 
-    let repository = RepositoryBuilder::new()
-        .origin(origin)
-        .label(&description)
-        .suite(&suite_name)
-        .codename(&suite_name)
-        .architectures(arches.to_vec())
-        .components(resolved_components)
-        .acquire_by_hash(true)
-        .compressions(vec![
-            Compression::None,
-            Compression::Gzip,
-            Compression::Bzip2,
-        ])
-        // Compute all four hashes (MD5, SHA1, SHA256, SHA512). The
-        // periodic / /publish path uses the same set -- keep them
-        // aligned so an on-demand tree looks identical to a suite
-        // tree.
-        .hash_algorithms(vec![
-            HashAlgorithm::Md5,
-            HashAlgorithm::Sha1,
-            HashAlgorithm::Sha256,
-            HashAlgorithm::Sha512,
-        ])
-        .description(&description)
-        .build()
-        .map_err(|e: AptRepositoryError| ArchiveError::RepositoryGeneration(e.to_string()))?;
+    let repository = on_demand_repository(
+        origin,
+        &description,
+        &suite_name,
+        arches,
+        resolved_components,
+    )?;
     let async_repo = AsyncRepository::new(repository);
 
     async_repo
@@ -479,6 +498,39 @@ mod tests {
         tokio::fs::write(&path, b"Origin: janitor\n").await.unwrap();
         let future: DateTime<Utc> = (SystemTime::now() + Duration::from_secs(3600)).into();
         assert!(!is_fresh(&path, Some(future)).await);
+    }
+
+    /// Like Python's write_suite_files, keep only the newest 12 files
+    /// in each by-hash directory.
+    #[tokio::test]
+    async fn test_on_demand_generation_prunes_by_hash_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repository = on_demand_repository(
+            "janitor",
+            "Run 1",
+            "run/1",
+            &["amd64".to_string()],
+            vec!["main".to_string()],
+        )
+        .unwrap();
+        let by_hash_dir = tmp.path().join("main/binary-amd64/by-hash/SHA256");
+        std::fs::create_dir_all(&by_hash_dir).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        for i in 0..20 {
+            let f = std::fs::File::create(by_hash_dir.join(format!("old{}", i))).unwrap();
+            f.set_modified(old).unwrap();
+        }
+
+        AsyncRepository::new(repository)
+            .generate_repository(
+                tmp.path(),
+                &apt_repository::async_repository::AsyncMemoryPackageProvider::new(),
+                &apt_repository::async_repository::AsyncMemorySourceProvider::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read_dir(&by_hash_dir).unwrap().count(), 12);
     }
 
     #[tokio::test]
