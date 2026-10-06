@@ -420,6 +420,8 @@ pub async fn create_test_app_state_with_config(
         artifact_manager.clone(),
     ));
 
+    let public_vcs_location = config.git_location().to_string();
+
     Ok(Arc::new(AppState {
         database: runner_db_arc,
         active_runs,
@@ -435,6 +437,8 @@ pub async fn create_test_app_state_with_config(
         resume_service,
         health_checker,
         public_apt_archive_location: None,
+        public_vcs_location,
+        avoid_hosts: Vec::new(),
     }))
 }
 

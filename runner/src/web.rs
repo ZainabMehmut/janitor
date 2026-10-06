@@ -12,7 +12,6 @@ use axum::{
     Extension, Json, Router,
 };
 use chrono::Utc;
-use janitor::shared_config::ConfigLoader;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -545,22 +544,7 @@ async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .map(|r| r.to_json())
         .collect();
 
-    // Avoid-hosts come from `JANITOR_AVOID_HOSTS` (CSV), or from the
-    // runner config at `$RUNNER_CONFIG`; same resolution order as
-    // `assign_work_internal`.
-    let avoid_hosts: Vec<String> = if let Ok(env) = std::env::var("JANITOR_AVOID_HOSTS") {
-        parse_avoid_hosts_csv(&env)
-    } else if let Ok(path) = std::env::var("RUNNER_CONFIG") {
-        match crate::config::RunnerConfig::from_file(&path) {
-            Ok(cfg) => cfg.worker.avoid_hosts,
-            Err(e) => {
-                log::debug!("status: failed to load runner config {}: {}", path, e);
-                Vec::new()
-            }
-        }
-    } else {
-        Vec::new()
-    };
+    let avoid_hosts = &state.avoid_hosts;
 
     // Rate-limited hosts come from Redis; emit an ISO-8601 timestamp
     // per host so downstream tooling can compare to `now()`.
@@ -899,22 +883,6 @@ pub(crate) enum AssignmentValidation {
     /// Campaign is not default_empty and the codebase has no
     /// branch_url; aborted with result_code "not-in-vcs".
     NotInVcs,
-}
-
-/// Parse a comma-separated list of hosts from the
-/// `JANITOR_AVOID_HOSTS` environment variable. Empty entries
-/// (consecutive commas or trailing commas) are dropped, and
-/// whitespace around each entry is trimmed. Returns an empty Vec
-/// when the input is empty or all-whitespace. Pulled out of
-/// `assign_work_internal` so the parsing rules can be exhaustively
-/// tested without touching the env.
-pub(crate) fn parse_avoid_hosts_csv(input: &str) -> Vec<String> {
-    input
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
 }
 
 /// Pure decision matrix for assignment validation. Inputs:
@@ -3144,27 +3112,7 @@ async fn assign_work_internal(
     worker_name: String,
     request: AssignRequest,
 ) -> impl IntoResponse {
-    // JANITOR_AVOID_HOSTS overrides the config-file `avoid_hosts` list.
-    let mut excluded_hosts: Vec<String> =
-        if let Ok(avoid_hosts_env) = std::env::var("JANITOR_AVOID_HOSTS") {
-            parse_avoid_hosts_csv(&avoid_hosts_env)
-        } else if let Ok(runner_config_path) = std::env::var("RUNNER_CONFIG") {
-            // Try to load runner-specific config if available
-            match crate::config::RunnerConfig::from_file(&runner_config_path) {
-                Ok(runner_config) => runner_config.worker.avoid_hosts,
-                Err(e) => {
-                    log::warn!(
-                        "Failed to load runner config from {}: {}",
-                        runner_config_path,
-                        e
-                    );
-                    vec![]
-                }
-            }
-        } else {
-            // Default to empty list
-            vec![]
-        };
+    let mut excluded_hosts = state.avoid_hosts.clone();
     if let Some(client_exclusions) = request.exclude_hosts.as_ref() {
         for host in client_exclusions {
             if !excluded_hosts.contains(host) {
@@ -3544,12 +3492,9 @@ async fn assign_work_internal(
     // See janitor/src/api/worker.rs::Assignment for the exact shape.
     let (extra_env, clean_command) = janitor::utils::splitout_env(&assignment.queue_item.command);
 
-    // Config is protobuf-generated; fields are accessed via methods.
-    // `git_location()` returns "" when unset.
-    let public_vcs_location = state.config.git_location();
     let target_repo_url = format!(
         "{}/{}",
-        public_vcs_location.trim_end_matches('/'),
+        state.public_vcs_location.trim_end_matches('/'),
         assignment.queue_item.codebase
     );
 
@@ -4096,46 +4041,6 @@ mod tests {
         assert_eq!(
             assignment_validation_outcome(true, false, true),
             AssignmentValidation::Ok
-        );
-    }
-
-    #[test]
-    fn test_parse_avoid_hosts_csv_simple() {
-        assert_eq!(
-            super::parse_avoid_hosts_csv("github.com,gitlab.com"),
-            vec!["github.com".to_string(), "gitlab.com".to_string()],
-        );
-    }
-
-    #[test]
-    fn test_parse_avoid_hosts_csv_trims_whitespace() {
-        assert_eq!(
-            super::parse_avoid_hosts_csv(" github.com , gitlab.com  "),
-            vec!["github.com".to_string(), "gitlab.com".to_string()],
-        );
-    }
-
-    #[test]
-    fn test_parse_avoid_hosts_csv_drops_empty_entries() {
-        assert_eq!(
-            super::parse_avoid_hosts_csv("github.com,,gitlab.com,"),
-            vec!["github.com".to_string(), "gitlab.com".to_string()],
-        );
-    }
-
-    #[test]
-    fn test_parse_avoid_hosts_csv_empty_input() {
-        let empty: Vec<String> = Vec::new();
-        assert_eq!(super::parse_avoid_hosts_csv(""), empty);
-        assert_eq!(super::parse_avoid_hosts_csv("   "), empty);
-        assert_eq!(super::parse_avoid_hosts_csv(",,,"), empty);
-    }
-
-    #[test]
-    fn test_parse_avoid_hosts_csv_single_entry() {
-        assert_eq!(
-            super::parse_avoid_hosts_csv("github.com"),
-            vec!["github.com".to_string()],
         );
     }
 

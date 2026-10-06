@@ -15,7 +15,7 @@ struct Args {
 
     #[clap(long, default_value = "janitor.conf")]
     /// Path to configuration.
-    config: Option<PathBuf>,
+    config: PathBuf,
 
     #[clap(long)]
     /// Backup directory to write files to if artifact or log manager is unreachable.
@@ -51,41 +51,21 @@ async fn main() -> Result<(), i32> {
     // subscriber here (LoggingArgs::init installs env_logger, which
     // conflicts with the tracing-subscriber registry later).
 
-    // Build application from config file or use defaults
-    let config_path = args.config.unwrap_or_else(|| PathBuf::from("janitor.conf"));
-
-    let mut app_builder = if config_path.exists() {
-        Application::builder_from_file(&config_path).map_err(|e| {
-            eprintln!(
-                "Failed to load config from {}: {}",
-                config_path.display(),
-                e
-            );
+    let app_builder = Application::builder_from_file(&args.config)
+        .map_err(|e| {
+            eprintln!("{}", e);
             1
         })?
-    } else {
-        log::info!(
-            "Config file {} not found, using defaults",
-            config_path.display()
-        );
-        Application::builder()
-    };
-
-    // Store values before moving args
-    let listen_address = args.listen_address.clone();
-    let port = args.port;
-    let public_port = args.public_port;
-
-    // Override config with command line arguments
-    app_builder = app_builder
-        .with_listen_address(args.listen_address)
-        .with_port(args.port)
         .with_debug(args.logging.debug)
         .with_backup_directory(args.backup_directory)
         .with_public_apt_archive_location(args.public_apt_archive_location)
         .with_public_vcs_location(args.public_vcs_location)
         .with_run_timeout_minutes(args.run_timeout)
         .with_avoid_hosts(args.avoid_host);
+
+    let listen_address = args.listen_address;
+    let port = args.port;
+    let public_port = args.public_port;
 
     // Build and initialize the application
     let app = app_builder.build().await.map_err(|e| {
