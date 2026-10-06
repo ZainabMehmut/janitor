@@ -55,9 +55,10 @@ impl ApplicationBuilder {
         Ok(Self::new(config))
     }
 
-    /// Set the backup directory used when the main artifact manager is
-    /// unreachable. When set, a periodic task drains the directory into
-    /// the main artifact manager every 15 minutes.
+    /// Set the backup directory. Its `logs` and `artifacts`
+    /// subdirectories are used when the main log or artifact manager
+    /// fails, and the artifacts are uploaded to the main artifact
+    /// manager at startup.
     pub fn with_backup_directory(mut self, path: Option<PathBuf>) -> Self {
         self.backup_directory = path;
         self
@@ -263,6 +264,14 @@ impl ApplicationBuilder {
             })?,
         );
 
+        let (backup_log_manager, backup_artifact_manager) = match &self.backup_directory {
+            Some(dir) => {
+                let (logs, artifacts) = open_backup_managers(dir)?;
+                (Some(logs), Some(artifacts))
+            }
+            None => (None, None),
+        };
+
         // Initialize upload processor. The storage dir is shared with
         // the site pod (mounted via PV at the same path) so logs the
         // worker uploads here can be served straight off disk by the
@@ -333,6 +342,8 @@ impl ApplicationBuilder {
             vcs_manager,
             log_manager,
             artifact_manager,
+            backup_log_manager,
+            backup_artifact_manager,
             error_tracker,
             metrics,
             config: Arc::new(janitor_config),
@@ -353,9 +364,44 @@ impl ApplicationBuilder {
             state: app_state,
             _tracer_guard: tracer_guard,
             run_timeout_minutes: self.run_timeout_minutes,
-            backup_directory: self.backup_directory,
         })
     }
+}
+
+type BackupManagers = (
+    Arc<dyn janitor::logs::LogFileManager>,
+    Arc<dyn janitor::artifacts::ArtifactManager>,
+);
+
+/// Create the `logs` and `artifacts` subdirectories of the
+/// `--backup-directory` and open the backup managers on them.
+fn open_backup_managers(dir: &std::path::Path) -> Result<BackupManagers, ApplicationError> {
+    let logs_dir = dir.join("logs");
+    let artifacts_dir = dir.join("artifacts");
+    for subdir in [&logs_dir, &artifacts_dir] {
+        if !subdir.is_dir() {
+            std::fs::create_dir(subdir).map_err(|e| {
+                ApplicationError::Configuration(format!(
+                    "Could not create backup directory {:?}: {}",
+                    subdir, e
+                ))
+            })?;
+        }
+    }
+    let log_manager = janitor::logs::FileSystemLogFileManager::new(&logs_dir).map_err(|e| {
+        ApplicationError::LogManagement(format!(
+            "Failed to open backup log directory {:?}: {}",
+            logs_dir, e
+        ))
+    })?;
+    let artifact_manager =
+        janitor::artifacts::LocalArtifactManager::new(&artifacts_dir).map_err(|e| {
+            ApplicationError::ArtifactManagement(format!(
+                "Failed to open backup artifact directory {:?}: {}",
+                artifacts_dir, e
+            ))
+        })?;
+    Ok((Arc::new(log_manager), Arc::new(artifact_manager)))
 }
 
 /// Main application struct that manages the runner lifecycle.
@@ -366,9 +412,6 @@ pub struct Application {
     _tracer_guard: Option<janitor::otlp::TracerGuard>,
     /// Watchdog run timeout in minutes.
     run_timeout_minutes: u64,
-    /// Optional backup artifact directory, polled by a periodic task
-    /// that drains it into the main artifact manager.
-    backup_directory: Option<std::path::PathBuf>,
 }
 
 impl Application {
@@ -415,51 +458,24 @@ impl Application {
             watchdog.start().await;
         });
 
-        // If --backup-directory was supplied, spawn a periodic task
-        // that drains the local backup tree into the main artifact
-        // manager every 15 minutes.
-        if let Some(backup_dir) = self.backup_directory.clone() {
+        // Like Python, upload whatever ended up in the backup artifact
+        // directory during a previous run once at startup.
+        if let Some(backup_manager) = self.state.backup_artifact_manager.clone() {
             let artifact_manager = self.state.artifact_manager.clone();
             tokio::spawn(async move {
-                let backup_manager =
-                    match janitor::artifacts::LocalArtifactManager::new(&backup_dir) {
-                        Ok(m) => m,
-                        Err(e) => {
-                            log::error!(
-                                "Failed to open backup artifact directory {:?}: {}",
-                                backup_dir,
-                                e
-                            );
-                            return;
-                        }
-                    };
-                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(15 * 60));
-                // First tick fires immediately; skip it so we don't
-                // race with the rest of startup.
-                ticker.tick().await;
-                loop {
-                    ticker.tick().await;
-                    match janitor::artifacts::upload_backup_artifacts(
-                        &backup_manager,
-                        artifact_manager.as_ref(),
-                    )
-                    .await
-                    {
-                        Ok(done) if !done.is_empty() => {
-                            log::info!(
-                                "Uploaded {} backup artifact sets from {:?}",
-                                done.len(),
-                                backup_dir
-                            );
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            log::warn!(
-                                "Failed to drain backup artifact directory {:?}: {}",
-                                backup_dir,
-                                e
-                            );
-                        }
+                // TODO: Python applied a 15 minute timeout to each
+                // retrieve/store; the Rust artifact managers take no timeout.
+                match janitor::artifacts::upload_backup_artifacts(
+                    backup_manager.as_ref(),
+                    artifact_manager.as_ref(),
+                )
+                .await
+                {
+                    Ok(done) => {
+                        log::info!("Uploaded {} backup artifact sets", done.len());
+                    }
+                    Err(e) => {
+                        log::error!("Failed to upload backup artifacts: {}", e);
                     }
                 }
             });
@@ -778,5 +794,21 @@ campaign {
             .with_run_timeout_minutes(0)
             .validate()
             .is_err());
+    }
+
+    #[test]
+    fn test_open_backup_managers_creates_subdirectories() {
+        let dir = tempfile::tempdir().unwrap();
+        open_backup_managers(dir.path()).unwrap();
+        assert!(dir.path().join("logs").is_dir());
+        assert!(dir.path().join("artifacts").is_dir());
+        // Reusing an existing backup directory works too.
+        open_backup_managers(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn test_open_backup_managers_requires_existing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(open_backup_managers(&dir.path().join("missing")).is_err());
     }
 }

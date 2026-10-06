@@ -1686,6 +1686,10 @@ pub struct AppState {
     pub log_manager: Arc<dyn logs::LogFileManager>,
     /// Artifact storage management system.
     pub artifact_manager: Arc<dyn janitor::artifacts::ArtifactManager>,
+    /// Log manager to fall back to when `log_manager` fails.
+    pub backup_log_manager: Option<Arc<dyn logs::LogFileManager>>,
+    /// Artifact manager to fall back to when `artifact_manager` fails.
+    pub backup_artifact_manager: Option<Arc<dyn janitor::artifacts::ArtifactManager>>,
     /// Error tracking system.
     pub error_tracker: Arc<error_tracking::ErrorTracker>,
     /// Metrics collector.
