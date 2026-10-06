@@ -289,6 +289,11 @@ fn run(args: &Args) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     sbuild_chroot::check_collisions(&jobs).map_err(|e| e.to_string())?;
 
+    let mut runner = if args.dry_run {
+        None
+    } else {
+        Some(sbuild_chroot::InterruptibleRunner::new().map_err(|e| e.to_string())?)
+    };
     for job in &jobs {
         if args.dry_run {
             if job.needs_build(args.force) {
@@ -304,8 +309,8 @@ fn run(args: &Args) -> Result<(), String> {
                     directory.join(name).display()
                 );
             }
-        } else {
-            sbuild_chroot::create(job, args.force, &mut sbuild_chroot::run_command)
+        } else if let Some(runner) = runner.as_mut() {
+            sbuild_chroot::create(job, args.force, &mut |command| runner.run(command))
                 .map_err(|e| e.to_string())?;
         }
     }
