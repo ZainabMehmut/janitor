@@ -5,6 +5,10 @@
 use janitor::publish::MergeProposalStatus;
 use std::collections::HashMap;
 
+#[cfg(test)]
+#[path = "rate_limiter_slow_start_tests.rs"]
+mod slow_start_tests;
+
 /// Status of a rate limit check.
 #[derive(Debug)]
 pub enum RateLimitStatus {
