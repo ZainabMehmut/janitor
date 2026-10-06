@@ -126,7 +126,33 @@ WHERE failure_transient is not True
     // decoding blows up.
     let query = query.build_query_scalar::<Option<PgInterval>>();
     let duration: Option<PgInterval> = query.fetch_optional(conn).await?.flatten();
-    Ok(duration.map(|d| chrono::Duration::microseconds(d.microseconds)))
+    Ok(duration.as_ref().map(interval_to_duration))
+}
+
+/// Convert an interval the way asyncpg does, counting a month as 30 days and
+/// a year as 365 days.
+fn interval_to_duration(interval: &PgInterval) -> Duration {
+    let years = i64::from(interval.months / 12);
+    let months = i64::from(interval.months % 12);
+    Duration::days(i64::from(interval.days) + months * 30 + years * 365)
+        + Duration::microseconds(interval.microseconds)
+}
+
+fn total_microseconds(duration: Duration) -> i128 {
+    i128::from(duration.num_seconds()) * 1_000_000 + i128::from(duration.subsec_nanos() / 1000)
+}
+
+/// Equivalent of Python's `timedelta.total_seconds()`.
+fn total_seconds(duration: Duration) -> f64 {
+    total_microseconds(duration) as f64 / 1e6
+}
+
+/// Equivalent of Python's `timedelta(seconds=seconds)`, which rounds the
+/// fractional part to the nearest microsecond.
+fn duration_from_seconds(seconds: f64) -> Duration {
+    let whole = seconds.trunc();
+    Duration::seconds(whole as i64)
+        + Duration::microseconds(((seconds - whole) * 1e6).round_ties_even() as i64)
 }
 
 /// Estimate the duration of a codebase build for a certain campaign.
@@ -205,7 +231,7 @@ ORDER BY start_time DESC
             continue;
         }
 
-        durations.push(run.duration.microseconds / (1000 * 1000));
+        durations.push(total_seconds(interval_to_duration(&run.duration)));
         total += 1;
         if run.result_code == "success" {
             success += 1;
@@ -255,13 +281,25 @@ ORDER BY start_time DESC
         // If there were no previous runs, then it doesn't really matter that we don't know the context.
         same_context_multiplier = 1.0;
 
-        estimate_duration(conn, codebase, campaign).await?
+        // It's going to be hard to estimate the duration, but other campaigns
+        // for the same codebase might be a good candidate.
+        if let Some(duration) =
+            estimate_duration_campaign_codebase(conn, Some(codebase), None).await?
+        {
+            duration
+        } else if let Some(duration) =
+            estimate_duration_campaign_codebase(conn, None, Some(campaign)).await?
+        {
+            duration
+        } else {
+            Duration::seconds(DEFAULT_ESTIMATED_DURATION)
+        }
     } else {
-        chrono::Duration::seconds(durations.iter().sum::<i64>() / durations.len() as i64)
+        duration_from_seconds(durations.iter().sum::<f64>() / durations.len() as f64)
     };
 
     Ok((
-        (((success * 10 + 1) / (total * 10 + 1)) as f64 * same_context_multiplier),
+        ((success * 10 + 1) as f64 / (total * 10 + 1) as f64 * same_context_multiplier),
         estimated_duration,
         total,
     ))
@@ -315,10 +353,12 @@ fn calculate_offset(
         *success_chance *= estimated_probability_of_success;
     }
 
-    // Estimated cost of doing the run, in milliseconds
+    // Estimated cost of doing the run, in milliseconds. Like the Python
+    // implementation, this adds the microseconds component on top of the
+    // total duration.
     let estimated_cost = MINIMUM_COST
-        + (1000.0 * (estimated_duration.num_seconds() as f64)
-            + ((estimated_duration.num_microseconds().unwrap_or(0) as f64) / 1000.0));
+        + (1000.0 * total_seconds(estimated_duration)
+            + (total_microseconds(estimated_duration).rem_euclid(1_000_000) as f64 / 1000.0));
     assert!(estimated_cost > 0.0, "Estimated cost: {}", estimated_cost);
 
     let estimated_value =
@@ -832,9 +872,7 @@ mod tests {
             None,
         );
 
-        let expected_cost = MINIMUM_COST
-            + (1000.0 * duration.num_seconds() as f64)
-            + (duration.num_microseconds().unwrap() as f64 / 1000.0);
+        let expected_cost = MINIMUM_COST + 1000.0 * duration.num_seconds() as f64;
         let expected_value = codebase_value * probability * candidate_value;
         let expected_offset = expected_cost / expected_value;
 
@@ -858,9 +896,7 @@ mod tests {
             None,
         );
 
-        let expected_cost = MINIMUM_COST
-            + (1000.0 * duration.num_seconds() as f64)
-            + (duration.num_microseconds().unwrap() as f64 / 1000.0);
+        let expected_cost = MINIMUM_COST + 1000.0 * duration.num_seconds() as f64;
         let expected_value = codebase_value * probability * (candidate_value + FIRST_RUN_BONUS);
         let expected_offset = expected_cost / expected_value;
 
@@ -895,13 +931,64 @@ mod tests {
             None,
         );
 
-        let expected_cost = MINIMUM_COST
-            + (1000.0 * duration.num_seconds() as f64)
-            + (duration.num_microseconds().unwrap() as f64 / 1000.0);
+        let expected_cost = MINIMUM_COST + 1000.0 * duration.num_seconds() as f64;
         let expected_value = 0.5 * 0.5 * 1.0;
         let expected_offset = expected_cost / expected_value;
 
         assert_eq!(offset, expected_offset);
+    }
+
+    #[test]
+    fn test_calculate_offset_cost_units() {
+        // Matches Python's 1000 * total_seconds() + microseconds / 1000.
+        let offset = calculate_offset(Duration::milliseconds(1500), Some(1.0), 1.0, None, 5, None);
+        assert_eq!(offset, 22000.0);
+        let offset = calculate_offset(Duration::seconds(60), Some(1.0), 1.0, None, 5, None);
+        assert_eq!(offset, 80000.0);
+    }
+
+    #[tokio::test]
+    async fn test_estimate_success_probability_and_duration() {
+        let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+            eprintln!("TEST_DATABASE_URL not set, skipping");
+            return;
+        };
+        // A single connection, so that the temporary table is visible to all queries.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TEMPORARY TABLE run (
+                codebase text, suite text, result_code text,
+                instigated_context text, context text, failure_details json,
+                start_time timestamptz, finish_time timestamptz,
+                failure_transient boolean)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO run (codebase, suite, result_code, start_time, finish_time) VALUES
+             ('cb', 'c', 'success', '2024-01-01 00:00:00+00', '2024-01-02 00:00:01.5+00'),
+             ('cb', 'c', 'some-failure', '2024-01-03 00:00:00+00', '2024-01-03 00:00:02+00'),
+             ('cb', 'c', 'some-failure', '2024-01-04 00:00:00+00', '2024-01-04 00:00:03.250001+00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (probability, duration, total) =
+            estimate_success_probability_and_duration(&pool, "cb", "c", None)
+                .await
+                .unwrap();
+        assert_eq!(probability, 11.0 / 31.0 * 0.5);
+        assert_eq!(
+            duration,
+            Duration::seconds(28802) + Duration::microseconds(250000)
+        );
+        assert_eq!(total, 3);
     }
 
     #[test]
