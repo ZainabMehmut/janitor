@@ -123,6 +123,36 @@ pub fn get_build_arch() -> Result<String, DpkgArchitectureError> {
     Ok(String::from_utf8(output.stdout).unwrap().trim().to_owned())
 }
 
+/// Split an ognibuild session error into a result code, a message and optional
+/// details.
+pub fn session_error_parts(
+    e: ognibuild::session::Error,
+) -> (&'static str, String, Option<serde_json::Value>) {
+    match e {
+        ognibuild::session::Error::SetupFailure(msg, long_description) => {
+            let details = Some(long_description.as_str())
+                .filter(|d| !d.trim().is_empty())
+                .map(|d| serde_json::json!({"output": d}));
+            let msg = match (msg.trim(), long_description.trim()) {
+                ("", "") => "No usable output from the session backend".to_string(),
+                ("", long) => long.to_string(),
+                _ => msg.trim().to_string(),
+            };
+            ("session-setup-failure", msg, details)
+        }
+        ognibuild::session::Error::IoError(e) => ("session-io-error", e.to_string(), None),
+        ognibuild::session::Error::CalledProcessError(e) => {
+            ("session-process-error", e.to_string(), None)
+        }
+        ognibuild::session::Error::ImageError(e) => ("session-image-error", e.to_string(), None),
+        ognibuild::session::Error::MissingBinary { command, source } => (
+            "session-binary-not-found",
+            format!("Missing {} binary: {}", command, source),
+            None,
+        ),
+    }
+}
+
 pub fn convert_codemod_script_failed(i: i32, command: &str) -> WorkerFailure {
     match i {
         127 => WorkerFailure {
