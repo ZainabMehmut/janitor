@@ -6820,9 +6820,9 @@ dependencies = [
 
 [[package]]
 name = "silver-platter"
-version = "0.8.4"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecdd5968f19209d29d4e2269f3bf0522e4d2efa4378f57b9f468afcb9705d2b9"
+checksum = "1f485d6467778c2d139c3209d20cc31c8debf2ece6230ea632fae2915c50bbe6"
 dependencies = [
  "breezyshim",
  "chrono",
