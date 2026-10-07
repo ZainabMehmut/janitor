@@ -766,11 +766,46 @@ fn main_branch_name(branch_url: Option<&str>) -> String {
 }
 
 /// `POST /codebases` -- bulk upsert codebases. Returns 200 with an
-/// empty object on success.
+/// empty object on success, or 400 when an entry carries a VCS URL
+/// that is not a string or not a URL, or no VCS URL and no name.
 async fn update_codebases(
     State(state): State<Arc<AppState>>,
     Json(codebases): Json<Vec<serde_json::Value>>,
 ) -> impl IntoResponse {
+    for entry in &codebases {
+        let name = entry.get("name").and_then(|v| v.as_str());
+        let (key, branch_url) = match crate::database::effective_branch_url(entry) {
+            Ok(Some(pair)) => pair,
+            // The schema needs a name or a branch_url, so this cannot be stored.
+            Ok(None) if name.is_none() => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"reason": "Codebase with no branch_url or url must have a name"})),
+                );
+            }
+            Ok(None) => continue,
+            Err(key) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"reason": format!(
+                        "Codebase {} has a {} that is not a string",
+                        name.unwrap_or("<unnamed>"), key
+                    )})),
+                );
+            }
+        };
+        // The URL stays out of the reason, it can carry userinfo.
+        if let Err(e) = url::Url::parse(branch_url) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"reason": format!(
+                    "Codebase {} has an invalid {}: {}",
+                    name.unwrap_or("<unnamed>"), key, e
+                )})),
+            );
+        }
+    }
+
     match state.database.upload_codebases(&codebases).await {
         Ok(()) => (StatusCode::OK, Json(json!({}))),
         Err(e) => {
