@@ -482,3 +482,38 @@ impl crate::Target for GenericTarget {
         .map(|x| Box::new(x) as Box<dyn silver_platter::CodemodResult>)
     }
 }
+
+#[cfg(test)]
+mod session_failure_tests {
+    use super::session_failure;
+
+    #[test]
+    fn setup_failure_keeps_the_message_and_the_output() {
+        let f = session_failure(ognibuild::session::Error::SetupFailure(
+            "No output from schroot".to_string(),
+            "line one\nline two".to_string(),
+        ));
+        assert_eq!(f.code, "session-setup-failure");
+        assert_eq!(
+            f.description,
+            "Failed to setup session: No output from schroot"
+        );
+        assert_eq!(
+            f.details,
+            Some(serde_json::json!({"output": "line one\nline two"}))
+        );
+        assert_eq!(f.stage, vec!["build".to_string()]);
+    }
+
+    #[test]
+    fn other_variants_keep_their_own_code() {
+        let f = session_failure(ognibuild::session::Error::ImageError(
+            ognibuild::session::ImageError::UnsupportedArchitecture {
+                arch: "s390x".to_string(),
+            },
+        ));
+        assert_eq!(f.code, "session-image-error");
+        assert_eq!(f.transient, None);
+        assert_eq!(f.stage, vec!["build".to_string()]);
+    }
+}
