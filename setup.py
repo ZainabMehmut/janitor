@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from setuptools import setup
-from setuptools_rust import Binding, RustBin, RustExtension
+from setuptools_rust import Binding, RustExtension
 
 setup(
     rust_extensions=[
@@ -16,8 +16,5 @@ setup(
             binding=Binding.PyO3,
             features=["extension-module"],
         ),
-        RustBin("janitor-mail-filter", "mail-filter/Cargo.toml", features=["cmdline"]),
-        RustBin("janitor-worker", "worker/Cargo.toml", features=["cli", "debian"]),
-        RustBin("janitor-dist", "worker/Cargo.toml", features=["cli", "debian"]),
     ]
 )
