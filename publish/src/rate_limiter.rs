@@ -5,6 +5,10 @@
 use janitor::publish::MergeProposalStatus;
 use std::collections::HashMap;
 
+#[cfg(test)]
+#[path = "rate_limiter_slow_start_tests.rs"]
+mod slow_start_tests;
+
 /// Status of a rate limit check.
 #[derive(Debug)]
 pub enum RateLimitStatus {
@@ -243,34 +247,31 @@ impl SlowStartRateLimiter {
     /// # Returns
     /// The limit for the bucket, if available
     fn get_limit(&self, bucket: &str) -> Option<usize> {
-        if let Some(absorbed_mps_per_bucket) = &self.absorbed_mps_per_bucket {
-            absorbed_mps_per_bucket.get(bucket).map(|c| c + 1)
-        } else {
-            None
-        }
+        self.absorbed_mps_per_bucket
+            .as_ref()
+            .map(|absorbed| absorbed.get(bucket).copied().unwrap_or(0) + 1)
     }
 }
 
 impl RateLimiter for SlowStartRateLimiter {
     fn check_allowed(&self, bucket: &str) -> RateLimitStatus {
-        if let Some(max_mps_per_bucket) = self.max_mps_per_bucket {
-            if let Some(open_mps_per_bucket) = &self.open_mps_per_bucket {
-                if let Some(current) = open_mps_per_bucket.get(bucket) {
-                    if *current > max_mps_per_bucket {
-                        return RateLimitStatus::BucketRateLimited {
-                            bucket: bucket.to_string(),
-                            open_mps: *current,
-                            max_open_mps: max_mps_per_bucket,
-                        };
-                    }
-                }
-            } else {
-                // Be conservative
-                return RateLimitStatus::RateLimited;
-            }
-        } else {
+        let (Some(open_mps_per_bucket), Some(limit)) =
+            (&self.open_mps_per_bucket, self.get_limit(bucket))
+        else {
             // Be conservative
             return RateLimitStatus::RateLimited;
+        };
+        let current = open_mps_per_bucket.get(bucket).copied().unwrap_or(0);
+        // A maximum of 0 means no maximum, as in the Python version.
+        let max = self.max_mps_per_bucket.filter(|max| *max > 0);
+        for max_open_mps in [max, Some(limit)].into_iter().flatten() {
+            if current >= max_open_mps {
+                return RateLimitStatus::BucketRateLimited {
+                    bucket: bucket.to_string(),
+                    open_mps: current,
+                    max_open_mps,
+                };
+            }
         }
         RateLimitStatus::Allowed
     }
@@ -288,7 +289,12 @@ impl RateLimiter for SlowStartRateLimiter {
         &mut self,
         mps_per_bucket: &HashMap<MergeProposalStatus, HashMap<String, usize>>,
     ) {
-        self.open_mps_per_bucket = mps_per_bucket.get(&MergeProposalStatus::Open).cloned();
+        self.open_mps_per_bucket = Some(
+            mps_per_bucket
+                .get(&MergeProposalStatus::Open)
+                .cloned()
+                .unwrap_or_default(),
+        );
         let mut absorbed_mps_per_bucket = HashMap::new();
         for status in [MergeProposalStatus::Merged, MergeProposalStatus::Applied] {
             for (bucket, count) in mps_per_bucket.get(&status).unwrap_or(&HashMap::new()) {
