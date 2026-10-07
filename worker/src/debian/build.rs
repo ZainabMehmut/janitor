@@ -277,3 +277,40 @@ pub(crate) fn build(
 pub struct DebianBuildResult {
     lintian: crate::debian::lintian::LintianResult,
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod session_failure_tests {
+    use super::session_failure;
+
+    #[test]
+    fn setup_failure_keeps_the_message_and_the_output() {
+        let f = session_failure(ognibuild::session::Error::SetupFailure(
+            "No output from schroot".to_string(),
+            "line one\nline two".to_string(),
+        ));
+        assert_eq!(f.code, "session-setup-failure");
+        assert_eq!(
+            f.description,
+            "Error setting up schroot session: No output from schroot"
+        );
+        assert_eq!(
+            f.details,
+            Some(serde_json::json!({"output": "line one\nline two"}))
+        );
+        assert!(f.stage.is_empty(), "unexpected stage: {:?}", f.stage);
+    }
+
+    #[test]
+    fn other_variants_keep_their_own_code() {
+        let f = session_failure(ognibuild::session::Error::IoError(std::io::Error::other(
+            "boom",
+        )));
+        assert_eq!(f.code, "session-io-error");
+        assert!(
+            f.description.contains("boom"),
+            "unexpected description: {}",
+            f.description
+        );
+        assert!(f.stage.is_empty(), "unexpected stage: {:?}", f.stage);
+    }
+}
