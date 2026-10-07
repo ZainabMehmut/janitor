@@ -123,6 +123,29 @@ pub fn get_build_arch() -> Result<String, DpkgArchitectureError> {
     Ok(String::from_utf8(output.stdout).unwrap().trim().to_owned())
 }
 
+/// Split an ognibuild session error into a result code, a message and details.
+pub fn session_error_parts(
+    e: ognibuild::session::Error,
+) -> (&'static str, String, Option<serde_json::Value>) {
+    match e {
+        ognibuild::session::Error::SetupFailure(msg, output) => (
+            "session-setup-failure",
+            msg,
+            Some(serde_json::json!({"output": output})),
+        ),
+        ognibuild::session::Error::IoError(e) => ("session-io-error", e.to_string(), None),
+        ognibuild::session::Error::CalledProcessError(e) => {
+            ("session-process-error", e.to_string(), None)
+        }
+        ognibuild::session::Error::ImageError(e) => ("session-image-error", e.to_string(), None),
+        ognibuild::session::Error::MissingBinary { command, source } => (
+            "session-binary-not-found",
+            format!("Missing {} binary: {}", command, source),
+            None,
+        ),
+    }
+}
+
 pub fn convert_codemod_script_failed(i: i32, command: &str) -> WorkerFailure {
     match i {
         127 => WorkerFailure {
