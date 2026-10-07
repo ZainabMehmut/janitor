@@ -487,7 +487,7 @@ async fn serve_by_hash(
 ) -> Result<Response, StatusCode> {
     let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
     let component = params.get("component").ok_or(StatusCode::BAD_REQUEST)?;
-    let arch = params.get("arch");
+    let binary_arch = params.get("binary_arch");
     let algo = params.get("algo").ok_or(StatusCode::BAD_REQUEST)?;
     let hash = params.get("hash").ok_or(StatusCode::BAD_REQUEST)?;
 
@@ -497,8 +497,11 @@ async fn serve_by_hash(
         .get(suite)
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let by_hash_path = if let Some(arch) = arch {
+    let by_hash_path = if let Some(binary_arch) = binary_arch {
         // Binary by-hash: /dists/suite/component/binary-arch/by-hash/algo/hash
+        let arch = binary_arch
+            .strip_prefix("binary-")
+            .ok_or(StatusCode::NOT_FOUND)?;
         repo_config
             .component_arch_path(component, arch)
             .join("by-hash")
@@ -955,17 +958,17 @@ fn sources_content_type(file: &str) -> Option<&'static str> {
 /// `GET /dists/:kind/:id/:component/binary-:arch/:file` -- serve
 /// Packages / Packages.gz / Packages.bz2 from an on-demand dists tree.
 async fn serve_on_demand_component_file(
-    Path((kind, id, component, arch, file)): Path<(String, String, String, String, String)>,
+    Path((kind, id, component, binary_arch, file)): Path<(String, String, String, String, String)>,
     State(state): State<AppState>,
 ) -> Result<Response, StatusCode> {
+    if !binary_arch.starts_with("binary-") {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let base: PathBuf = match prepare_on_demand(&state, &kind, &id).await? {
         Some(p) => p,
         None => return Err(StatusCode::NOT_FOUND),
     };
-    let path = base
-        .join(&component)
-        .join(format!("binary-{}", arch))
-        .join(&file);
+    let path = base.join(&component).join(&binary_arch).join(&file);
     let content_type = packages_content_type(&file).ok_or(StatusCode::NOT_FOUND)?;
     read_and_respond(path, content_type).await
 }
@@ -987,7 +990,7 @@ async fn serve_on_demand_source_file(
 
 /// `GET /dists/:kind/:id/:component/binary-:arch/by-hash/:algo/:hash`
 async fn serve_on_demand_binary_by_hash(
-    Path((kind, id, component, arch, algo, hash)): Path<(
+    Path((kind, id, component, binary_arch, algo, hash)): Path<(
         String,
         String,
         String,
@@ -997,13 +1000,16 @@ async fn serve_on_demand_binary_by_hash(
     )>,
     State(state): State<AppState>,
 ) -> Result<Response, StatusCode> {
+    if !binary_arch.starts_with("binary-") {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let base: PathBuf = match prepare_on_demand(&state, &kind, &id).await? {
         Some(p) => p,
         None => return Err(StatusCode::NOT_FOUND),
     };
     let path = base
         .join(&component)
-        .join(format!("binary-{}", arch))
+        .join(&binary_arch)
         .join("by-hash")
         .join(&algo)
         .join(&hash);
