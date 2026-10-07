@@ -58,8 +58,9 @@ impl ArchiveConfig {
     }
 }
 
+// TODO(jelmer): Don't hardcode this
 fn default_architectures() -> Vec<String> {
-    vec!["amd64".to_string(), "source".to_string()]
+    vec!["amd64".to_string()]
 }
 
 /// The components an apt_repository serves: those of the
@@ -324,7 +325,7 @@ apt_repository {
         assert_eq!(repo.description, "Builds of lintian fixes");
         assert_eq!(repo.base_path, dists.join("lintian-fixes"));
         assert_eq!(repo.components, vec!["main", "contrib"]);
-        assert_eq!(repo.architectures, vec!["amd64", "source"]);
+        assert_eq!(repo.architectures, vec!["amd64"]);
         assert!(repo.by_hash);
     }
 
