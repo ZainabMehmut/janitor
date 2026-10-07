@@ -555,4 +555,306 @@ mod tests {
         assert_eq!(result.context(), serde_json::Value::Null);
         assert_eq!(result.tags(), Vec::new());
     }
+
+    fn validate_target() -> DebianTarget {
+        DebianTarget::new(maplit::hashmap! {
+            "COMMITTER".to_string() => "Joe Example <joe@example.com>".to_string(),
+            "DEB_UPDATE_CHANGELOG".to_string() => "auto".to_string(),
+        })
+    }
+
+    fn empty_tree(td: &tempfile::TempDir) -> breezyshim::workingtree::GenericWorkingTree {
+        create_standalone_workingtree(&td.path().join("main"), &ControlDirFormat::default())
+            .unwrap()
+    }
+
+    #[test]
+    fn test_validate_malformed_config_is_reported() {
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+
+        let failure = validate_target()
+            .validate(
+                &tree,
+                std::path::Path::new(""),
+                &serde_json::json!("not a config"),
+            )
+            .unwrap_err();
+
+        assert_eq!(failure.code, "build-config-parse-failure");
+        assert_eq!(failure.stage, vec!["validate".to_string()]);
+        assert_eq!(failure.transient, Some(false));
+        assert!(
+            failure.description.starts_with("Failed to parse config: "),
+            "unexpected description: {}",
+            failure.description
+        );
+    }
+
+    #[test]
+    fn test_validate_bad_apt_repository_is_reported() {
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+
+        // No mirror is contacted either way. A value without spaces is
+        // rejected by the parse, or the brz-debian import fails first.
+        let failure = validate_target()
+            .validate(
+                &tree,
+                std::path::Path::new(""),
+                &serde_json::json!({
+                    "lintian": {},
+                    "base-apt-repository": "nonsense",
+                }),
+            )
+            .unwrap_err();
+
+        assert_eq!(failure.stage, vec!["validate".to_string()]);
+        assert!(
+            failure
+                .description
+                .starts_with("Failed to set up apt repository"),
+            "unexpected description: {}",
+            failure.description
+        );
+        assert_eq!(
+            failure.details,
+            Some(serde_json::json!({"apt_repository": "nonsense"}))
+        );
+        assert_eq!(failure.transient, None);
+    }
+
+    const APT_LINE: &str = "deb http://deb.example.com/debian sid main";
+
+    #[test]
+    fn test_apt_repository_failure_codes() {
+        let bad_value = apt_repository_failure(
+            APT_LINE,
+            breezyshim::error::Error::UnknownFormat("nonsense".to_string()),
+        );
+        assert_eq!(bad_value.code, "apt-repository-setup-failure");
+        assert_eq!(bad_value.stage, vec!["validate".to_string()]);
+        assert_eq!(bad_value.transient, None);
+        assert_eq!(
+            bad_value.details,
+            Some(serde_json::json!({"apt_repository": APT_LINE}))
+        );
+        assert!(
+            !bad_value.description.contains("deb.example.com"),
+            "configured value leaked into the description: {}",
+            bad_value.description
+        );
+
+        let missing = apt_repository_failure(
+            APT_LINE,
+            breezyshim::error::Error::DependencyNotPresent(
+                "breezy.plugins.debian".to_string(),
+                "Install the brz-debian plugin".to_string(),
+            ),
+        );
+        assert_eq!(missing.code, "missing-dependency");
+        assert_eq!(missing.stage, vec!["validate".to_string()]);
+        assert_eq!(missing.transient, None);
+        assert!(
+            missing.description.contains("breezy.plugins.debian"),
+            "unexpected description: {}",
+            missing.description
+        );
+    }
+
+    #[test]
+    fn test_up_to_date_check_failure() {
+        let failure = up_to_date_check_failure("connection reset by peer");
+        assert_eq!(failure.code, "vcs-up-to-date-check-failed");
+        assert_eq!(failure.stage, vec!["validate".to_string()]);
+        assert_eq!(failure.transient, None);
+        assert_eq!(failure.details, None);
+        assert_eq!(
+            failure.description,
+            "Failed to check whether the tree is up to date: connection reset by peer"
+        );
+    }
+
+    #[test]
+    fn test_up_to_date_status_check_error_is_reported() {
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+
+        let failure = validate_up_to_date_status(
+            &tree,
+            std::path::Path::new(""),
+            Err::<breezyshim::debian::vcs_up_to_date::UpToDateStatus, _>(
+                "connection reset by peer",
+            ),
+        )
+        .unwrap_err();
+
+        assert_eq!(failure.code, "vcs-up-to-date-check-failed");
+        assert_eq!(failure.stage, vec!["validate".to_string()]);
+        assert_eq!(failure.transient, None);
+        assert_eq!(failure.details, None);
+        assert_eq!(
+            failure.description,
+            "Failed to check whether the tree is up to date: connection reset by peer"
+        );
+    }
+
+    #[test]
+    fn test_up_to_date_status_without_debian_dir_is_not_debian_package() {
+        use breezyshim::debian::vcs_up_to_date::UpToDateStatus;
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+
+        let failure = validate_up_to_date_status(
+            &tree,
+            std::path::Path::new(""),
+            Ok::<_, &str>(UpToDateStatus::MissingChangelog),
+        )
+        .unwrap_err();
+
+        assert_eq!(failure.code, "not-debian-package");
+        assert_eq!(failure.description, "Not a Debian package");
+        assert_eq!(failure.stage, vec!["validate".to_string()]);
+        assert_eq!(failure.transient, None);
+    }
+
+    #[test]
+    fn test_up_to_date_status_with_debian_dir_is_missing_changelog() {
+        use breezyshim::debian::vcs_up_to_date::UpToDateStatus;
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+        tree.mkdir(std::path::Path::new("debian")).unwrap();
+
+        let failure = validate_up_to_date_status(
+            &tree,
+            std::path::Path::new(""),
+            Ok::<_, &str>(UpToDateStatus::MissingChangelog),
+        )
+        .unwrap_err();
+
+        assert_eq!(failure.code, "missing-changelog");
+        assert_eq!(failure.description, "Missing changelog");
+        assert_eq!(failure.stage, vec!["validate".to_string()]);
+        assert_eq!(failure.transient, None);
+    }
+
+    #[test]
+    fn test_up_to_date_status_new_archive_version() {
+        use breezyshim::debian::vcs_up_to_date::UpToDateStatus;
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+
+        let failure = validate_up_to_date_status(
+            &tree,
+            std::path::Path::new(""),
+            Ok::<_, &str>(UpToDateStatus::NewArchiveVersion {
+                archive_version: "1.1-1".parse().unwrap(),
+                tree_version: "1.0-1".parse().unwrap(),
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(failure.code, "new-archive-version");
+        assert_eq!(
+            failure.description,
+            "New archive version 1.1-1 (last tree version 1.0-1)"
+        );
+        assert_eq!(failure.stage, vec!["validate".to_string()]);
+        assert_eq!(failure.transient, None);
+    }
+
+    #[test]
+    fn test_up_to_date_status_up_to_date_is_ok() {
+        use breezyshim::debian::vcs_up_to_date::UpToDateStatus;
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+
+        assert_eq!(
+            validate_up_to_date_status(
+                &tree,
+                std::path::Path::new(""),
+                Ok::<_, &str>(UpToDateStatus::UpToDate) // codespell:ignore
+            ),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn test_up_to_date_status_package_missing_in_archive_is_ok() {
+        use breezyshim::debian::vcs_up_to_date::UpToDateStatus;
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+
+        assert_eq!(
+            validate_up_to_date_status(
+                &tree,
+                std::path::Path::new(""),
+                Ok::<_, &str>(UpToDateStatus::PackageMissingInArchive {
+                    package: "blah".to_string(),
+                })
+            ),
+            Ok(Some("Package blah is not present in archive".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_up_to_date_status_tree_version_not_in_archive_is_ok() {
+        use breezyshim::debian::vcs_up_to_date::UpToDateStatus;
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+
+        assert_eq!(
+            validate_up_to_date_status(
+                &tree,
+                std::path::Path::new(""),
+                Ok::<_, &str>(UpToDateStatus::TreeVersionNotInArchive {
+                    tree_version: "1.0-1".parse().unwrap(),
+                    archive_versions: vec!["1.1-1".parse().unwrap()],
+                })
+            ),
+            Ok(Some(
+                "Last tree version 1.0-1 not present in the archive".to_string()
+            ))
+        );
+    }
+
+    struct StubApt(pyo3::Py<pyo3::PyAny>);
+
+    impl breezyshim::debian::apt::Apt for StubApt {
+        fn as_pyobject(&self) -> &pyo3::Py<pyo3::PyAny> {
+            &self.0
+        }
+    }
+
+    #[test]
+    fn test_validate_apt_repository_reports_the_check() {
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+        let apt = StubApt(pyo3::Python::attach(|py| py.None()));
+
+        // The stub reaches neither the plugin nor an archive, so the check
+        // fails on the import without brz-debian and on the tree with it.
+        let failure = validate_apt_repository(&tree, std::path::Path::new(""), &apt).unwrap_err();
+
+        assert_eq!(failure.stage, vec!["validate".to_string()]);
+    }
+
+    #[test]
+    fn test_build_null_config_is_build_config_parse_failure() {
+        let td = tempfile::tempdir().unwrap();
+        let tree = empty_tree(&td);
+
+        let failure = build_from_config(
+            &tree,
+            std::path::Path::new(""),
+            &td.path().join("out"),
+            &serde_json::Value::Null,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap_err();
+
+        assert_eq!(failure.code, "build-config-parse-failure");
+        assert_eq!(failure.stage, vec!["build".to_string()]);
+        assert_eq!(failure.transient, Some(false));
+    }
 }
