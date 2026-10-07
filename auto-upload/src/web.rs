@@ -84,8 +84,9 @@ mod tests {
             "unexpected content-type: {content_type}"
         );
 
-        // Trigger a counter increment so the response is non-empty.
-        crate::DEBSIGN_FAILED_COUNT.inc();
+        // Force registration of the lazily initialised counter without
+        // changing its value; upload::tests asserts on counter deltas.
+        std::sync::LazyLock::force(&crate::DEBSIGN_FAILED_COUNT);
 
         let response = create_app()
             .oneshot(
