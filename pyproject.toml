@@ -24,6 +24,7 @@ module = [
     "testing.*",
     "boto3.*",
     "pytest_asyncio.*",
+    "silver_platter.*",
 ]
 ignore_missing_imports = true
 
@@ -74,6 +75,7 @@ dependencies = [
     "python-mimeparse",
     "redis>=4.2.0",
     "setuptools-rust",
+    "silver-platter",
     "uvloop",
     "yarl",
 ]
