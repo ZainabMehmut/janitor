@@ -369,7 +369,9 @@ artifact_location: "/srv/artifacts"
         config.artifact_location = None;
         assert!(matches!(
             Locations::from_janitor_config(&config),
-            Err(janitor_archive::error::ArchiveError::InvalidConfiguration(_))
+            Err(janitor_archive::error::ArchiveError::InvalidConfiguration(
+                _
+            ))
         ));
     }
 }
