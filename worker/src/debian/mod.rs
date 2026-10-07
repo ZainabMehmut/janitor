@@ -228,7 +228,14 @@ pub fn build_from_config(
     config: &serde_json::Value,
     env: &std::collections::HashMap<String, String>,
 ) -> Result<serde_json::Value, WorkerFailure> {
-    let config: DebianBuildConfig = serde_json::from_value(config.clone()).unwrap();
+    let config: DebianBuildConfig =
+        serde_json::from_value(config.clone()).map_err(|e| WorkerFailure {
+            code: "build-config-parse-failure".to_string(),
+            description: format!("Failed to parse config: {}", e),
+            details: None,
+            stage: vec!["build".to_string()],
+            transient: Some(false),
+        })?;
     let committer = env.get("COMMITTER");
     let update_changelog: DebUpdateChangelog = match env
         .get("DEB_UPDATE_CHANGELOG")
@@ -317,13 +324,7 @@ impl crate::Target for DebianTarget {
         subpath: &std::path::Path,
         config: &crate::ValidateConfig,
     ) -> Result<(), WorkerFailure> {
-        validate_from_config(local_tree, subpath, config).map_err(|e| WorkerFailure {
-            code: e.code,
-            description: e.description,
-            details: None,
-            stage: vec!["validate".to_string()],
-            transient: None,
-        })
+        validate_from_config(local_tree, subpath, config)
     }
 
     fn make_changes(
@@ -348,26 +349,110 @@ impl crate::Target for DebianTarget {
     }
 }
 
-#[derive(Debug)]
-struct ValidateError {
-    code: String,
-    description: String,
-}
-
-impl std::fmt::Display for ValidateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}: {}", self.code, self.description)
+/// Describe a failure to open the configured apt repository, separating a
+/// missing dependency from a problem with the configured value.
+fn apt_repository_failure(apt_repository: &str, e: breezyshim::error::Error) -> WorkerFailure {
+    let code = match &e {
+        breezyshim::error::Error::DependencyNotPresent(..) => "missing-dependency",
+        _ => "apt-repository-setup-failure",
+    };
+    WorkerFailure {
+        code: code.to_string(),
+        description: format!("Failed to set up apt repository: {}", e),
+        details: Some(serde_json::json!({"apt_repository": apt_repository})),
+        stage: vec!["validate".to_string()],
+        transient: None,
     }
 }
 
-impl std::error::Error for ValidateError {}
+fn up_to_date_check_failure(e: impl std::fmt::Display) -> WorkerFailure {
+    WorkerFailure {
+        code: "vcs-up-to-date-check-failed".to_string(),
+        description: format!("Failed to check whether the tree is up to date: {}", e),
+        details: None,
+        stage: vec!["validate".to_string()],
+        transient: None,
+    }
+}
+
+/// Check an up-to-date outcome, returning the warning to log for an outcome
+/// the run carries on past.
+fn validate_up_to_date_status<E: std::fmt::Display>(
+    local_tree: &breezyshim::workingtree::GenericWorkingTree,
+    subpath: &std::path::Path,
+    status: Result<breezyshim::debian::vcs_up_to_date::UpToDateStatus, E>,
+) -> Result<Option<String>, WorkerFailure> {
+    use breezyshim::debian::vcs_up_to_date::UpToDateStatus;
+    match status.map_err(up_to_date_check_failure)? {
+        UpToDateStatus::UpToDate => Ok(None), // codespell:ignore
+        UpToDateStatus::MissingChangelog => {
+            if !local_tree.has_filename(&subpath.join("debian")) {
+                Err(WorkerFailure {
+                    code: "not-debian-package".to_string(),
+                    description: "Not a Debian package".to_string(),
+                    details: None,
+                    stage: vec!["validate".to_string()],
+                    transient: None,
+                })
+            } else {
+                Err(WorkerFailure {
+                    code: "missing-changelog".to_string(),
+                    description: "Missing changelog".to_string(),
+                    details: None,
+                    stage: vec!["validate".to_string()],
+                    transient: None,
+                })
+            }
+        }
+        UpToDateStatus::PackageMissingInArchive { package } => Ok(Some(format!(
+            "Package {} is not present in archive",
+            package
+        ))),
+        UpToDateStatus::TreeVersionNotInArchive { tree_version, .. } => Ok(Some(format!(
+            "Last tree version {} not present in the archive",
+            tree_version
+        ))),
+        UpToDateStatus::NewArchiveVersion {
+            archive_version,
+            tree_version,
+        } => Err(WorkerFailure {
+            code: "new-archive-version".to_string(),
+            description: format!(
+                "New archive version {} (last tree version {})",
+                archive_version, tree_version
+            ),
+            details: None,
+            stage: vec!["validate".to_string()],
+            transient: None,
+        }),
+    }
+}
+
+fn validate_apt_repository(
+    local_tree: &breezyshim::workingtree::GenericWorkingTree,
+    subpath: &std::path::Path,
+    apt: &impl breezyshim::debian::apt::Apt,
+) -> Result<(), WorkerFailure> {
+    let status = breezyshim::debian::vcs_up_to_date::check_up_to_date(local_tree, subpath, apt);
+    if let Some(warning) = validate_up_to_date_status(local_tree, subpath, status)? {
+        log::warn!("{}", warning);
+    }
+    Ok(())
+}
 
 fn validate_from_config(
     local_tree: &breezyshim::workingtree::GenericWorkingTree,
     subpath: &std::path::Path,
     config: &serde_json::Value,
-) -> Result<(), ValidateError> {
-    let config: DebianBuildConfig = serde_json::from_value(config.clone()).unwrap();
+) -> Result<(), WorkerFailure> {
+    let config: DebianBuildConfig =
+        serde_json::from_value(config.clone()).map_err(|e| WorkerFailure {
+            code: "build-config-parse-failure".to_string(),
+            description: format!("Failed to parse config: {}", e),
+            details: None,
+            stage: vec!["validate".to_string()],
+            transient: Some(false),
+        })?;
     if let Some(apt_repository) = config.apt_repository.as_ref() {
         let apt = breezyshim::debian::apt::RemoteApt::from_string(
             apt_repository,
@@ -376,51 +461,8 @@ fn validate_from_config(
                 .as_deref()
                 .map(std::path::Path::new),
         )
-        .unwrap();
-        match breezyshim::debian::vcs_up_to_date::check_up_to_date(local_tree, subpath, &apt)
-            .unwrap()
-        {
-            breezyshim::debian::vcs_up_to_date::UpToDateStatus::UpToDate => {} // codespell:ignore
-            breezyshim::debian::vcs_up_to_date::UpToDateStatus::MissingChangelog => {
-                if !local_tree.has_filename(&subpath.join("debian")) {
-                    return Err(ValidateError {
-                        code: "not-debian-package".to_string(),
-                        description: "Not a Debian package".to_string(),
-                    });
-                } else {
-                    return Err(ValidateError {
-                        code: "missing-changelog".to_string(),
-                        description: "Missing changelog".to_string(),
-                    });
-                }
-            }
-            breezyshim::debian::vcs_up_to_date::UpToDateStatus::PackageMissingInArchive {
-                package,
-            } => {
-                log::warn!("Package {} is not present in archive", package);
-            }
-            breezyshim::debian::vcs_up_to_date::UpToDateStatus::TreeVersionNotInArchive {
-                tree_version,
-                archive_versions: _,
-            } => {
-                log::warn!(
-                    "Last tree version {} not present in the archive",
-                    tree_version
-                );
-            }
-            breezyshim::debian::vcs_up_to_date::UpToDateStatus::NewArchiveVersion {
-                archive_version,
-                tree_version,
-            } => {
-                return Err(ValidateError {
-                    code: "new-archive-version".to_string(),
-                    description: format!(
-                        "New archive version {} (last tree version {})",
-                        archive_version, tree_version
-                    ),
-                })
-            }
-        }
+        .map_err(|e| apt_repository_failure(apt_repository, e))?;
+        validate_apt_repository(local_tree, subpath, &apt)?;
     }
     Ok(())
 }
