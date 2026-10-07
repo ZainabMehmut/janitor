@@ -107,6 +107,10 @@ impl AsyncRepository {
                 if self.inner.acquire_by_hash {
                     self.create_by_hash_links_async(&arch_dir, &packages_files, &temp_paths)
                         .await?;
+                    if let Some(keep_count) = self.inner.by_hash_keep {
+                        self.cleanup_by_hash_files_async(&arch_dir, keep_count)
+                            .await?;
+                    }
                 }
                 pending.extend(
                     temp_paths
@@ -145,6 +149,10 @@ impl AsyncRepository {
             if self.inner.acquire_by_hash {
                 self.create_by_hash_links_async(&source_dir, &sources_files, &temp_paths)
                     .await?;
+                if let Some(keep_count) = self.inner.by_hash_keep {
+                    self.cleanup_by_hash_files_async(&source_dir, keep_count)
+                        .await?;
+                }
             }
             pending.extend(
                 temp_paths
@@ -239,10 +247,6 @@ impl AsyncRepository {
 
         for algorithm in &self.inner.hash_algorithms {
             let by_hash_dir = base_dir.join("by-hash").join(algorithm.as_str());
-            if !fs::try_exists(&by_hash_dir).await.unwrap_or(false) {
-                continue;
-            }
-
             let mut read_dir = fs::read_dir(&by_hash_dir).await?;
             let mut entries = Vec::new();
 
@@ -559,6 +563,64 @@ mod tests {
         assert_eq!(
             entries,
             vec!["Packages", "Packages.bz2", "Packages.gz", "by-hash"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generation_prunes_by_hash_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        let async_repo = AsyncRepository::new(
+            RepositoryBuilder::new()
+                .suite("test")
+                .hash_algorithms(vec![crate::HashAlgorithm::Sha256])
+                .by_hash_keep(4)
+                .build()
+                .unwrap(),
+        );
+
+        let by_hash_dir = repo_path.join("main/binary-amd64/by-hash/SHA256");
+        std::fs::create_dir_all(&by_hash_dir).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        for i in 0..5 {
+            let f = std::fs::File::create(by_hash_dir.join(format!("old{}", i))).unwrap();
+            f.set_modified(old).unwrap();
+        }
+
+        async_repo
+            .generate_repository(
+                repo_path,
+                &AsyncMemoryPackageProvider::new(),
+                &AsyncMemorySourceProvider::new(),
+            )
+            .await
+            .unwrap();
+
+        let mut entries: Vec<String> = std::fs::read_dir(&by_hash_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        entries.sort();
+        let mut expected: Vec<String> = ["Packages", "Packages.gz", "Packages.bz2"]
+            .iter()
+            .map(|name| {
+                let data = std::fs::read(repo_path.join("main/binary-amd64").join(name)).unwrap();
+                let (_, hashes) = crate::hash::hash_data(&data, &[crate::HashAlgorithm::Sha256]);
+                hashes
+                    .get(&crate::HashAlgorithm::Sha256)
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        expected.sort();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|e| !e.starts_with("old"))
+                .cloned()
+                .collect::<Vec<_>>(),
+            expected
         );
     }
 
