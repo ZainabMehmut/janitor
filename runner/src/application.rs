@@ -155,15 +155,20 @@ impl ApplicationBuilder {
 
     /// Build and initialize the application.
     pub async fn build(self) -> Result<Application, ApplicationError> {
-        // Initialize tracing and logging first
-        if self.gcp_logging {
+        // Initialize tracing and logging first. Like Python, spans are
+        // only exported when zipkin_address is set.
+        let zipkin_address = self.config.zipkin_address.as_deref();
+        let tracer_guard = if self.gcp_logging {
             janitor::logging::init_logging(true, self.debug);
+            zipkin_address
+                .map(crate::tracing::init_span_export)
+                .transpose()
         } else {
-            let tracing_config = self.tracing_config();
-            crate::tracing::init_tracing(&tracing_config).map_err(|e| {
-                ApplicationError::Configuration(format!("Failed to initialize tracing: {}", e))
-            })?;
+            crate::tracing::init_tracing(&self.tracing_config(), zipkin_address)
         }
+        .map_err(|e| {
+            ApplicationError::Configuration(format!("Failed to initialize tracing: {}", e))
+        })?;
 
         log::info!("Initializing Janitor Runner application...");
 
@@ -346,6 +351,7 @@ impl ApplicationBuilder {
 
         Ok(Application {
             state: app_state,
+            _tracer_guard: tracer_guard,
             run_timeout_minutes: self.run_timeout_minutes,
             backup_directory: self.backup_directory,
         })
@@ -356,6 +362,8 @@ impl ApplicationBuilder {
 pub struct Application {
     /// Application state.
     pub state: Arc<AppState>,
+    /// Keeps span export to zipkin_address running.
+    _tracer_guard: Option<janitor::otlp::TracerGuard>,
     /// Watchdog run timeout in minutes.
     run_timeout_minutes: u64,
     /// Optional backup artifact directory, polled by a periodic task

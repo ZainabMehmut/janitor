@@ -55,6 +55,13 @@ axum = { workspace = true }
 rand = "0.9"
 base64 = ">=0.22,<0.24"
 pyo3 = { workspace = true, features = ["auto-initialize"] }
+opentelemetry = { version = "0.33", optional = true }
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"], optional = true }
+# OTLP-over-HTTP: zipkin now accepts OTLP natively, and the dedicated
+# zipkin exporter crate is deprecated. http-proto keeps the dep tree
+# off tonic/grpc.
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"], optional = true }
+tracing-opentelemetry = { version = "0.34", optional = true }
 
 [workspace.dependencies]
 rslock = { default-features = false, version = "0.7" }
@@ -118,4 +125,5 @@ debian = ["dep:debversion"]
 gcp = ["stackdriver_logger", "gcs"]
 gcs = ["dep:google-cloud-storage", "dep:google-cloud-auth", "dep:google-cloud-gax", "dep:bytes"]
 testing = ["sqlx/postgres", "sqlx/runtime-tokio", "sqlx/tls-rustls"]
+otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 
