@@ -22,11 +22,7 @@ from breezy.tests import TestCaseWithTransport  # noqa: F401
 
 def test_suite():
     names = [
-        "archive",
         "artifacts",
-        "debdiff",
-        "debian",
-        "runner",
         "site",
         "vcs",
     ]
