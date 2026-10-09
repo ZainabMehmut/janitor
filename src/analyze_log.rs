@@ -87,8 +87,8 @@ pub fn process_build_log<R: std::io::Read>(logf: R) -> AnalyzedLog {
 }
 
 pub fn process_sbuild_log<R: std::io::Read>(logf: R) -> AnalyzedLog {
-    // FromStr, not TryFrom: buildlog-consultant only implements TryFrom for
-    // BufReader and File, neither of which a Cursor satisfies.
+    // FromStr, because read_lossy hands back a String. TryFrom would take
+    // the reader and decode it strictly.
     let sbuildlog = match read_lossy(logf).parse::<buildlog_consultant::sbuild::SbuildLog>() {
         Ok(l) => l,
         Err(e) => {
