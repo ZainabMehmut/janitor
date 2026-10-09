@@ -1419,6 +1419,198 @@ impl VcsManager for RemoteBzrVcsManager {
     }
 }
 
+#[cfg(test)]
+mod remote_revision_info_tests {
+    use super::*;
+    use axum::http::{header, StatusCode};
+    use axum::routing::get;
+    use axum::Router;
+
+    const SHA: &str = "2282dc9d1e5e2c0b95c1a8e1f1e6a5f2b3c4d5e6";
+
+    const GIT_PAYLOAD: &str = concat!(
+        r#"[{"commit-id": "2282dc9d1e5e2c0b95c1a8e1f1e6a5f2b3c4d5e6","#,
+        r#" "revision-id": "git-v1:2282dc9d1e5e2c0b95c1a8e1f1e6a5f2b3c4d5e6","#,
+        r#" "link": "/git/foo/commit/2282dc9d1e5e2c0b95c1a8e1f1e6a5f2b3c4d5e6/","#,
+        r#" "message": "Add a thing\n"}]"#
+    );
+
+    const BZR_PAYLOAD: &str = concat!(
+        r#"[{"revision-id": "test@example.com-20260930123456-abc123","#,
+        r#" "link": "/bzr/foo/revision/3", "message": "Do a thing"}]"#
+    );
+
+    async fn serve(status: StatusCode, body: &'static str) -> Url {
+        let app = Router::new().route(
+            "/{codebase}/revision-info",
+            get(
+                move || async move { (status, [(header::CONTENT_TYPE, "application/json")], body) },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service())
+                .await
+                .unwrap();
+        });
+        format!("http://{}/", addr).parse().unwrap()
+    }
+
+    // Bound, then released, so a request to it is refused rather than hanging.
+    async fn unreachable() -> Url {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        assert!(
+            tokio::net::TcpStream::connect(addr).await.is_err(),
+            "{addr} still accepts connections"
+        );
+        format!("http://{}/", addr).parse().unwrap()
+    }
+
+    fn git_revids() -> (RevisionId, RevisionId) {
+        (
+            RevisionId::from(format!("git-v1:{}", "0".repeat(40)).as_bytes()),
+            RevisionId::from(format!("git-v1:{SHA}").as_bytes()),
+        )
+    }
+
+    fn bzr_revids() -> (RevisionId, RevisionId) {
+        (
+            RevisionId::from(&b"test@example.com-20260930123455-aaa000"[..]),
+            RevisionId::from(&b"test@example.com-20260930123456-abc123"[..]),
+        )
+    }
+
+    #[tokio::test]
+    async fn remote_git_decodes_a_served_payload() {
+        let base_url = serve(StatusCode::OK, GIT_PAYLOAD).await;
+        let (old, new) = git_revids();
+
+        let infos = RemoteGitVcsManager::new(base_url)
+            .get_revision_info("foo", &old, &new)
+            .await;
+
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].commit_id.as_deref(), Some(SHA.as_bytes()));
+        assert_eq!(
+            infos[0].link.as_deref(),
+            Some("/git/foo/commit/2282dc9d1e5e2c0b95c1a8e1f1e6a5f2b3c4d5e6/")
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_git_yields_no_revisions_on_an_error_status() {
+        let base_url = serve(StatusCode::INTERNAL_SERVER_ERROR, GIT_PAYLOAD).await;
+        let (old, new) = git_revids();
+
+        let infos = RemoteGitVcsManager::new(base_url)
+            .get_revision_info("foo", &old, &new)
+            .await;
+
+        assert!(
+            infos.is_empty(),
+            "expected no revisions, got {}",
+            infos.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_git_yields_no_revisions_on_an_undecodable_body() {
+        let base_url = serve(StatusCode::OK, "not json").await;
+        let (old, new) = git_revids();
+
+        let infos = RemoteGitVcsManager::new(base_url)
+            .get_revision_info("foo", &old, &new)
+            .await;
+
+        assert!(
+            infos.is_empty(),
+            "expected no revisions, got {}",
+            infos.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_git_yields_no_revisions_when_the_store_is_unreachable() {
+        let base_url = unreachable().await;
+        let (old, new) = git_revids();
+
+        let infos = RemoteGitVcsManager::new(base_url)
+            .get_revision_info("foo", &old, &new)
+            .await;
+
+        assert!(
+            infos.is_empty(),
+            "expected no revisions, got {}",
+            infos.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_bzr_decodes_a_served_payload() {
+        let base_url = serve(StatusCode::OK, BZR_PAYLOAD).await;
+        let (old, new) = bzr_revids();
+
+        let infos = RemoteBzrVcsManager::new(base_url)
+            .get_revision_info("foo", &old, &new)
+            .await;
+
+        assert_eq!(infos.len(), 1);
+        assert!(infos[0].commit_id.is_none());
+        assert_eq!(infos[0].link.as_deref(), Some("/bzr/foo/revision/3"));
+    }
+
+    #[tokio::test]
+    async fn remote_bzr_yields_no_revisions_on_an_error_status() {
+        let base_url = serve(StatusCode::INTERNAL_SERVER_ERROR, BZR_PAYLOAD).await;
+        let (old, new) = bzr_revids();
+
+        let infos = RemoteBzrVcsManager::new(base_url)
+            .get_revision_info("foo", &old, &new)
+            .await;
+
+        assert!(
+            infos.is_empty(),
+            "expected no revisions, got {}",
+            infos.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_bzr_yields_no_revisions_on_an_undecodable_body() {
+        let base_url = serve(StatusCode::OK, "not json").await;
+        let (old, new) = bzr_revids();
+
+        let infos = RemoteBzrVcsManager::new(base_url)
+            .get_revision_info("foo", &old, &new)
+            .await;
+
+        assert!(
+            infos.is_empty(),
+            "expected no revisions, got {}",
+            infos.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_bzr_yields_no_revisions_when_the_store_is_unreachable() {
+        let base_url = unreachable().await;
+        let (old, new) = bzr_revids();
+
+        let infos = RemoteBzrVcsManager::new(base_url)
+            .get_revision_info("foo", &old, &new)
+            .await;
+
+        assert!(
+            infos.is_empty(),
+            "expected no revisions, got {}",
+            infos.len()
+        );
+    }
+}
+
 fn open_cached_branch(url: &Url) -> Result<Option<breezyshim::branch::GenericBranch>, BrzError> {
     fn convert_error(e: BrzError) -> Option<BrzError> {
         match e {
