@@ -54,3 +54,22 @@ def test_read_error_is_raised_not_swallowed():
         pass
     else:
         raise AssertionError("a read error must propagate")
+
+
+def test_invalid_utf8_is_replaced_not_fatal():
+    # Build logs carry raw bytes, and BufRead::lines() returns InvalidData for
+    # them, which the unwrap on the collect turned into a panic.
+    code, _description, _phase, failure_details = process_dist_log(
+        BytesIO(b"gcc: \xff\xfe: No such file or directory\nconfigure: error: foo not found\n")
+    )
+    assert code == "dist-missing-vague-dependency"
+    assert failure_details["name"] == "foo"
+
+
+def test_invalid_utf8_on_the_matched_line_keeps_the_replacement():
+    # The replacement character lands in the extracted name rather than
+    # stopping the analysis.
+    _code, _description, _phase, failure_details = process_dist_log(
+        BytesIO(b"configure: error: caf\xe9 not found\n")
+    )
+    assert failure_details["name"] == "caf�"
