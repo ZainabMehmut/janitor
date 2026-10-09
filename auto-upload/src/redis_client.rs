@@ -96,6 +96,7 @@ impl RedisClient {
                     let handler = handler.clone();
                     async move {
                         if let Err(e) = handler(message).await {
+                            crate::RESULT_HANDLING_FAILED_COUNT.inc();
                             error!("error handling result: {}", e);
                             return Err(janitor::error::JanitorError::external_service(
                                 "auto-upload",

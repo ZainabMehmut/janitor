@@ -44,6 +44,15 @@ pub static UPLOAD_FAILED_COUNT: LazyLock<Counter> = LazyLock::new(|| {
     .expect("register upload_failed counter")
 });
 
+/// Counter for result messages that could not be handled.
+pub static RESULT_HANDLING_FAILED_COUNT: LazyLock<Counter> = LazyLock::new(|| {
+    register_counter!(
+        "result_handling_failed",
+        "Number of result messages that could not be handled."
+    )
+    .expect("register result_handling_failed counter")
+});
+
 /// Run the auto-upload service: start the metrics web server and the Redis
 /// listener and wait until one of them exits.
 ///
@@ -68,4 +77,16 @@ pub async fn run_service(
         distributions,
     };
     service::run(config, listen_addr, port, upload_config, run_backfill).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RESULT_HANDLING_FAILED_COUNT;
+
+    #[test]
+    fn result_handling_failed_counter_increments() {
+        let before = RESULT_HANDLING_FAILED_COUNT.get();
+        RESULT_HANDLING_FAILED_COUNT.inc();
+        assert!(RESULT_HANDLING_FAILED_COUNT.get() > before);
+    }
 }
