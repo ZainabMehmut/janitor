@@ -245,3 +245,32 @@ fn test_publish_one_error_fields() {
     assert_eq!(deserialized.code, "test-error");
     assert_eq!(deserialized.description, "Test error description");
 }
+
+#[test]
+fn classify_forge_rate_limit_no_entry_is_not_limited() {
+    let now = Utc::now();
+    assert_eq!(
+        classify_forge_rate_limit(None, now),
+        ForgeRateLimitDecision::NotLimited,
+    );
+}
+
+#[test]
+fn classify_forge_rate_limit_future_deadline_is_backoff() {
+    let now = Utc::now();
+    let deadline = now + chrono::Duration::minutes(5);
+    assert_eq!(
+        classify_forge_rate_limit(Some(deadline), now),
+        ForgeRateLimitDecision::Backoff,
+    );
+}
+
+#[test]
+fn classify_forge_rate_limit_past_deadline_is_expired() {
+    let now = Utc::now();
+    let deadline = now - chrono::Duration::minutes(5);
+    assert_eq!(
+        classify_forge_rate_limit(Some(deadline), now),
+        ForgeRateLimitDecision::Expired,
+    );
+}
