@@ -191,6 +191,12 @@ lazy_static! {
         "forge_login_required",
         "Number of times a resume-branch lookup failed for lack of forge credentials"
     ).unwrap();
+
+    /// Runs whose artifacts could not be stored.
+    pub static ref ARTIFACT_UPLOAD_FAILED_COUNT: IntCounter = register_int_counter!(
+        "artifact_upload_failed_total",
+        "Number of failed artifact uploads"
+    ).unwrap();
 }
 
 /// Metrics collection helper functions

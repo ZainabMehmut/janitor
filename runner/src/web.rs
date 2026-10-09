@@ -106,8 +106,8 @@ struct FinishResponse {
     filenames: Vec<String>,
     /// Log filenames.
     logs: Vec<String>,
-    /// Artifact names.
-    artifacts: Vec<String>,
+    /// Artifact names; null when storing the artifacts failed.
+    artifacts: Option<Vec<String>>,
     /// Result information.
     result: serde_json::Value,
 }
@@ -2416,6 +2416,29 @@ async fn publish_finish_events(
     });
 }
 
+/// Store the artifacts of a run, falling back to the backup artifact
+/// manager if the main one fails.
+async fn store_run_artifacts(
+    state: &AppState,
+    run_id: &str,
+    files: &[&crate::upload::UploadedFile],
+) -> Result<(), janitor::artifacts::Error> {
+    // The ArtifactManager expects a directory containing all artifacts,
+    // so stage them into a temp dir before storing.
+    let staging = tempfile::tempdir()?;
+    for file in files {
+        tokio::fs::copy(&file.stored_path, staging.path().join(&file.filename)).await?;
+    }
+    janitor::artifacts::store_artifacts_with_backup(
+        state.artifact_manager.as_ref(),
+        state.backup_artifact_manager.as_deref(),
+        staging.path(),
+        run_id,
+        None,
+    )
+    .await
+}
+
 async fn finish_run_multipart_internal(
     state: Arc<AppState>,
     run_id: String,
@@ -2524,6 +2547,57 @@ async fn finish_run_multipart_internal(
         .collect();
     janitor_result.logfilenames = log_filenames.clone();
 
+    for log_file in &uploaded_result.log_files {
+        let Some(path_str) = log_file.stored_path.to_str() else {
+            log::warn!("Invalid UTF-8 in log file path: {:?}", log_file.stored_path);
+            continue;
+        };
+        if let Err(e) = janitor::logs::import_log(
+            state.log_manager.as_ref(),
+            state.backup_log_manager.as_deref(),
+            &active_run.codebase,
+            &run_id,
+            path_str,
+            Some(&log_file.filename),
+            Some(janitor_result.finish_time.timestamp()),
+        )
+        .await
+        {
+            log::warn!(
+                "Failed to store log file {} from run {}: {}",
+                log_file.filename,
+                run_id,
+                e
+            );
+        }
+    }
+
+    // Python's `filenames` is every uploaded part (logs + artifacts +
+    // build files); `logs` is just the log entries; `artifacts` is
+    // just the build/artifact entries.
+    let artifact_files: Vec<&crate::upload::UploadedFile> = uploaded_result
+        .artifact_files
+        .iter()
+        .chain(uploaded_result.build_files.iter())
+        .collect();
+    let artifact_filenames: Vec<String> =
+        artifact_files.iter().map(|f| f.filename.clone()).collect();
+    let all_filenames: Vec<String> = log_filenames
+        .iter()
+        .cloned()
+        .chain(artifact_filenames.iter().cloned())
+        .collect();
+    let mut stored_artifact_filenames = Some(artifact_filenames);
+    if !artifact_files.is_empty() {
+        if let Err(e) = store_run_artifacts(&state, &run_id, &artifact_files).await {
+            log::warn!("Failed to store artifacts for run {}: {}", run_id, e);
+            janitor_result.code = "artifact-upload-failed".to_string();
+            janitor_result.description = Some(e.to_string());
+            crate::metrics::ARTIFACT_UPLOAD_FAILED_COUNT.inc();
+            stored_artifact_filenames = None;
+        }
+    }
+
     // Atomically insert the `run` row and related result state. See
     // the multipart-finish branch above for why AlreadyStored surfaces
     // as 409 Conflict.
@@ -2569,76 +2643,6 @@ async fn finish_run_multipart_internal(
         }
     }
 
-    // The ArtifactManager expects a directory containing all artifacts,
-    // so stage them into a temp dir before storing.
-    if !uploaded_result.artifact_files.is_empty() || !uploaded_result.build_files.is_empty() {
-        let temp_dir = std::env::temp_dir().join(format!("janitor-artifacts-{}", &run_id));
-        let artifacts_dir = temp_dir.join("artifacts");
-        if let Err(e) = tokio::fs::create_dir_all(&artifacts_dir).await {
-            log::warn!("Failed to create artifacts directory: {}", e);
-        } else {
-            for artifact_file in &uploaded_result.artifact_files {
-                let dest = artifacts_dir.join(&artifact_file.filename);
-                if let Err(e) = tokio::fs::copy(&artifact_file.stored_path, &dest).await {
-                    log::warn!(
-                        "Failed to copy artifact {} to artifacts dir: {}",
-                        artifact_file.filename,
-                        e
-                    );
-                }
-            }
-
-            for build_file in &uploaded_result.build_files {
-                let dest = artifacts_dir.join(&build_file.filename);
-                if let Err(e) = tokio::fs::copy(&build_file.stored_path, &dest).await {
-                    log::warn!(
-                        "Failed to copy build file {} to artifacts dir: {}",
-                        build_file.filename,
-                        e
-                    );
-                }
-            }
-
-            // Store all artifacts at once
-            if let Err(e) = state
-                .artifact_manager
-                .store_artifacts(&run_id, &artifacts_dir, None)
-                .await
-            {
-                log::warn!("Failed to store artifacts for run {}: {}", run_id, e);
-            }
-        }
-    }
-
-    for log_file in &uploaded_result.log_files {
-        let path_str = match log_file.stored_path.to_str() {
-            Some(path) => path,
-            None => {
-                log::warn!("Invalid UTF-8 in log file path: {:?}", log_file.stored_path);
-                continue;
-            }
-        };
-
-        if let Err(e) = state
-            .log_manager
-            .import_log(
-                &active_run.codebase,
-                &run_id,
-                path_str,
-                None,
-                Some(&log_file.filename),
-            )
-            .await
-        {
-            log::warn!(
-                "Failed to store log file {} from run {}: {}",
-                log_file.filename,
-                run_id,
-                e
-            );
-        }
-    }
-
     // Publish the completed result to subscribers and tear down the
     // active-run state.
     publish_finish_events(&state, &run_id, &janitor_result, active_run.queue_id).await;
@@ -2657,26 +2661,11 @@ async fn finish_run_multipart_internal(
         ])
         .inc();
 
-    // Python's `filenames` is every uploaded part (logs + artifacts +
-    // build files); `logs` is just the log entries; `artifacts` is
-    // just the build/artifact entries.
-    let artifact_filenames: Vec<String> = uploaded_result
-        .artifact_files
-        .iter()
-        .chain(uploaded_result.build_files.iter())
-        .map(|f| f.filename.clone())
-        .collect();
-    let all_filenames: Vec<String> = log_filenames
-        .iter()
-        .cloned()
-        .chain(artifact_filenames.iter().cloned())
-        .collect();
-
     let response = FinishResponse {
         id: run_id,
         filenames: all_filenames,
         logs: log_filenames,
-        artifacts: artifact_filenames,
+        artifacts: stored_artifact_filenames,
         result: janitor_result.to_json(),
     };
 

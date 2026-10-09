@@ -2294,3 +2294,150 @@ async fn post_active_runs_honours_client_exclude_hosts() {
         "queue should look empty when the only candidate's host is excluded"
     );
 }
+
+/// Seed an active run for `worker` and finish it with a worker result
+/// and a single artifact, returning the status and response body.
+async fn finish_with_artifact(
+    app: axum::Router,
+    state: &Arc<AppState>,
+    run_id: &str,
+    codebase: &str,
+    worker: &str,
+) -> (StatusCode, Value) {
+    let pool = state.database.pool().clone();
+    insert_codebase(&pool, codebase).await;
+    state
+        .auth_service
+        .create_worker(worker, "pw", None)
+        .await
+        .expect("create worker");
+    state
+        .active_runs
+        .store(ActiveRun {
+            worker_name: worker.to_string(),
+            worker_link: None,
+            queue_id: 1,
+            log_id: run_id.to_string(),
+            start_time: Utc::now(),
+            finish_time: None,
+            estimated_duration: None,
+            campaign: "test-campaign".to_string(),
+            change_set: None,
+            command: "true".to_string(),
+            codebase: codebase.to_string(),
+            backchannel: Backchannel::None {},
+            vcs_info: VcsInfo::default(),
+            instigated_context: None,
+            resume_from: None,
+        })
+        .await;
+
+    let boundary = "artifact-boundary";
+    let multipart_body = format!(
+        "--{boundary}\r\n\
+         Content-Disposition: form-data; name=\"metadata\"; filename=\"result.json\"\r\n\
+         Content-Type: application/json\r\n\r\n\
+         {{\"code\":\"success\",\"description\":\"done\"}}\r\n\
+         --{boundary}\r\n\
+         Content-Disposition: form-data; name=\"file\"; filename=\"foo.deb\"\r\n\
+         Content-Type: application/octet-stream\r\n\r\n\
+         deb contents\r\n\
+         --{boundary}--\r\n"
+    );
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/active-runs/{run_id}/finish"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(multipart_body))
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    let status = response.status();
+    (status, get_body(response).await)
+}
+
+/// An artifact manager rooted in a directory that no longer exists, so
+/// storing artifacts in it fails.
+fn broken_artifact_manager() -> Arc<dyn janitor::artifacts::ArtifactManager> {
+    let dir = tempfile::tempdir().unwrap();
+    Arc::new(janitor::artifacts::LocalArtifactManager::new(dir.path()).unwrap())
+}
+
+/// Like Python, a run whose artifacts can't be stored is recorded as
+/// `artifact-upload-failed` and reports no artifacts.
+#[tokio::test]
+async fn finish_marks_artifact_upload_failed() {
+    let builder = test_utils::TestConfigBuilder::new()
+        .with_campaign("test-campaign", "true")
+        .with_artifact_manager(broken_artifact_manager());
+    let Some((app, state)) =
+        test_utils::create_test_app_with_state_with_config_if_available(builder)
+            .await
+            .expect("test app setup")
+    else {
+        eprintln!("skipping: no test resources");
+        return;
+    };
+
+    let (status, body) = finish_with_artifact(
+        app,
+        &state,
+        "run-upload-fails",
+        "upload-fails-cb",
+        "uf-worker",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+    assert_eq!(body["artifacts"], Value::Null);
+    assert_eq!(body["result"]["code"], "artifact-upload-failed");
+
+    let result_code: String = sqlx::query_scalar("SELECT result_code FROM run WHERE id = $1")
+        .bind("run-upload-fails")
+        .fetch_one(state.database.pool())
+        .await
+        .expect("run row must exist after finish");
+    assert_eq!(result_code, "artifact-upload-failed");
+}
+
+/// When the main artifact manager fails, artifacts go to the backup
+/// artifact manager and the run keeps its result code.
+#[tokio::test]
+async fn finish_stores_artifacts_in_backup() {
+    let backup_dir = tempfile::tempdir().unwrap();
+    let backup =
+        Arc::new(janitor::artifacts::LocalArtifactManager::new(backup_dir.path()).unwrap());
+    let builder = test_utils::TestConfigBuilder::new()
+        .with_campaign("test-campaign", "true")
+        .with_artifact_manager(broken_artifact_manager())
+        .with_backup_artifact_manager(backup.clone());
+    let Some((app, state)) =
+        test_utils::create_test_app_with_state_with_config_if_available(builder)
+            .await
+            .expect("test app setup")
+    else {
+        eprintln!("skipping: no test resources");
+        return;
+    };
+
+    let (status, body) =
+        finish_with_artifact(app, &state, "run-backup", "backup-cb", "backup-worker").await;
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+    assert_eq!(body["artifacts"], json!(["foo.deb"]));
+    assert_eq!(body["result"]["code"], "success");
+
+    let mut contents = Vec::new();
+    std::io::Read::read_to_end(
+        &mut janitor::artifacts::ArtifactManager::get_artifact(
+            backup.as_ref(),
+            "run-backup",
+            "foo.deb",
+        )
+        .await
+        .expect("artifact in backup"),
+        &mut contents,
+    )
+    .unwrap();
+    assert_eq!(contents, b"deb contents");
+}

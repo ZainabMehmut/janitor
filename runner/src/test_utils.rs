@@ -274,6 +274,8 @@ impl crate::logs::LogFileManager for MockLogFileManager {
 #[derive(Default)]
 pub struct TestConfigBuilder {
     campaigns: Vec<janitor::config::Campaign>,
+    artifact_manager: Option<Arc<dyn janitor::artifacts::ArtifactManager>>,
+    backup_artifact_manager: Option<Arc<dyn janitor::artifacts::ArtifactManager>>,
 }
 
 impl TestConfigBuilder {
@@ -296,6 +298,24 @@ impl TestConfigBuilder {
     /// Register an arbitrary campaign.
     pub fn with_campaign_config(mut self, campaign: janitor::config::Campaign) -> Self {
         self.campaigns.push(campaign);
+        self
+    }
+
+    /// Use `manager` instead of a mock as the main artifact manager.
+    pub fn with_artifact_manager(
+        mut self,
+        manager: Arc<dyn janitor::artifacts::ArtifactManager>,
+    ) -> Self {
+        self.artifact_manager = Some(manager);
+        self
+    }
+
+    /// Set the backup artifact manager.
+    pub fn with_backup_artifact_manager(
+        mut self,
+        manager: Arc<dyn janitor::artifacts::ArtifactManager>,
+    ) -> Self {
+        self.backup_artifact_manager = Some(manager);
         self
     }
 
@@ -365,7 +385,7 @@ pub async fn create_test_app_state(
 /// [`TestConfigBuilder`], so tests can register campaigns and other
 /// config knobs the handlers read.
 pub async fn create_test_app_state_with_config(
-    config_builder: TestConfigBuilder,
+    mut config_builder: TestConfigBuilder,
 ) -> Result<Arc<AppState>, Box<dyn std::error::Error + Send + Sync>> {
     let test_db = TestDatabase::new().await?;
     // Load the production schema so write-path tests hit the same
@@ -389,7 +409,11 @@ pub async fn create_test_app_state_with_config(
         .map_err(|e| format!("Test redis PING failed: {}", e))?;
 
     let log_manager = Arc::new(MockLogFileManager);
-    let artifact_manager = Arc::new(MockArtifactManager);
+    let artifact_manager: Arc<dyn janitor::artifacts::ArtifactManager> = config_builder
+        .artifact_manager
+        .take()
+        .unwrap_or_else(|| Arc::new(MockArtifactManager));
+    let backup_artifact_manager = config_builder.backup_artifact_manager.take();
     let config = Arc::new(config_builder.build_janitor_config());
 
     let vcs_manager = Arc::new(RunnerVcsManager::new(std::collections::HashMap::new()));
@@ -435,6 +459,8 @@ pub async fn create_test_app_state_with_config(
         vcs_manager,
         log_manager,
         artifact_manager,
+        backup_log_manager: None,
+        backup_artifact_manager,
         error_tracker,
         metrics,
         config,
