@@ -8,15 +8,14 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::Response,
 };
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::StreamExt;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
     process::Command,
 };
-use tokio_util::io::StreamReader;
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Default)]
@@ -671,6 +670,16 @@ async fn reap_backend(process: &mut tokio::process::Child) {
     }
 }
 
+/// Write-error kinds treated as git closing the pipe.
+fn is_expected_stdin_close(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::UnexpectedEof
+    )
+}
+
 /// Delegate smart-protocol requests to `git http-backend`.
 pub async fn git_backend(
     State(state): State<crate::web::AppState>,
@@ -796,27 +805,27 @@ pub async fn git_backend(
         .spawn()
         .map_err(|e| GitStoreError::Other(anyhow::anyhow!("failed to spawn git: {}", e)))?;
 
-    // Feed the request body to git's stdin, closing it on EOF.
-    // Client disconnects mid-upload are debug-logged: git sees EOF
-    // on stdin and exits, and the response path short-circuits.
+    // Feed the request body to git's stdin, closing it on EOF. A failing
+    // read and a failing write are handled separately.
     if let Some(mut stdin) = process.stdin.take() {
-        let body_stream = body.into_data_stream();
+        let mut body_stream = body.into_data_stream();
         tokio::spawn(async move {
-            let mut stdin_writer = StreamReader::new(body_stream.map_err(std::io::Error::other));
-            match tokio::io::copy(&mut stdin_writer, &mut stdin).await {
-                Ok(_) => {}
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::ConnectionReset
-                            | std::io::ErrorKind::BrokenPipe
-                            | std::io::ErrorKind::UnexpectedEof
-                    ) =>
-                {
-                    debug!("client disconnected while uploading request body: {}", e);
-                }
-                Err(e) => {
-                    warn!("Error writing to git process stdin: {}", e);
+            while let Some(chunk) = body_stream.next().await {
+                match chunk {
+                    Ok(bytes) => {
+                        if let Err(e) = stdin.write_all(&bytes).await {
+                            if is_expected_stdin_close(e.kind()) {
+                                debug!("git closed its stdin before the body ended: {}", e);
+                            } else {
+                                warn!("Error writing to git process stdin: {}", e);
+                            }
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        debug!("request body did not arrive in full: {}", e);
+                        break;
+                    }
                 }
             }
         });
@@ -915,6 +924,36 @@ pub async fn git_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_expected_stdin_close_accepts_the_close_kinds() {
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::UnexpectedEof,
+        ] {
+            assert!(
+                is_expected_stdin_close(kind),
+                "{:?} should be treated as an expected stdin close",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_expected_stdin_close_rejects_other_kinds() {
+        for kind in [
+            std::io::ErrorKind::Other,
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::WriteZero,
+        ] {
+            assert!(
+                !is_expected_stdin_close(kind),
+                "{:?} should not be treated as an expected stdin close",
+                kind
+            );
+        }
+    }
 
     #[test]
     fn test_diff_query_parsing() {
