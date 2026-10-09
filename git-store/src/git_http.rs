@@ -957,6 +957,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_is_incomplete_request_body_needs_a_non_zero_exit() {
+        assert!(!is_incomplete_request_body(
+            true,
+            true,
+            false,
+            StatusCode::OK
+        ));
+        assert!(is_incomplete_request_body(true, true, true, StatusCode::OK));
+    }
+
+    #[test]
+    fn test_is_incomplete_request_body_requires_every_condition() {
+        assert!(!is_incomplete_request_body(
+            false,
+            true,
+            true,
+            StatusCode::OK
+        ));
+        assert!(!is_incomplete_request_body(
+            true,
+            false,
+            true,
+            StatusCode::OK
+        ));
+        assert!(!is_incomplete_request_body(
+            true,
+            true,
+            true,
+            StatusCode::BAD_REQUEST
+        ));
+    }
+
+    #[test]
     fn test_is_expected_stdin_close_accepts_the_close_kinds() {
         for kind in [
             std::io::ErrorKind::BrokenPipe,
