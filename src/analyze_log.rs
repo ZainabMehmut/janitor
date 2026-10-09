@@ -127,3 +127,52 @@ pub fn process_sbuild_log<R: std::io::Read>(logf: R) -> AnalyzedLog {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn analyzed(r: AnalyzedLog) -> (String, String, Option<String>, Option<serde_json::Value>) {
+        (r.code, r.description, r.phase, r.failure_details)
+    }
+
+    fn missing(name: &str) -> (String, String, Option<String>, Option<serde_json::Value>) {
+        (
+            "dist-missing-vague-dependency".to_string(),
+            format!("Missing dependency: {}", name),
+            None,
+            Some(serde_json::json!({
+                "current_version": null,
+                "minimum_version": null,
+                "name": name,
+                "url": null,
+            })),
+        )
+    }
+
+    #[test]
+    fn test_invalid_utf8_is_replaced_not_fatal() {
+        let log: &[u8] =
+            b"gcc: \xff\xfe: No such file or directory\nconfigure: error: foo not found\n";
+        assert_eq!(analyzed(process_dist_log(log)), missing("foo"));
+    }
+
+    #[test]
+    fn test_invalid_utf8_on_the_matched_line_keeps_the_replacement() {
+        let log: &[u8] = b"configure: error: bar\xe9 not found\n";
+        assert_eq!(analyzed(process_dist_log(log)), missing("bar\u{fffd}"));
+    }
+
+    #[test]
+    fn test_invalid_utf8_in_an_sbuild_log_is_replaced() {
+        let log: &[u8] = b"sbuild (Debian sbuild) 0.85.0\ncaf\xe9\n";
+        assert_eq!(
+            analyzed(process_sbuild_log(log)),
+            (
+                "build-failed".to_string(),
+                "Build failed".to_string(),
+                None,
+                None
+            )
+        );
+    }
+}
