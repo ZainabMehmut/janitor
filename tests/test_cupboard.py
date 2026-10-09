@@ -111,6 +111,17 @@ campaign {
     )
 
 
+def test_classify_result_code_debian_validate():
+    assert (
+        classify_result_code("apt-repository-setup-failure", None)
+        == "transient-failure"
+    )
+    assert (
+        classify_result_code("vcs-up-to-date-check-failed", None) == "transient-failure"
+    )
+    assert classify_result_code("missing-dependency", None) == "bug"
+
+
 async def test_history(aiohttp_client, db):
     client = await create_client(aiohttp_client, db)
     resp = await client.get("/cupboard/history")
