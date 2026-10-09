@@ -97,6 +97,15 @@ unset:
 For a Janitor instance, you probably want a custom website in combination with
 the Janitor API. See the existing instances for inspiration.
 
+## Worker images
+
+The published worker image carries Debian's build tooling, but it carries no
+codemods. Build your own worker image based on the published one with the
+codemods your campaigns need installed.
+
+See "Custom worker tooling" in [Dockerfiles_.md](Dockerfiles_.md) for the
+Dockerfile to start from, then run your image in place of the published one.
+
 ## Registering workers
 
 Workers authenticate to the site with a name and password stored in the `worker`
