@@ -245,8 +245,7 @@ async fn queue_position(
         .map(|e| e.wait_time.microseconds as f64 / 1_000_000.0);
     let per_run_wait_seconds = match (cumulative_wait_seconds, active_count) {
         (Some(total), n) if n > 0 => Some(total / n as f64),
-        (Some(total), _) => Some(total),
-        (None, _) => None,
+        _ => None,
     };
 
     (
@@ -1492,10 +1491,13 @@ async fn peek_active_run(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 })),
             )
         }
-        Ok(None) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"reason": "queue empty"})),
-        ),
+        Ok(None) => {
+            crate::metrics::QUEUE_EMPTY_COUNT.inc();
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"reason": "queue empty"})),
+            )
+        }
         Err(e) => {
             log::error!("Failed to peek queue item: {}", e);
             (
@@ -2653,13 +2655,6 @@ async fn finish_run_multipart_internal(
             .count_for_worker(&active_run.worker_name)
             .await as i64,
     );
-    crate::metrics::RUNS_COMPLETED_TOTAL
-        .with_label_values(&[
-            &janitor_result.campaign,
-            &janitor_result.code,
-            &active_run.worker_name,
-        ])
-        .inc();
 
     let response = FinishResponse {
         id: run_id,
@@ -3161,6 +3156,9 @@ async fn assign_work_internal(
     request: AssignRequest,
     active_runs_path: &str,
 ) -> Response {
+    crate::metrics::ASSIGNMENT_COUNT
+        .with_label_values(&[&worker_name])
+        .inc();
     let mut excluded_hosts = state.avoid_hosts.clone();
     if let Some(client_exclusions) = request.exclude_hosts.as_ref() {
         for host in client_exclusions {
@@ -3208,6 +3206,7 @@ async fn assign_work_internal(
         {
             Ok(Some(assignment)) => assignment,
             Ok(None) => {
+                crate::metrics::QUEUE_EMPTY_COUNT.inc();
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({"reason": "queue empty"})),
@@ -3362,6 +3361,9 @@ async fn assign_work_internal(
         // Retry-After header.
         let wait_secs = retry_after.unwrap_or(1800.0).max(0.0);
         let until = chrono::Utc::now() + chrono::Duration::seconds(wait_secs as i64);
+        crate::metrics::RATE_LIMITED_COUNT
+            .with_label_values(&[&host])
+            .inc();
         if let Err(e) = state.database.rate_limit_host(&host, until).await {
             log::warn!("Failed to record rate-limit for host {}: {}", host, e);
         }
@@ -3413,6 +3415,7 @@ async fn assign_work_internal(
 
     // Store active run in the in-memory store
     state.active_runs.store(active_run.clone()).await;
+    crate::metrics::RUN_COUNT.inc();
     crate::metrics::MetricsCollector::set_active_runs(
         &active_run.worker_name,
         state

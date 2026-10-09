@@ -578,6 +578,10 @@ impl Watchdog {
         }
 
         self.active_runs.remove(&run.log_id).await;
+        crate::metrics::MetricsCollector::set_active_runs(
+            &run.worker_name,
+            self.active_runs.count_for_worker(&run.worker_name).await as i64,
+        );
 
         // Clean up health failure tracking
         self.health_failures.remove(&run.log_id);
