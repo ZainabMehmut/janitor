@@ -926,6 +926,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_is_expected_stdin_close_accepts_the_close_kinds() {
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::UnexpectedEof,
+        ] {
+            assert!(
+                is_expected_stdin_close(kind),
+                "{:?} should be treated as an expected stdin close",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_expected_stdin_close_rejects_other_kinds() {
+        for kind in [
+            std::io::ErrorKind::Other,
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::WriteZero,
+        ] {
+            assert!(
+                !is_expected_stdin_close(kind),
+                "{:?} should not be treated as an expected stdin close",
+                kind
+            );
+        }
+    }
+
+    #[test]
     fn test_diff_query_parsing() {
         let query = "old=abc123&new=def456&path=src/main.rs";
         let params: DiffQuery = serde_urlencoded::from_str(query).unwrap();
