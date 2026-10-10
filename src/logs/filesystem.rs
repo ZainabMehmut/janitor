@@ -199,14 +199,19 @@ impl LogFileManager for FileSystemLogFileManager {
     }
 
     async fn delete_log(&self, codebase: &str, run_id: &str, name: &str) -> Result<(), Error> {
+        let mut removed = false;
         for path in self.get_paths(codebase, run_id, name) {
             match async_fs::remove_file(&path).await {
-                Ok(()) => return Ok(()),
+                Ok(()) => removed = true,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(Error::from(e)),
             }
         }
-        Err(Error::NotFound)
+        if removed {
+            Ok(())
+        } else {
+            Err(Error::NotFound)
+        }
     }
 
     async fn health_check(&self) -> Result<(), Error> {
