@@ -5,6 +5,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_new_invalid_parent() {
         let nonexistent_path = std::path::Path::new("/nonexistent/directory/output.log");
         let result = CopyOutput::new(nonexistent_path, false);
@@ -16,6 +17,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_new_valid_parent() {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("test_output.log");
@@ -29,6 +31,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_new_root_directory() {
         // Test with a file in the root directory (which always exists)
         let temp_dir = TempDir::new().unwrap();
@@ -39,6 +42,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_file_creation() {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("test.log");
@@ -52,6 +56,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_manual_restore() {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("restore_test.log");
@@ -68,6 +73,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_drop_cleanup() {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("drop_test.log");
@@ -82,6 +88,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_fields() {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("fields_test.log");
@@ -96,6 +103,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_tee_mode_process_spawn_failure() {
         // This test attempts to use tee mode, but may fail if 'tee' command is not available
         let temp_dir = TempDir::new().unwrap();
@@ -120,6 +128,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_file_mode_vs_tee_mode() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -140,6 +149,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_with_different_extensions() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -159,6 +169,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_nested_directories() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -174,6 +185,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_existing_file_overwrite() {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("existing.log");
@@ -194,6 +206,7 @@ mod tests {
 
     // Test the internal state management
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_state_transitions() {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("state_test.log");
@@ -211,6 +224,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_error_messages() {
         // Test error message formatting for invalid paths
         let result = CopyOutput::new(std::path::Path::new("/invalid/path/file.log"), false);
@@ -223,6 +237,7 @@ mod tests {
 
     // This test ensures the CopyOutput properly implements Send + Sync if needed
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_thread_safety() {
         fn assert_send<T: Send>() {}
         fn assert_sync<T: Sync>() {}
@@ -234,6 +249,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_copy_output_memory_safety() {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("memory_test.log");
