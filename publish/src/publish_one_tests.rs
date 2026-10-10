@@ -244,3 +244,106 @@ fn test_render_proposal_description_binary_debdiff() {
     .unwrap();
     assert_eq!(rendered, "(Binary diff - 2 bytes)");
 }
+
+#[test]
+fn test_template_env_trims_blocks() {
+    // trim_blocks and lstrip_blocks are set on the environment, and nothing
+    // rendered a template with block tags on their own lines, so neither
+    // setting was observable.
+    let dir = template_dir(&[(
+        "lintian-fixes.md",
+        "a\n    {% if true %}\nb\n    {% endif %}\nc\n",
+    )]);
+    let env = load_template_env(dir.path());
+    let rendered = render(
+        &env,
+        &serde_json::json!({}),
+        None,
+        None,
+        DescriptionFormat::Markdown,
+    )
+    .unwrap();
+    assert_eq!(rendered, "a\nb\nc");
+}
+
+#[test]
+fn test_template_env_does_not_escape_markdown() {
+    let dir = template_dir(&[("lintian-fixes.md", "{{ value }}")]);
+    let env = load_template_env(dir.path());
+    let rendered = render(
+        &env,
+        &serde_json::json!({"value": "<a href='x'>&"}),
+        None,
+        None,
+        DescriptionFormat::Markdown,
+    )
+    .unwrap();
+    assert_eq!(rendered, "<a href='x'>&");
+}
+
+#[test]
+fn test_template_env_escapes_other_suffixes() {
+    // render_proposal_description only ever asks for .md or .txt, so the
+    // other arm of the auto-escape callback needs a direct render.
+    let dir = template_dir(&[("page.html", "{{ value }}")]);
+    let env = load_template_env(dir.path());
+    let rendered = env
+        .get_template("page.html")
+        .unwrap()
+        .render(minijinja::context! { value => "<b>" })
+        .unwrap();
+    assert_eq!(rendered, "&lt;b&gt;");
+}
+
+#[test]
+fn test_template_env_registers_markdownify_debdiff() {
+    let debdiff = "Files in second .changes but not in first\n-----------------------------------------\n-rw-r--r--  root/root   /usr/lib/somefile\n";
+    let dir = template_dir(&[("lintian-fixes.md", "{{ markdownify_debdiff(debdiff) }}")]);
+    let env = load_template_env(dir.path());
+    let rendered = render(
+        &env,
+        &serde_json::json!({}),
+        None,
+        Some(debdiff.as_bytes()),
+        DescriptionFormat::Markdown,
+    )
+    .unwrap();
+    assert!(rendered.starts_with("### Files in second .changes but not in first"), "{}", rendered);
+}
+
+#[test]
+fn test_parseaddr_without_a_display_name() {
+    // The sequence's first element is none when the address carries no name,
+    // which is why parseaddr returns a sequence rather than a pair.
+    let dir = template_dir(&[(
+        "lintian-fixes.md",
+        "{% if parseaddr('joe@example.com')[0] is none %}none{% endif %}{{ parseaddr('joe@example.com')[1] }}",
+    )]);
+    let env = load_template_env(dir.path());
+    let rendered = render(
+        &env,
+        &serde_json::json!({}),
+        None,
+        None,
+        DescriptionFormat::Markdown,
+    )
+    .unwrap();
+    assert_eq!(rendered, "nonejoe@example.com");
+}
+
+#[test]
+fn test_render_proposal_description_non_object_extra_context() {
+    // A non-object extra_context is warned about and ignored rather than
+    // failing the render.
+    let dir = template_dir(&[("lintian-fixes.md", "{{ log_id }}")]);
+    let env = load_template_env(dir.path());
+    let rendered = render(
+        &env,
+        &serde_json::json!({}),
+        Some(&serde_json::json!("not an object")),
+        None,
+        DescriptionFormat::Markdown,
+    )
+    .unwrap();
+    assert_eq!(rendered, "run-1");
+}
