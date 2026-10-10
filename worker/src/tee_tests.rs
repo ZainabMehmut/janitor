@@ -129,17 +129,37 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn test_copy_output_refuses_to_nest() {
+        let temp_dir = TempDir::new().unwrap();
+        let first = CopyOutput::new(&temp_dir.path().join("first.log"), false).unwrap();
+
+        let second = CopyOutput::new(&temp_dir.path().join("second.log"), false);
+        assert!(
+            second.is_err(),
+            "a second redirection was allowed while the first was held"
+        );
+
+        drop(first);
+        // The claim is given up again, so a later one succeeds.
+        CopyOutput::new(&temp_dir.path().join("third.log"), false).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn test_copy_output_file_mode_vs_tee_mode() {
         let temp_dir = TempDir::new().unwrap();
 
         // Test file mode
         let file_path = temp_dir.path().join("file_mode.log");
-        let file_copy = CopyOutput::new(&file_path, false).unwrap();
-        assert!(!file_copy.tee);
-        assert!(file_copy.newfd.is_some());
-        assert!(file_copy.process.is_none());
+        {
+            let file_copy = CopyOutput::new(&file_path, false).unwrap();
+            assert!(!file_copy.tee);
+            assert!(file_copy.newfd.is_some());
+            assert!(file_copy.process.is_none());
+        }
 
-        // Test tee mode (if available)
+        // Test tee mode (if available). Only one redirection may be held at a
+        // time, so the file one above has to be dropped first.
         let tee_path = temp_dir.path().join("tee_mode.log");
         if let Ok(tee_copy) = CopyOutput::new(&tee_path, true) {
             assert!(tee_copy.tee);
