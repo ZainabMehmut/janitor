@@ -1117,4 +1117,94 @@ mod tests {
             "install -d --owner=1000 --group=1000 \"$1\"/home/build"
         );
     }
+
+    #[test]
+    fn test_home_directory_hook_quotes_the_path() {
+        assert_eq!(
+            home_directory_hook(1000, 1000, Path::new("/home/odd name")),
+            "install -d --owner=1000 --group=1000 \"$1\"'/home/odd name'"
+        );
+    }
+
+    #[test]
+    fn test_create_builds_in_a_hidden_traversable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let td = tempfile::tempdir().unwrap();
+        let job = plan(&unstable(), &options(td.path())).unwrap();
+        let seen = RefCell::new(None);
+        create(&job, false, &mut |command| {
+            let target = Path::new(&command[TARGET_INDEX]);
+            let scratch = target.parent().unwrap();
+            let name = scratch.file_name().unwrap().to_string_lossy().into_owned();
+            let mode = std::fs::metadata(scratch).unwrap().permissions().mode() & 0o777;
+            *seen.borrow_mut() = Some((name, mode));
+            std::fs::write(target, b"new").unwrap();
+            Ok(())
+        })
+        .unwrap();
+        let (name, mode) = seen.into_inner().unwrap();
+        // sbuild reads the names in the directory, so the scratch one is hidden
+        assert!(name.starts_with(".tmp"), "{}", name);
+        // mmdebstrap enters the directory as another user
+        assert_eq!(mode, 0o755, "{:o}", mode);
+    }
+
+    #[test]
+    fn test_replace_link_refuses_a_regular_file() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("link.tar.xz");
+        std::fs::write(&path, b"precious").unwrap();
+        let err = replace_link(td.path(), "link.tar.xz", "other.tar.xz").unwrap_err();
+        assert!(matches!(&err, Error::LinkBlocked(p) if *p == path));
+        assert_eq!(std::fs::read(&path).unwrap(), b"precious");
+        assert_eq!(std::fs::read_dir(td.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn test_chroots_from_config_skips_campaign_without_build_distribution() {
+        let config = janitor::config::read_string(
+            r#"
+            distribution {
+                name: "unstable"
+                archive_mirror_uri: "http://deb.debian.org/debian"
+                chroot: "unstable-amd64-sbuild"
+                component: "main"
+            }
+            campaign { name: "nothing" debian_build { base_distribution: "unstable" } }
+            campaign {
+                name: "lintian-fixes"
+                debian_build { build_distribution: "lintian-fixes" base_distribution: "unstable" }
+            }
+            "#,
+        )
+        .unwrap();
+        let chroots = chroots_from_config(&config, &[]).unwrap();
+        assert_eq!(chroots.len(), 1);
+        assert_eq!(chroots[0].build_distributions, strings(&["lintian-fixes"]));
+    }
+
+    #[test]
+    fn test_plan_drops_duplicate_links() {
+        let mut chroot = unstable();
+        chroot.build_distributions = strings(&["lintian-fixes", "lintian-fixes"]);
+        let job = plan(&chroot, &options(Path::new("/chroots"))).unwrap();
+        assert_eq!(job.links, strings(&["lintian-fixes-amd64-sbuild.tar.xz"]));
+    }
+
+    #[test]
+    fn test_plan_rejects_a_slash_in_a_name() {
+        let mut chroot = unstable();
+        chroot.chroot = "a/b-amd64-sbuild".to_string();
+        assert!(matches!(
+            plan(&chroot, &options(Path::new("/chroots"))),
+            Err(Error::UnusableChrootName(n)) if n == "a/b-amd64-sbuild"
+        ));
+
+        let mut chroot = unstable();
+        chroot.build_distributions = strings(&["a/b"]);
+        assert!(matches!(
+            plan(&chroot, &options(Path::new("/chroots"))),
+            Err(Error::UnusableBuildDistribution(n)) if n == "a/b"
+        ));
+    }
 }
