@@ -605,12 +605,15 @@ mod tests {
         write_log(&to_td, "worker.log", "worker\n");
 
         let todo = names(&["worker.log"]);
+        let before = snapshot(to_td.path());
         let outcome = migrate_run_logs(&from, &to, CODEBASE, RUN_ID, &todo, Options::default())
             .await
             .unwrap();
 
         assert_eq!(outcome, Outcome::default());
         assert_eq!(read_log(&to, "worker.log").await, "worker\n");
+        // read_log prefers the plain name, so a .gz beside it is invisible.
+        assert_eq!(snapshot(to_td.path()), before);
     }
 
     #[tokio::test]
