@@ -167,6 +167,26 @@ fn check_mode(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+/// Find the definitions that `--remove-old` would remove for each job.
+fn plan_removals(
+    args: &Args,
+    jobs: &[schroot::Job],
+    config_dir: &std::path::Path,
+    session_dir: &std::path::Path,
+) -> Result<Vec<Vec<schroot::Removal>>, String> {
+    let mut removals = Vec::new();
+    for job in jobs {
+        removals.push(if args.remove_old {
+            let mounts = schroot::mount_points().map_err(|e| e.to_string())?;
+            schroot::plan_remove_old(job, config_dir, session_dir, &mounts)
+                .map_err(|e| e.to_string())?
+        } else {
+            vec![]
+        });
+    }
+    Ok(removals)
+}
+
 fn run_schroot(args: &Args, chroots: &[Chroot]) -> Result<(), String> {
     if args.user.is_some() {
         log::warn!("--user has no effect with --mode schroot");
@@ -202,16 +222,7 @@ fn run_schroot(args: &Args, chroots: &[Chroot]) -> Result<(), String> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
     schroot::check_collisions(&jobs).map_err(|e| e.to_string())?;
-    let mut removals = Vec::new();
-    for job in &jobs {
-        removals.push(if args.remove_old {
-            let mounts = schroot::mount_points().map_err(|e| e.to_string())?;
-            schroot::plan_remove_old(job, config_dir, session_dir, &mounts)
-                .map_err(|e| e.to_string())?
-        } else {
-            vec![]
-        });
-    }
+    let removals = plan_removals(args, &jobs, config_dir, session_dir)?;
 
     for (job, removals) in jobs.iter().zip(&removals) {
         if args.dry_run {
@@ -487,6 +498,53 @@ mod tests {
         let argv = ["prog", "--mode=schroot", "--base-directory=/c", "--force"];
         let err = check_mode(&Args::try_parse_from(argv).unwrap()).unwrap_err();
         assert!(err.contains("--mode unshare"), "{}", err);
+    }
+
+    #[test]
+    fn test_plan_removals_only_with_remove_old() {
+        let td = tempfile::tempdir().unwrap();
+        let base = td.path().canonicalize().unwrap();
+        let config_dir = base.join("chroot.d");
+        let session_dir = base.join("session");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let chroot = Chroot::new(
+            "unstable",
+            "http://m",
+            "unstable-amd64-sbuild",
+            &["main".to_string()],
+            &[],
+            &[],
+        );
+        let options = schroot::Options {
+            base_directory: base.clone(),
+            arch: "amd64".to_string(),
+            ..Default::default()
+        };
+        let job = schroot::plan(&chroot, &options).unwrap();
+        std::fs::create_dir_all(&job.directory).unwrap();
+        std::fs::write(
+            config_dir.join("unstable-amd64-sbuild-Ab12Cd"),
+            format!(
+                "[{}]\ntype=directory\ndirectory={}\n",
+                job.name,
+                job.directory.display()
+            ),
+        )
+        .unwrap();
+        let jobs = vec![job.clone()];
+
+        let base_argv = ["prog", "--mode=schroot", "--base-directory=/c"];
+        let args = Args::try_parse_from(base_argv).unwrap();
+        assert_eq!(
+            plan_removals(&args, &jobs, &config_dir, &session_dir).unwrap(),
+            vec![vec![]]
+        );
+
+        let args = Args::try_parse_from([&base_argv[..], &["--remove-old"]].concat()).unwrap();
+        let removals = plan_removals(&args, &jobs, &config_dir, &session_dir).unwrap();
+        assert_eq!(removals.len(), 1);
+        assert_eq!(removals[0].len(), 1);
+        assert_eq!(removals[0][0].path, job.directory);
     }
 
     #[test]
