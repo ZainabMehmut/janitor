@@ -380,7 +380,8 @@ async fn cmd_run_schedule(
     offset: Option<f64>,
     refresh: bool,
 ) -> Result<(), String> {
-    let mut form: Vec<(&str, String)> = vec![("refresh", if refresh { "1" } else { "0" }.to_string())];
+    let mut form: Vec<(&str, String)> =
+        vec![("refresh", if refresh { "1" } else { "0" }.to_string())];
     if let Some(offset) = offset {
         form.push(("offset", offset.to_string()));
     }
@@ -635,9 +636,7 @@ async fn main() -> ExitCode {
             RunCmd::Log { run_id, filename } => {
                 cmd_run_log(&client, &run_id, filename.as_deref()).await
             }
-            RunCmd::Diff { run_id, role } => {
-                cmd_run_diff(&client, &run_id, role.as_deref()).await
-            }
+            RunCmd::Diff { run_id, role } => cmd_run_diff(&client, &run_id, role.as_deref()).await,
             RunCmd::Debdiff {
                 run_id,
                 filter_boring,
@@ -687,11 +686,12 @@ mod tests {
         .unwrap();
         match cli.command {
             Command::Publish {
-                cmd: PublishCmd::Trigger {
-                    campaign,
-                    codebase,
-                    mode,
-                },
+                cmd:
+                    PublishCmd::Trigger {
+                        campaign,
+                        codebase,
+                        mode,
+                    },
             } => {
                 assert_eq!(campaign, "lintian-fixes");
                 assert_eq!(codebase, "mypkg");
@@ -976,10 +976,11 @@ mod tests {
         .unwrap();
         match cli.command {
             Command::Run {
-                cmd: RunCmd::Debdiff {
-                    run_id,
-                    filter_boring,
-                },
+                cmd:
+                    RunCmd::Debdiff {
+                        run_id,
+                        filter_boring,
+                    },
             } => {
                 assert_eq!(run_id, "a1b2c3d4-5f6a-4b3c-9d8e-1234567890ab");
                 assert!(filter_boring);
@@ -1007,7 +1008,12 @@ mod tests {
     #[test]
     fn cli_parses_run_active_peek_and_show() {
         let cli = Cli::try_parse_from(["janitor-package", "run", "active"]).unwrap();
-        assert!(matches!(cli.command, Command::Run { cmd: RunCmd::Active }));
+        assert!(matches!(
+            cli.command,
+            Command::Run {
+                cmd: RunCmd::Active
+            }
+        ));
 
         let cli = Cli::try_parse_from(["janitor-package", "run", "peek"]).unwrap();
         assert!(matches!(cli.command, Command::Run { cmd: RunCmd::Peek }));
