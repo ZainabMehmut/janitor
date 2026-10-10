@@ -791,4 +791,24 @@ mod tests {
         assert_eq!(result, (1, 0, 2));
         assert_eq!(snapshot(td.path()), before);
     }
+
+    #[test]
+    fn test_error_display() {
+        assert_eq!(
+            Error::Log {
+                action: "import",
+                name: "worker.log".to_string(),
+                error: LogError::NotFound,
+            }
+            .to_string(),
+            "failed to import worker.log: Not found"
+        );
+        assert_eq!(
+            Error::Io(std::io::Error::other("boom")).to_string(),
+            "I/O error: boom"
+        );
+        assert!(Error::Database(sqlx::Error::RowNotFound)
+            .to_string()
+            .starts_with("database error: "));
+    }
 }
