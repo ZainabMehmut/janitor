@@ -457,6 +457,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delete_log_removes_the_gz_beside_the_plain_name() {
+        let (_td, mgr) = setup();
+        let dir = _td.path().join("codebase").join("run-1");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("build.log"), b"plain").unwrap();
+        std::fs::write(dir.join("build.log.gz"), b"compressed").unwrap();
+
+        mgr.delete_log("codebase", "run-1", "build.log")
+            .await
+            .unwrap();
+
+        assert!(
+            !mgr.has_log("codebase", "run-1", "build.log").await.unwrap(),
+            "a log is still present after delete_log"
+        );
+        assert!(!dir.join("build.log").exists(), "plain name left behind");
+        assert!(!dir.join("build.log.gz").exists(), "gz left behind");
+    }
+
+    #[tokio::test]
     async fn test_path_traversal_rejected() {
         let (_td, mgr) = setup();
         // Paths containing '/' should return empty paths list
