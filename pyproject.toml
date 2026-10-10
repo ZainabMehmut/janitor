@@ -180,7 +180,6 @@ dev = [
 
 debian = [
     "brz-debian@git+https://github.com/breezy-team/breezy-debian",
-    "iniparse",
     "ognibuild[debian,dep_server]",
     "python-debian",
     "silver-platter[debian]",
