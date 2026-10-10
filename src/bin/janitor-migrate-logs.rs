@@ -811,4 +811,26 @@ mod tests {
             .to_string()
             .starts_with("database error: "));
     }
+
+    #[cfg(feature = "testing")]
+    #[tokio::test]
+    async fn test_process_all_runs_obeys_the_stored_names() {
+        let Some(db) = setup_database("ARRAY['build.log']").await else {
+            return;
+        };
+        let (from_td, from) = setup();
+        let (_to_td, to) = setup();
+        write_log(&from_td, "worker.log", "worker\n");
+        write_log(&from_td, "build.log", "build\n");
+
+        let result = process_all_runs(&db.pool, &from, &to, 100, Options::default())
+            .await
+            .unwrap();
+
+        assert_eq!(result, (1, 0, 0));
+        assert_eq!(read_log(&to, "build.log").await, "build\n");
+        // worker.log is in the source but not in the stored list, so it stays.
+        assert!(!to.has_log(CODEBASE, RUN_ID, "worker.log").await.unwrap());
+        assert!(from.has_log(CODEBASE, RUN_ID, "worker.log").await.unwrap());
+    }
 }
