@@ -114,6 +114,126 @@ fn check_signal_removes_temporary_directory(name: &str) {
     assert_eq!(status.code(), Some(1));
 }
 
+/// Run the tool with --dry-run and return what it printed.
+fn dry_run(extra: &[&str], base_directory: &Path) -> String {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_janitor-create-sbuild-chroot"));
+    command
+        .args(["--suite=unstable", "--mirror=http://deb.debian.org/debian"])
+        .args(["--chroot=unstable-amd64-sbuild", "--dry-run"])
+        .arg("--base-directory")
+        .arg(base_directory)
+        .args(extra);
+    let out = command.output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn test_dry_run_unshare_prints_the_command_and_changes_nothing() {
+    let td = tempfile::tempdir().unwrap();
+    let cache = td.path().join("sbuild");
+    std::fs::create_dir_all(&cache).unwrap();
+    let stdout = dry_run(
+        &[
+            "--arch=arm64",
+            "--include=ccache",
+            "--build-distribution=lintian-fixes",
+        ],
+        &cache,
+    );
+    assert_eq!(
+        stdout,
+        format!(
+            "mmdebstrap '--variant=buildd' unstable {0}/unstable-amd64-sbuild.tar.xz \
+http://deb.debian.org/debian '--mode=unshare' '--arch=arm64' '--include=ccache'\n\
+ln -sf unstable-amd64-sbuild.tar.xz {0}/lintian-fixes-arm64-sbuild.tar.xz\n",
+            cache.display()
+        )
+    );
+    assert_eq!(entries(&cache), Vec::<PathBuf>::new());
+}
+
+#[test]
+fn test_dry_run_unshare_keeps_an_existing_tarball_unless_forced() {
+    let td = tempfile::tempdir().unwrap();
+    let cache = td.path().join("sbuild");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join(TARBALL), b"old").unwrap();
+    assert_eq!(
+        dry_run(&["--arch=amd64"], &cache),
+        format!("# keeping existing {}/{}\n", cache.display(), TARBALL)
+    );
+    assert!(dry_run(&["--arch=amd64", "--force"], &cache).starts_with("mmdebstrap "));
+}
+
+#[test]
+fn test_dry_run_unshare_adds_the_home_directory_hook() {
+    let td = tempfile::tempdir().unwrap();
+    let cache = td.path().join("sbuild");
+    std::fs::create_dir_all(&cache).unwrap();
+    let stdout = dry_run(&["--arch=amd64", "--user=root"], &cache);
+    assert!(
+        stdout.contains("--customize-hook=install -d --owner=0 --group=0 \"$1\"/root"),
+        "{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_dry_run_schroot_resolves_the_base_directory() {
+    let td = tempfile::tempdir().unwrap();
+    let real = td.path().join("chroots");
+    std::fs::create_dir_all(&real).unwrap();
+    let link = td.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let stdout = dry_run(
+        &[
+            "--mode=schroot",
+            "--arch=amd64",
+            "--component=main",
+            "--include=ccache",
+        ],
+        &link,
+    );
+    assert_eq!(
+        stdout,
+        format!(
+            "sbuild-createchroot unstable {}/unstable-amd64-sbuild \
+http://deb.debian.org/debian '--arch=amd64' '--components=main' \
+'--command-prefix=eatmydata' '--include=ccache,eatmydata' '--chroot-mode=schroot'\n",
+            real.canonicalize().unwrap().display()
+        )
+    );
+}
+
+#[test]
+#[serial]
+fn test_force_replaces_an_existing_tarball() {
+    let td = tempfile::tempdir().unwrap();
+    let cache = td.path().join("sbuild");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join(TARBALL), b"old").unwrap();
+    write_stand_in(td.path(), "echo complete > \"$3\"");
+
+    let mut keep = create_sbuild_chroot(td.path(), &cache);
+    let mut tool = keep.spawn().unwrap();
+    assert!(wait_for_exit(&mut tool).success());
+    assert_eq!(std::fs::read(cache.join(TARBALL)).unwrap(), b"old".to_vec());
+
+    let mut forced = create_sbuild_chroot(td.path(), &cache);
+    forced.arg("--force");
+    let mut tool = forced.spawn().unwrap();
+    assert!(wait_for_exit(&mut tool).success());
+    assert_eq!(
+        std::fs::read(cache.join(TARBALL)).unwrap(),
+        b"complete\n".to_vec()
+    );
+}
+
 #[test]
 #[serial]
 fn test_sigterm_removes_temporary_directory() {
