@@ -156,14 +156,15 @@ class FileSystemLogFileManager(LogFileManager):
                 outf.write(inf.read())
 
     async def delete_log(self, codebase, run_id, name):
+        removed = False
         for path in self._get_paths(codebase, run_id, name):
             try:
                 os.unlink(path)
             except FileNotFoundError:
                 pass
             else:
-                break
-        else:
+                removed = True
+        if not removed:
             raise FileNotFoundError(name)
 
 
