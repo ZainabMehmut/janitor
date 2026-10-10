@@ -1094,4 +1094,14 @@ mod tests {
         let cli = Cli::try_parse_from(["janitor-package", "status"]).unwrap();
         assert!(matches!(cli.command, Command::Status));
     }
+
+    #[test]
+    fn as_str_matches_clap_value_names_for_every_variant() {
+        for v in PublishMode::value_variants() {
+            assert_eq!(v.as_str(), v.to_possible_value().unwrap().get_name());
+        }
+        for v in Verdict::value_variants() {
+            assert_eq!(v.as_str(), v.to_possible_value().unwrap().get_name());
+        }
+    }
 }
