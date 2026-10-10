@@ -32,6 +32,23 @@ def test_gcs_log_file_manager():
     GCSLogFileManager("gs://foo/")
 
 
+async def test_file_log_file_manager_delete_removes_the_gz_too():
+    with tempfile.TemporaryDirectory() as td:
+        async with FileSystemLogFileManager(td) as lm:
+            d = os.path.join(td, "mypkg", "run-id")
+            os.makedirs(d)
+            with open(os.path.join(d, "build.log"), "wb") as f:
+                f.write(b"plain")
+            with open(os.path.join(d, "build.log.gz"), "wb") as f:
+                f.write(b"compressed")
+
+            await lm.delete_log("mypkg", "run-id", "build.log")
+
+            assert not await lm.has_log("mypkg", "run-id", "build.log")
+            assert not os.path.exists(os.path.join(d, "build.log"))
+            assert not os.path.exists(os.path.join(d, "build.log.gz"))
+
+
 async def test_file_log_file_manager():
     with tempfile.TemporaryDirectory() as td:
         async with FileSystemLogFileManager(td) as lm:
