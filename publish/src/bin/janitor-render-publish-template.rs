@@ -50,17 +50,28 @@ struct Args {
     logs: janitor::logging::LoggingArgs,
 }
 
-async fn render(args: &Args) -> Result<String, String> {
-    let templates_dir = match args.template_env_path.clone() {
-        Some(path) => path,
+/// The templates directory: the one given, or one beside the executable.
+fn templates_dir(arg: Option<&std::path::Path>, exe: &std::path::Path) -> PathBuf {
+    match arg {
+        Some(path) => path.to_path_buf(),
         None => {
-            let mut path = std::env::current_exe()
-                .map_err(|e| format!("Failed to get current executable path: {}", e))?;
+            let mut path = exe.to_path_buf();
             path.pop();
             path.push("proposal-templates");
             path
         }
-    };
+    }
+}
+
+/// The external URL as templates see it, without a trailing slash.
+fn normalise_external_url(external_url: Option<&Url>) -> Option<String> {
+    external_url.map(|u| u.to_string().trim_end_matches('/').to_string())
+}
+
+async fn render(args: &Args) -> Result<String, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Failed to get current executable path: {}", e))?;
+    let templates_dir = templates_dir(args.template_env_path.as_deref(), &exe);
 
     let config = janitor::config::read_file(&args.config)
         .map_err(|e| format!("Failed to read config {}: {}", args.config.display(), e))?;
@@ -75,9 +86,7 @@ async fn render(args: &Args) -> Result<String, String> {
     let mut template_env = load_template_env(&templates_dir);
     template_env.add_global(
         "external_url",
-        args.external_url
-            .as_ref()
-            .map(|external_url| external_url.to_string().trim_end_matches('/').to_string()),
+        normalise_external_url(args.external_url.as_ref()),
     );
 
     let codemod_result = run.result.unwrap_or(serde_json::Value::Null);
@@ -187,5 +196,33 @@ mod tests {
             DescriptionFormat::from(Format::Txt),
             DescriptionFormat::Plain
         );
+    }
+
+    #[test]
+    fn test_templates_dir_defaults_beside_the_executable() {
+        use std::path::{Path, PathBuf};
+        assert_eq!(
+            templates_dir(None, Path::new("/opt/janitor/bin/janitor-render-publish-template")),
+            PathBuf::from("/opt/janitor/bin/proposal-templates")
+        );
+    }
+
+    #[test]
+    fn test_templates_dir_takes_the_argument_as_given() {
+        use std::path::{Path, PathBuf};
+        assert_eq!(
+            templates_dir(Some(Path::new("/srv/templates")), Path::new("/opt/janitor/bin/brz")),
+            PathBuf::from("/srv/templates")
+        );
+    }
+
+    #[test]
+    fn test_normalise_external_url_drops_a_trailing_slash() {
+        let url = Url::parse("https://janitor.example.com/").unwrap();
+        assert_eq!(
+            normalise_external_url(Some(&url)),
+            Some("https://janitor.example.com".to_string())
+        );
+        assert_eq!(normalise_external_url(None), None);
     }
 }
