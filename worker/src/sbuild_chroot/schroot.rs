@@ -1073,10 +1073,12 @@ mod tests {
         let removals = f.plan(&[]).unwrap();
         std::fs::remove_file(&f.job.tarball).unwrap();
         std::fs::create_dir(&f.job.tarball).unwrap();
-        assert!(matches!(
-            f.remove(&removals),
-            Err(Error::RefusingToRemove(..))
-        ));
+        let err = f.remove(&removals).unwrap_err();
+        assert!(
+            matches!(&err, Error::RefusingToRemove(_, r) if *r == "it is a directory, not a tarball"),
+            "{}",
+            err
+        );
         assert!(entry.exists() && f.job.tarball.is_dir());
     }
 
@@ -1201,6 +1203,41 @@ mod tests {
             ]
         );
         assert!(mount_points().unwrap().contains(&PathBuf::from("/proc")));
+    }
+
+    #[test]
+    fn test_parse_sections() {
+        let text = "# written by sbuild-createchroot\n\
+                    [ unstable-amd64-sbuild ]\n\
+                    # directory=/srv/commented-out\n\
+                    ; file=/srv/also-commented-out\n\
+                    \x20 directory = /srv/chroots/unstable-amd64-sbuild \n\
+                    \n\
+                    [other]\n";
+        assert_eq!(
+            parse_sections(text),
+            vec![
+                (
+                    "unstable-amd64-sbuild".to_string(),
+                    vec![(
+                        "directory".to_string(),
+                        "/srv/chroots/unstable-amd64-sbuild".to_string()
+                    )]
+                ),
+                ("other".to_string(), vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_remove_old_skips_entries_that_are_not_files() {
+        let f = fixture(false);
+        let entry = directory_entry(&f, &f.job.directory);
+        // schroot reads the regular files in the directory
+        std::fs::create_dir(f.config_dir.join("a-directory")).unwrap();
+        let removals = f.plan(&[]).unwrap();
+        assert_eq!(removals.len(), 1);
+        assert_eq!(removals[0].entry, entry);
     }
 
     #[test]
