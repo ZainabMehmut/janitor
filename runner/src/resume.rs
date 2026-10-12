@@ -323,14 +323,14 @@ impl ResumeService {
 /// Reason label for a resume branch that a worker without credentials cannot read.
 pub const SKIP_REQUIRES_AUTHENTICATION: &str = "requires-authentication";
 
-/// Warn about and count a resume branch that is not used, so the run starts afresh.
+/// Warn about and count a resume branch that is not used; returns its URL without credentials.
 pub fn note_resume_branch_skipped(
     codebase: &str,
     campaign: &str,
     run_id: &str,
     branch_url: &url::Url,
     reason: &str,
-) {
+) -> String {
     // Keep credentials out of the log.
     let mut shown_url = branch_url.clone();
     let _ = shown_url.set_password(None);
@@ -346,6 +346,7 @@ pub fn note_resume_branch_skipped(
         reason,
     );
     crate::metrics::MetricsCollector::record_resume_branch_skipped(reason);
+    shown_url.to_string()
 }
 
 /// Outcome of attempting to locate a resume branch on the forge.
