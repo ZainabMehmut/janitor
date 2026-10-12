@@ -166,7 +166,8 @@ pub struct Build {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Branch {
     pub cached_url: Option<Url>,
-    pub vcs_type: VcsType,
+    /// The VCS type of the codebase, when the runner knows it.
+    pub vcs_type: Option<VcsType>,
 
     // The URL for the branch. Note that this can be None for nascent branches.
     pub url: Option<Url>,
@@ -183,7 +184,8 @@ pub struct Branch {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TargetRepository {
-    pub url: Url,
+    /// Where to upload the result. Unset when the codebase has no VCS type.
+    pub url: Option<Url>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -422,7 +424,7 @@ mod tests {
         assert_eq!(assignment.codebase, "mycodebase");
         assert_eq!(assignment.force_build, false);
         assert_eq!(assignment.skip_setup_validation, false);
-        assert_eq!(assignment.branch.vcs_type, VcsType::Git);
+        assert_eq!(assignment.branch.vcs_type, Some(VcsType::Git));
         assert!(assignment.resume.is_none());
     }
 }
