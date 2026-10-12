@@ -4019,7 +4019,8 @@ pub fn app(state: Arc<AppState>) -> Router {
 mod tests {
     use super::{
         assignment_validation_outcome, candidate_preflight, main_branch_name,
-        resume_branch_url_usable, AssignmentValidation, CandidatePreflight,
+        resume_branch_url_usable, unusable_resume_branch_description, AssignmentValidation,
+        CandidatePreflight,
     };
     use crate::CampaignConfig;
     use serde_json::json;
@@ -4841,6 +4842,18 @@ distribution {
         assert_eq!(
             main_branch_name(Some("https://example.com/foo?branch=")),
             "main"
+        );
+    }
+
+    /// The failed run's description names the resume branch.
+    #[test]
+    fn test_unusable_resume_branch_result() {
+        assert_eq!(
+            unusable_resume_branch_description(
+                "git+ssh://github.com/janitor-bot/foo,branch=lintian-fixes"
+            ),
+            "Resume branch git+ssh://github.com/janitor-bot/foo,branch=lintian-fixes \
+             needs credentials the worker does not have"
         );
     }
 

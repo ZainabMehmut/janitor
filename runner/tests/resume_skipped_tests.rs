@@ -40,7 +40,7 @@ fn skipped_resume_branch_is_warned_about_and_counted() {
     let before = counter.get();
 
     let url = url::Url::parse(BRANCH_URL).unwrap();
-    note_resume_branch_skipped(
+    let shown_url = note_resume_branch_skipped(
         "foo",
         "lintian-fixes",
         "run-1",
@@ -48,6 +48,8 @@ fn skipped_resume_branch_is_warned_about_and_counted() {
         SKIP_REQUIRES_AUTHENTICATION,
     );
 
+    // What is returned goes into the failed run's description, so no credentials there either.
+    assert_eq!(shown_url, SHOWN_URL);
     assert_eq!(counter.get(), before + 1);
 
     let warnings: Vec<String> = CAPTURE
