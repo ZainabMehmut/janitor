@@ -61,6 +61,16 @@ fn main() -> Result<(), i32> {
 
     args.logging.init();
 
+    let directory = std::env::current_dir()
+        .and_then(|cwd| absolute_directory(&cwd, &args.directory))
+        .unwrap_or_else(|e| {
+            report_failure(
+                "io-error",
+                &format!("Unable to open {}: {}", args.directory.display(), e),
+            )
+        });
+    let args = Args { directory, ..args };
+
     let package = std::env::var("PACKAGE").ok();
     let version = std::env::var("VERSION").ok();
 
@@ -247,4 +257,13 @@ fn main() -> Result<(), i32> {
     }
 
     Ok(())
+}
+
+/// Make `directory` absolute: the plain session starts in `/`, so a relative
+/// path would be looked up there rather than in `cwd`.
+fn absolute_directory(
+    cwd: &std::path::Path,
+    directory: &std::path::Path,
+) -> std::io::Result<PathBuf> {
+    cwd.join(directory).canonicalize()
 }
