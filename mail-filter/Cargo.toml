@@ -26,3 +26,11 @@ required-features=["cmdline"]
 [features]
 default = ["cmdline"]
 cmdline = ["dep:clap", "dep:reqwest", "dep:env_logger"]
+
+[dev-dependencies]
+axum = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt"] }
+
+[[test]]
+name = "refresh"
+required-features = ["cmdline"]
