@@ -32,25 +32,115 @@ pub fn push_branch(
                 .unwrap()
         },
     );
-    let target = match breezyshim::controldir::open(&url, possible_transports.as_mut()) {
-        Ok(cd) => cd,
-        Err(BrzError::NotBranchError(..)) => {
-            breezyshim::controldir::create(&url, &vcs_type, possible_transports.as_mut())?
-        }
-        Err(e) => {
+    // A boxed selector is used up by one push; share it so that each try gets its own.
+    let tag_selector = tag_selector.map(std::rc::Rc::from);
+    retry_push(push_retryable, || {
+        let target = match breezyshim::controldir::open(&url, possible_transports.as_mut()) {
+            Ok(cd) => cd,
+            Err(BrzError::NotBranchError(..)) => {
+                breezyshim::controldir::create(&url, &vcs_type, possible_transports.as_mut())?
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
+        let tag_selector = tag_selector
+            .clone()
+            .map(|f: std::rc::Rc<dyn Fn(String) -> bool>| {
+                Box::new(move |tag| f(tag)) as Box<dyn Fn(String) -> bool>
+            });
+        target.push_branch(
+            source_branch,
+            branch_name.as_deref(),
+            stop_revision.as_ref(),
+            Some(overwrite),
+            tag_selector,
+        )?;
+
+        Ok(())
+    })
+}
+
+/// Tries for one push, as in the Python worker (`max_tries=10`).
+const PUSH_MAX_TRIES: u32 = 10;
+
+/// Errors after which `import_branches_*` is tried again, as in the Python worker.
+fn import_retryable(e: &BrzError) -> bool {
+    matches!(
+        e,
+        BrzError::InvalidHttpResponse(..)
+            | BrzError::IncompleteRead(..)
+            | BrzError::ConnectionError(..)
+    )
+}
+
+/// Errors after which `push_branch` is tried again: also any unexpected HTTP status.
+fn push_retryable(e: &BrzError) -> bool {
+    matches!(e, BrzError::UnexpectedHttpStatus { .. }) || import_retryable(e)
+}
+
+fn push_branch_retries() -> &'static prometheus::IntCounter {
+    static M: std::sync::OnceLock<prometheus::IntCounter> = std::sync::OnceLock::new();
+    M.get_or_init(|| {
+        prometheus::register_int_counter!("push_branch_retries", "Number of branch push retries.")
+            .expect("register push_branch_retries")
+    })
+}
+
+/// Run a push, and run it again with a growing wait while it fails with a `retryable` error.
+fn retry_push<T>(
+    retryable: fn(&BrzError) -> bool,
+    op: impl FnMut() -> Result<T, BrzError>,
+) -> Result<T, BrzError> {
+    retry_push_with(
+        retryable,
+        op,
+        push_waits(),
+        std::thread::sleep,
+        push_branch_retries(),
+    )
+}
+
+/// Waits of 0.5 s, 1 s, 2 s, ... each with jitter.
+fn push_waits() -> backoff::ExponentialBackoff {
+    backoff::ExponentialBackoff {
+        multiplier: 2.0,
+        max_interval: std::time::Duration::from_secs(128),
+        max_elapsed_time: None,
+        ..Default::default()
+    }
+}
+
+fn retry_push_with<T>(
+    retryable: fn(&BrzError) -> bool,
+    mut op: impl FnMut() -> Result<T, BrzError>,
+    mut waits: backoff::ExponentialBackoff,
+    mut sleep: impl FnMut(std::time::Duration),
+    retries: &prometheus::IntCounter,
+) -> Result<T, BrzError> {
+    use backoff::backoff::Backoff;
+    let mut tries = 1;
+    loop {
+        let e = match op() {
+            Ok(ret) => return Ok(ret),
+            Err(e) => e,
+        };
+        if !retryable(&e) || tries >= PUSH_MAX_TRIES {
             return Err(e);
         }
-    };
-
-    target.push_branch(
-        source_branch,
-        branch_name.as_deref(),
-        stop_revision.as_ref(),
-        Some(overwrite),
-        tag_selector,
-    )?;
-
-    Ok(())
+        let wait = waits.next_backoff().unwrap_or(waits.max_interval);
+        tries += 1;
+        retries.inc();
+        // The error text can hold the URL with the password, so it is not logged.
+        log::warn!(
+            "Push failed; try {} of {} in {:?}",
+            tries,
+            PUSH_MAX_TRIES,
+            wait
+        );
+        sleep(wait);
+    }
 }
 
 /// Import branches into a new location.
@@ -213,15 +303,17 @@ impl Vcs for BzrVcs {
         tags: Vec<(String, Option<RevisionId>)>,
         update_current: bool,
     ) -> Result<(), BrzError> {
-        import_branches_bzr(
-            repo_url,
-            local_branch,
-            campaign,
-            log_id,
-            branches,
-            tags,
-            update_current,
-        )
+        retry_push(import_retryable, || {
+            import_branches_bzr(
+                repo_url,
+                local_branch,
+                campaign,
+                log_id,
+                branches,
+                tags.clone(),
+                update_current,
+            )
+        })
     }
 }
 
@@ -333,15 +425,17 @@ impl Vcs for GitVcs {
         tags: Vec<(String, Option<RevisionId>)>,
         update_current: bool,
     ) -> Result<(), BrzError> {
-        import_branches_git(
-            repo_url,
-            local_branch,
-            campaign,
-            log_id,
-            branches,
-            tags,
-            update_current,
-        )
+        retry_push(import_retryable, || {
+            import_branches_git(
+                repo_url,
+                local_branch,
+                campaign,
+                log_id,
+                branches,
+                tags.clone(),
+                update_current,
+            )
+        })
     }
 }
 
