@@ -507,6 +507,31 @@ mod tests {
     use breezyshim::controldir::{create_standalone_workingtree, ControlDirFormat};
     use breezyshim::tree::MutableTree;
 
+    fn suffix_config(build_suffix: Option<&str>) -> DebianBuildConfig {
+        DebianBuildConfig {
+            build_suffix: build_suffix.map(|s| s.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_build_version_suffix() {
+        assert_eq!(
+            build_version_suffix(&suffix_config(Some("jan+unchanged"))),
+            Some("~jan+unchanged".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_version_suffix_empty() {
+        assert_eq!(build_version_suffix(&suffix_config(Some(""))), None);
+    }
+
+    #[test]
+    fn test_build_version_suffix_unset() {
+        assert_eq!(build_version_suffix(&suffix_config(None)), None);
+    }
+
     #[test]
     fn test_create() {
         let target = DebianTarget::new(maplit::hashmap! {
