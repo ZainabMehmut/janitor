@@ -490,6 +490,15 @@ fn tree_set_changelog_version(
     Ok(())
 }
 
+/// The version suffix for a build; None when unset or empty (the runner sends "" for none).
+fn build_version_suffix(config: &DebianBuildConfig) -> Option<String> {
+    config
+        .build_suffix
+        .as_deref()
+        .filter(|suffix| !suffix.is_empty())
+        .map(|suffix| format!("~{}", suffix))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Target;
