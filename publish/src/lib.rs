@@ -1796,6 +1796,49 @@ mod tests {
         assert_eq!(roundtripped.description, "Could not merge");
     }
 
+    fn rate_limit_retry_after(retry_after: Option<f64>) -> Option<chrono::Duration> {
+        let url = url::Url::parse("https://example.com/foo").unwrap();
+        match branch_rate_limited(&url, retry_after) {
+            CheckMpError::BranchRateLimited { retry_after } => retry_after,
+            other => panic!("expected BranchRateLimited, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_branch_rate_limited_keeps_a_usable_retry_after() {
+        assert_eq!(rate_limit_retry_after(None), None);
+        assert_eq!(
+            rate_limit_retry_after(Some(0.0)),
+            Some(chrono::Duration::seconds(0))
+        );
+        assert_eq!(
+            rate_limit_retry_after(Some(-0.0)),
+            Some(chrono::Duration::seconds(0))
+        );
+        assert_eq!(
+            rate_limit_retry_after(Some(1.5)),
+            Some(chrono::Duration::seconds(2))
+        );
+        assert_eq!(
+            rate_limit_retry_after(Some(86400.0)),
+            Some(chrono::Duration::seconds(86400))
+        );
+    }
+
+    #[test]
+    fn test_branch_rate_limited_drops_an_invalid_retry_after() {
+        for bad in [
+            -1.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            86400.5,
+            1e10,
+        ] {
+            assert_eq!(rate_limit_retry_after(Some(bad)), None, "{bad}");
+        }
+    }
+
     #[test]
     fn test_check_mp_error_display() {
         let err = CheckMpError::NoRunForMergeProposal(
