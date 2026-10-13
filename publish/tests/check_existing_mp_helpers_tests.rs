@@ -265,6 +265,63 @@ test_with_database! {
 }
 
 test_with_database! {
+    async fn test_get_merge_proposal_run_null_value(test_db: TestDatabase) {
+        setup_test_database(test_db.pool()).await.unwrap();
+
+        seed_codebase_and_change_set(
+            test_db.pool(),
+            "cb-1",
+            "cs-1",
+            "lintian-fixes",
+            "https://example.invalid/cb-1",
+        )
+        .await;
+        seed_run(
+            test_db.pool(),
+            "run-1",
+            "cb-1",
+            "lintian-fixes",
+            "lintian-brush",
+            "https://example.invalid/cb-1",
+            Some("rev-tip"),
+            10,
+            "cs-1",
+            5,
+        )
+        .await;
+        // `run.value` is nullable and the runner stores NULL when the
+        // worker reports no value.
+        sqlx::query("UPDATE run SET value = NULL WHERE id = 'run-1'")
+            .execute(test_db.pool())
+            .await
+            .unwrap();
+        seed_result_branch(
+            test_db.pool(),
+            "run-1",
+            "main",
+            "refs/heads/main",
+            Some("rev-base"),
+            Some("rev-tip"),
+        )
+        .await;
+        seed_merge_proposal(
+            test_db.pool(),
+            "https://example.invalid/mp/1",
+            "rev-tip",
+            "https://example.invalid/cb-1",
+            "cb-1",
+        )
+        .await;
+
+        let url = "https://example.invalid/mp/1".parse().unwrap();
+        let mp_run = get_merge_proposal_run(test_db.pool(), &url).await.unwrap();
+        let mp_run = mp_run.expect("get_merge_proposal_run returned None");
+        assert_eq!(mp_run.id, "run-1");
+        assert_eq!(mp_run.value, None);
+    }
+}
+
+test_with_database! {
     async fn test_get_last_effective_run_picks_most_recent_success(test_db: TestDatabase) {
         setup_test_database(test_db.pool()).await.unwrap();
 

@@ -1906,6 +1906,24 @@ mod tests {
     }
 
     #[test]
+    fn test_dummy_merge_proposal_run_sufficient_with_threshold() {
+        // The stand-in for an orphaned merge proposal has no value, so
+        // a threshold must not get the proposal abandoned.
+        let config_text =
+            r#"name: "test" command: "test-cmd" merge_proposal { value_threshold: 50 }"#;
+        let config: janitor::config::Campaign =
+            protobuf::text_format::parse_from_str(config_text).unwrap();
+        let run = dummy_merge_proposal_run(
+            "test",
+            "https://example.invalid/cb-1".to_string(),
+            "main",
+            RevisionId::from(b"rev-tip".to_vec()),
+            "cb-1",
+        );
+        assert!(run_sufficient_for_proposal(&config, run.value));
+    }
+
+    #[test]
     fn test_role_branch_url_no_branch() {
         let url = url::Url::parse("https://example.com/repo").unwrap();
         let result = role_branch_url(&url, None);
