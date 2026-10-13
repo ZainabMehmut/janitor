@@ -45,6 +45,45 @@ pub mod web;
 
 mod tee;
 
+/// Session backend for a `chroot` value: `unshare[:<suite>]`, else a schroot name.
+#[cfg(target_os = "linux")]
+fn session_kind(chroot: Option<&str>) -> Result<ognibuild::session::SessionKind, String> {
+    use ognibuild::session::SessionKind;
+    match chroot {
+        None => Ok(SessionKind::Plain),
+        Some(c) if c == "unshare" || c.starts_with("unshare:") => c.parse(),
+        Some(c) => Ok(SessionKind::Schroot(c.to_string())),
+    }
+}
+
+/// Open the session for a `chroot` value; the error describes what went wrong.
+#[cfg(target_os = "linux")]
+pub fn open_session(
+    chroot: Option<&str>,
+    session_prefix: Option<&str>,
+) -> Result<Box<dyn ognibuild::session::Session>, String> {
+    use ognibuild::session::{unshare, Error, SessionKind};
+    let kind = session_kind(chroot)?;
+    if let SessionKind::Unshare(suite) = &kind {
+        let image = unshare::cached_debian_tarball_path(suite).map_err(|e| e.to_string())?;
+        if !image.exists() {
+            return Err(format!(
+                "cached image {} is missing, create it with: ogni cache-env {}",
+                image.display(),
+                suite
+            ));
+        }
+    }
+    let session = kind.build(session_prefix).map_err(|e| match e {
+        Error::SetupFailure(msg, e) if e.is_empty() => msg,
+        Error::SetupFailure(_, e) => e,
+        e => e.to_string(),
+    })?;
+    // Keep network access, as in a schroot session.
+    session.set_isolate_network(false);
+    Ok(session)
+}
+
 #[derive(Clone, Default)]
 pub struct AppState {
     pub output_directory: Option<std::path::PathBuf>,
