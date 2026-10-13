@@ -814,7 +814,9 @@ impl VcsManager for LocalGitVcsManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout
+        // The lookups below open pack files; only the unlock closes them.
+        let lock = repo.lock_read();
+        let ret = stdout
             .lines()
             .filter(|line| !line.is_empty())
             .map(|line| {
@@ -828,7 +830,9 @@ impl VcsManager for LocalGitVcsManager {
                     link: None,
                 }
             })
-            .collect()
+            .collect();
+        std::mem::drop(lock);
+        ret
     }
 }
 
