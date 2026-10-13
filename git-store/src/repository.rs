@@ -16,6 +16,15 @@ impl RepositoryManager {
         Self { base_path }
     }
 
+    /// True if `codebase` is one plain path component.
+    pub fn is_valid_name(codebase: &str) -> bool {
+        let mut components = Path::new(codebase).components();
+        matches!(
+            (components.next(), components.next()),
+            (Some(std::path::Component::Normal(c)), None) if c == codebase
+        )
+    }
+
     /// Get the path for a repository
     pub fn repo_path(&self, codebase: &str) -> PathBuf {
         self.base_path.join(codebase)
