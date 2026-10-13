@@ -567,6 +567,40 @@ pub fn open_branch_ext_with_trace(
     }
 }
 
+/// A Retry-After from a forge that is not a valid duration.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InvalidRetryAfter(pub f64);
+
+impl std::fmt::Display for InvalidRetryAfter {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "invalid Retry-After: {}", self.0)
+    }
+}
+
+impl std::error::Error for InvalidRetryAfter {}
+
+/// The wait a forge's Retry-After asks for, in seconds rounded up.
+pub fn retry_after_duration(secs: f64) -> Result<chrono::Duration, InvalidRetryAfter> {
+    if !secs.is_finite() || secs < 0.0 {
+        return Err(InvalidRetryAfter(secs));
+    }
+    // A wait that ends after the last date chrono can hold is not valid either.
+    chrono::Duration::try_seconds(secs.ceil() as i64)
+        .filter(|wait| chrono::Utc::now().checked_add_signed(*wait).is_some())
+        .ok_or(InvalidRetryAfter(secs))
+}
+
+/// The wait for a rate-limited branch open; an invalid Retry-After is logged and dropped.
+pub fn branch_retry_after(url: &Url, retry_after: Option<f64>) -> Option<chrono::Duration> {
+    match retry_after_duration(retry_after?) {
+        Ok(wait) => Some(wait),
+        Err(e) => {
+            log::error!("{} from {}; using the default wait", e, url);
+            None
+        }
+    }
+}
+
 fn convert_branch_exception(vcs_url: &Url, e: BranchOpenError) -> BranchOpenFailure {
     match e {
         BranchOpenError::RateLimited {
@@ -576,7 +610,7 @@ fn convert_branch_exception(vcs_url: &Url, e: BranchOpenError) -> BranchOpenFail
         } => BranchOpenFailure {
             code: "too-many-requests".to_string(),
             description,
-            retry_after: retry_after.map(|x| chrono::Duration::seconds(x as i64)),
+            retry_after: branch_retry_after(vcs_url, retry_after),
         },
         BranchOpenError::Unavailable {
             ref description, ..
