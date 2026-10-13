@@ -102,7 +102,11 @@ pub(crate) fn apt_repository_config_from_proto(
         } else {
             proto.description().to_string()
         },
-        origin: origin.to_string(),
+        origin: if origin.is_empty() {
+            "Janitor".to_string()
+        } else {
+            origin.to_string()
+        },
         label: name.clone(),
         suite: name.clone(),
         codename: name.clone(),
