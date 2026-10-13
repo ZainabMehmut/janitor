@@ -333,6 +333,29 @@ apt_repository {
         assert!(repo.by_hash);
     }
 
+    /// No `origin` in the config: Release files still need one.
+    #[test]
+    fn test_from_janitor_config_default_origin() {
+        let cfg = janitor::config::read_string(
+            r#"
+distribution {
+  name: "unstable"
+  component: "main"
+}
+apt_repository {
+  name: "lintian-fixes"
+  base: "unstable"
+}
+"#,
+        )
+        .unwrap();
+        let config =
+            ArchiveConfig::from_janitor_config(cfg, Path::new("/srv/dists"), None).unwrap();
+
+        let repo = config.get_repository("lintian-fixes").unwrap();
+        assert_eq!(repo.origin, "Janitor");
+    }
+
     #[test]
     fn test_from_janitor_config_rejects_unknown_base() {
         let cfg = janitor::config::read_string(
