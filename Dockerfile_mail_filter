@@ -12,11 +12,8 @@ RUN apt-get update --yes \
  && apt-get satisfy --yes --no-install-recommends \
         ca-certificates \
         cargo \
-        libpython3-dev \
         libssl-dev \
         pkg-config \
-        protobuf-compiler \
-        python3-minimal \
  && apt-get clean
 
 COPY . /code
