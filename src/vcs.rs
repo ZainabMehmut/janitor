@@ -278,6 +278,52 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_branch_exception_rate_limited_invalid_retry_after() {
+        let err = BranchOpenError::RateLimited {
+            url: Url::parse("https://example.com").unwrap(),
+            description: "Too many requests".to_string(),
+            retry_after: Some(f64::INFINITY),
+        };
+        let failure = convert_branch_exception(&Url::parse("https://example.com").unwrap(), err);
+        assert_eq!(failure.code, "too-many-requests");
+        assert_eq!(failure.retry_after, None);
+    }
+
+    #[test]
+    fn test_retry_after_duration() {
+        assert_eq!(retry_after_duration(0.0), Ok(chrono::Duration::zero()));
+        assert_eq!(retry_after_duration(-0.0), Ok(chrono::Duration::zero()));
+        assert_eq!(retry_after_duration(1.5), Ok(chrono::Duration::seconds(2)));
+        assert_eq!(
+            retry_after_duration(1e10),
+            Ok(chrono::Duration::seconds(10_000_000_000))
+        );
+    }
+
+    #[test]
+    fn test_retry_after_duration_invalid() {
+        // 1e15 seconds fits a chrono::Duration but ends after the last date chrono holds.
+        for secs in [-1.0, f64::INFINITY, f64::NEG_INFINITY, 1e15, 1e300] {
+            assert_eq!(retry_after_duration(secs), Err(InvalidRetryAfter(secs)));
+        }
+        assert_eq!(
+            retry_after_duration(f64::NAN).map_err(|e| e.0.is_nan()),
+            Err(true)
+        );
+    }
+
+    #[test]
+    fn test_branch_retry_after() {
+        let url = Url::parse("https://example.com").unwrap();
+        assert_eq!(branch_retry_after(&url, None), None);
+        assert_eq!(
+            branch_retry_after(&url, Some(60.0)),
+            Some(chrono::Duration::seconds(60))
+        );
+        assert_eq!(branch_retry_after(&url, Some(f64::NAN)), None);
+    }
+
+    #[test]
     fn test_convert_branch_exception_missing() {
         let err = BranchOpenError::Missing {
             url: Url::parse("https://example.com/repo").unwrap(),
