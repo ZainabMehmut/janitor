@@ -1052,6 +1052,30 @@ pub fn run_sufficient_for_proposal(campaign_config: &Campaign, run_value: Option
     }
 }
 
+/// Stand-in for the run of a merge proposal that has none on record.
+///
+/// It has no value, so `run_sufficient_for_proposal` lets it through.
+fn dummy_merge_proposal_run(
+    campaign: &str,
+    branch_url: String,
+    role: &str,
+    revision: RevisionId,
+    codebase: &str,
+) -> crate::state::MergeProposalRun {
+    crate::state::MergeProposalRun {
+        id: String::new(),
+        campaign: campaign.to_string(),
+        branch_url,
+        command: String::new(),
+        value: None,
+        role: role.to_string(),
+        remote_branch_name: String::new(),
+        revision,
+        codebase: codebase.to_string(),
+        change_set: String::new(),
+    }
+}
+
 /// Compute the derived branch name to use for a published run.
 ///
 /// * Single-branch runs use `campaign.branch_name`.
@@ -3677,18 +3701,13 @@ async fn check_existing_mp(
                         }
                     };
                     log::warn!("Going ahead with dummy old run for {}", mp_url);
-                    mp_run = Some(crate::state::MergeProposalRun {
-                        id: String::new(),
-                        campaign: campaign_name.to_string(),
-                        branch_url: synth_branch_url,
-                        command: String::new(),
-                        value: 0,
-                        role: role.to_string(),
-                        remote_branch_name: String::new(),
-                        revision: synth_revision,
-                        codebase: cb.to_string(),
-                        change_set: String::new(),
-                    });
+                    mp_run = Some(dummy_merge_proposal_run(
+                        campaign_name,
+                        synth_branch_url,
+                        role,
+                        synth_revision,
+                        cb,
+                    ));
                 } else {
                     return Err(CheckMpError::NoRunForMergeProposal(mp_url.clone()));
                 }
@@ -3870,11 +3889,11 @@ async fn check_existing_mp(
     // Insufficient value: the run still succeeds but the value
     // dropped below the campaign threshold (e.g. only trivial fixes
     // are left). Abandon the proposal politely.
-    if !run_sufficient_for_proposal(campaign_config, mp_run.value.try_into().ok()) {
+    if !run_sufficient_for_proposal(campaign_config, mp_run.value) {
         log::info!(
             "{}: Run value {} fell below threshold; abandoning.",
             mp_url,
-            mp_run.value
+            mp_run.value.unwrap_or_default()
         );
         if let (Some(rev), Some(target)) = (revision.as_ref(), target_branch_url.as_ref()) {
             match abandon_or_close_mp_async(
