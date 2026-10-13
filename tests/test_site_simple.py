@@ -15,9 +15,12 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
+import asyncio
+import json
 import tempfile
 from pathlib import Path
 
+import aiohttp
 import asyncpg
 import pytest_asyncio
 import testing.postgresql
@@ -66,6 +69,30 @@ async def test_codebase_query_redirect(aiohttp_client, database_location):
     )
     assert resp.status == 302
     assert resp.headers["Location"] == "/lintian-fixes/c/foo/"
+
+
+async def test_ws_notifications_forwards_redis_channels(
+    aiohttp_client, database_location
+):
+    redis = FakeRedis()
+    _private_app, app = await create_app(
+        config=create_config(database_location), redis=redis
+    )
+    client = await aiohttp_client(app)
+    async with client.ws_connect(
+        "/ws/notifications", timeout=aiohttp.ClientWSTimeout(ws_close=0.1)
+    ) as ws:
+        for _ in range(100):
+            if app["topic_notifications"].subscriptions:
+                break
+            await asyncio.sleep(0.01)
+        for channel in ["publish", "merge-proposal", "queue", "result"]:
+            payload = json.dumps({"channel": channel})
+            for _ in range(100):
+                if await redis.publish(channel, payload):
+                    break
+                await asyncio.sleep(0.01)
+            assert await ws.receive_json(timeout=5) == [channel, {"channel": channel}]
 
 
 async def test_codebase_query_redirect_legacy_package_param(
