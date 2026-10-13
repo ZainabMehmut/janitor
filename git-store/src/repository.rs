@@ -141,6 +141,18 @@ mod tests {
     }
 
     #[test]
+    fn test_is_valid_name() {
+        for name in ["codebase", "a.b", "a,b", ".hidden", "..x"] {
+            assert!(RepositoryManager::is_valid_name(name), "{}", name);
+        }
+        for name in [
+            "", ".", "..", "/", "/etc", "a/b", "../a", "a/..", "a/", "./a",
+        ] {
+            assert!(!RepositoryManager::is_valid_name(name), "{}", name);
+        }
+    }
+
+    #[test]
     fn test_repository_creation() {
         let temp_dir = TempDir::new().unwrap();
         let manager = RepositoryManager::new(temp_dir.path().to_path_buf());
