@@ -2495,6 +2495,28 @@ impl From<sqlx::Error> for CheckMpError {
     }
 }
 
+/// Longest Retry-After, in seconds, accepted from a forge.
+const MAX_BRANCH_RETRY_AFTER_SECS: f64 = 86400.0;
+
+/// The check error for a branch open that the forge rate-limited.
+pub(crate) fn branch_rate_limited(url: &url::Url, retry_after: Option<f64>) -> CheckMpError {
+    let retry_after = match retry_after {
+        None => None,
+        Some(secs) if (0.0..=MAX_BRANCH_RETRY_AFTER_SECS).contains(&secs) => {
+            Some(chrono::Duration::seconds(secs.ceil() as i64))
+        }
+        Some(secs) => {
+            log::error!(
+                "Forge sent an invalid Retry-After ({}) for {}; using the default",
+                secs,
+                url
+            );
+            None
+        }
+    };
+    CheckMpError::BranchRateLimited { retry_after }
+}
+
 impl std::fmt::Display for CheckMpError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -3394,6 +3416,11 @@ async fn check_existing_mp(
                     revision = Some(branch.last_revision());
                     source_branch_name = branch.name();
                 }
+                Err(silver_platter::vcs::BranchOpenError::RateLimited {
+                    url, retry_after, ..
+                }) => {
+                    return Err(branch_rate_limited(&url, retry_after));
+                }
                 Err(silver_platter::vcs::BranchOpenError::Missing { .. })
                 | Err(silver_platter::vcs::BranchOpenError::Unavailable { .. })
                 | Err(silver_platter::vcs::BranchOpenError::TemporarilyUnavailable { .. }) => {
@@ -3720,6 +3747,11 @@ async fn check_existing_mp(
             ) {
                 Ok(branch) => {
                     mp_remote_branch_name = branch.name();
+                }
+                Err(silver_platter::vcs::BranchOpenError::RateLimited {
+                    url, retry_after, ..
+                }) => {
+                    return Err(branch_rate_limited(&url, retry_after));
                 }
                 Err(silver_platter::vcs::BranchOpenError::Missing { .. })
                 | Err(silver_platter::vcs::BranchOpenError::Unavailable { .. })
@@ -4751,6 +4783,8 @@ async fn check_existing(
                 crate::metrics::FORGE_RATE_LIMITED_COUNT
                     .with_label_values(&[forge.forge_name().as_str()])
                     .inc();
+                // This proposal was not fully checked, so the scan is not a full one.
+                was_forge_ratelimited = true;
                 continue;
             }
             Err(CheckMpError::UnexpectedHttpStatus) => {
