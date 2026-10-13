@@ -32,6 +32,15 @@ pub(crate) fn sanitise_url_for_log(url: &Url) -> Url {
     out
 }
 
+/// The log line for the start or the end of the cache branch push.
+fn cache_push_message(what: &str, url: &Url) -> String {
+    format!(
+        "{} packaging branch cache to {}",
+        what,
+        sanitise_url_for_log(url)
+    )
+}
+
 pub mod client;
 
 #[cfg(feature = "debian")]
@@ -889,7 +898,7 @@ pub fn run_worker(
 
     if let Some(cached_branch_url) = cached_branch_url.as_ref() {
         // TODO(jelmer): integrate into import_branches_git / import_branches_bzr
-        log::info!("Pushing packaging branch cache to {}", cached_branch_url);
+        log::info!("{}", cache_push_message("Pushing", cached_branch_url));
 
         let vendor = vendor.to_string();
 
@@ -924,7 +933,7 @@ pub fn run_worker(
                     );
                 }
                 Ok(_) => {
-                    log::info!("Pushed packaging branch cache to {}", cached_branch_url);
+                    log::info!("{}", cache_push_message("Pushed", cached_branch_url));
                 }
             }
         }
