@@ -267,3 +267,24 @@ fn absolute_directory(
 ) -> std::io::Result<PathBuf> {
     cwd.join(directory).canonicalize()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_absolute_directory() {
+        let td = tempfile::tempdir().unwrap();
+        let base = td.path().canonicalize().unwrap();
+        std::fs::create_dir(base.join("proj")).unwrap();
+
+        assert_eq!(absolute_directory(&base, Path::new(".")).unwrap(), base);
+        assert_eq!(
+            absolute_directory(&base, Path::new("proj")).unwrap(),
+            base.join("proj")
+        );
+        assert_eq!(absolute_directory(Path::new("/"), &base).unwrap(), base);
+        assert!(absolute_directory(&base, Path::new("missing")).is_err());
+    }
+}
