@@ -26,3 +26,7 @@ required-features=["cmdline"]
 [features]
 default = ["cmdline"]
 cmdline = ["dep:clap", "dep:env_logger", "dep:reqwest"]
+
+[[test]]
+name = "refresh"
+required-features = ["cmdline"]
