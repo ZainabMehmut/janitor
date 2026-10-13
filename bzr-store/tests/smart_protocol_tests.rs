@@ -325,9 +325,9 @@ test_with_database! {
 // smart protocol runs to completion, even if the client's payload is
 // malformed — Breezy's factory returns a smart-protocol-framed error
 // body rather than surfacing as an HTTP error. This proves (1) the
-// PyO3 → Breezy happy path runs without panicking, (2) the shared bzr
-// repo is created on demand under `<vcs_path>/foo`, and (3) unknown
-// protocol payloads round-trip as smart-protocol error responses.
+// PyO3 → Breezy happy path runs without panicking, (2) a read-only
+// (anonymous) request creates nothing under `<vcs_path>/foo`, and (3)
+// unknown protocol payloads round-trip as smart-protocol error responses.
 test_with_database! {
     async fn test_public_smart_protocol_runs_to_completion(test_db: TestDatabase) {
         setup_test_database(test_db.pool()).await.unwrap();
@@ -355,10 +355,10 @@ test_with_database! {
         let prefix = b"error\x01";
         assert_eq!(&body[..prefix.len()], prefix, "body did not start with smart-protocol error framing: {:?}", body);
 
-        // The shared repo directory should have been created on demand.
+        // An anonymous request is read-only and must create nothing on disk.
         assert!(
-            tmp.path().join("foo").join(".bzr").exists(),
-            "expected on-demand creation of shared repo at {}/foo/.bzr",
+            !tmp.path().join("foo").join(".bzr").exists(),
+            "anonymous read must not create a shared repo at {}/foo/.bzr",
             tmp.path().display()
         );
 
