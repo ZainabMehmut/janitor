@@ -580,4 +580,107 @@ mod tests {
         );
         std::mem::drop(td);
     }
+
+    fn lost_connection() -> BrzError {
+        BrzError::TransportError("while sending POST /codebase/git-receive-pack:".to_string())
+    }
+
+    fn http_status(code: u16) -> BrzError {
+        BrzError::UnexpectedHttpStatus {
+            url: Url::parse("http://example.com/codebase").unwrap(),
+            code,
+            extra: None,
+            headers: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_retry_push_repeats_a_lost_connection() {
+        let mut calls = 0;
+        let mut waits = vec![];
+        let ret = retry_push_with(
+            || {
+                calls += 1;
+                if calls < 4 {
+                    Err(lost_connection())
+                } else {
+                    Ok(calls)
+                }
+            },
+            |wait| waits.push(wait),
+        );
+        assert_eq!(ret.unwrap(), 4);
+        assert_eq!(waits.len(), 3);
+        assert!(waits[2] > waits[0], "waits do not grow: {:?}", waits);
+    }
+
+    #[test]
+    fn test_retry_push_gives_up_after_max_tries() {
+        let mut calls = 0;
+        let mut waits = 0;
+        let ret: Result<(), BrzError> = retry_push_with(
+            || {
+                calls += 1;
+                Err(lost_connection())
+            },
+            |_| waits += 1,
+        );
+        assert!(matches!(ret, Err(BrzError::TransportError(..))));
+        assert_eq!(calls, PUSH_MAX_TRIES);
+        assert_eq!(waits, PUSH_MAX_TRIES - 1);
+    }
+
+    #[test]
+    fn test_retry_push_does_not_repeat_other_errors() {
+        for e in [
+            BrzError::TransportError("No space left on device".to_string()),
+            BrzError::RemoteGitError("pre-receive hook declined".to_string()),
+            BrzError::DivergedBranches,
+            http_status(403),
+        ] {
+            let mut calls = 0;
+            let mut e = Some(e);
+            let ret: Result<(), BrzError> = retry_push_with(
+                || {
+                    calls += 1;
+                    Err(e.take().unwrap())
+                },
+                |_| panic!("waited after an error that is not a lost connection"),
+            );
+            assert!(ret.is_err());
+            assert_eq!(calls, 1);
+        }
+    }
+
+    #[test]
+    fn test_connection_lost() {
+        for e in [
+            lost_connection(),
+            BrzError::TransportError("Connection lost while sending request.".to_string()),
+            BrzError::TransportError("Connection closed early".to_string()),
+            BrzError::ConnectionError("[Errno 32] Broken pipe".to_string()),
+            BrzError::IncompleteRead(vec![], Some(10)),
+            BrzError::InvalidHttpResponse(
+                "http://example.com/codebase".to_string(),
+                "Bad status line received".to_string(),
+                None,
+                HashMap::new(),
+            ),
+            http_status(502),
+            http_status(503),
+            http_status(504),
+        ] {
+            assert!(connection_lost(&e).is_some(), "not retried: {:?}", e);
+        }
+        for e in [
+            BrzError::TransportError("No space left on device".to_string()),
+            BrzError::TransportError("Too many open files".to_string()),
+            BrzError::RemoteGitError("missing necessary objects".to_string()),
+            http_status(401),
+            http_status(404),
+            http_status(500),
+        ] {
+            assert!(connection_lost(&e).is_none(), "retried: {:?}", e);
+        }
+    }
 }
