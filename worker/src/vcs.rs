@@ -32,25 +32,103 @@ pub fn push_branch(
                 .unwrap()
         },
     );
-    let target = match breezyshim::controldir::open(&url, possible_transports.as_mut()) {
-        Ok(cd) => cd,
-        Err(BrzError::NotBranchError(..)) => {
-            breezyshim::controldir::create(&url, &vcs_type, possible_transports.as_mut())?
+    // A boxed selector is used up by one push; share it so that each try gets its own.
+    let tag_selector = tag_selector.map(std::rc::Rc::from);
+    retry_push(|| {
+        let target = match breezyshim::controldir::open(&url, possible_transports.as_mut()) {
+            Ok(cd) => cd,
+            Err(BrzError::NotBranchError(..)) => {
+                breezyshim::controldir::create(&url, &vcs_type, possible_transports.as_mut())?
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
+        let tag_selector = tag_selector
+            .clone()
+            .map(|f: std::rc::Rc<dyn Fn(String) -> bool>| {
+                Box::new(move |tag| f(tag)) as Box<dyn Fn(String) -> bool>
+            });
+        target.push_branch(
+            source_branch,
+            branch_name.as_deref(),
+            stop_revision.as_ref(),
+            Some(overwrite),
+            tag_selector,
+        )?;
+
+        Ok(())
+    })
+}
+
+/// Tries for one push, as in the Python worker (`max_tries=10`).
+const PUSH_MAX_TRIES: u32 = 10;
+
+/// What Breezy says when the connection to the store is lost.
+const CONNECTION_LOST_MESSAGES: &[&str] = &[
+    "while sending ",
+    "Connection lost while sending request",
+    "Connection closed early",
+];
+
+/// Why a failed push is worth another try: the connection was lost or the store was briefly away.
+fn connection_lost(e: &BrzError) -> Option<&'static str> {
+    match e {
+        BrzError::InvalidHttpResponse(..) => Some("invalid HTTP response"),
+        BrzError::IncompleteRead(..) => Some("incomplete read"),
+        BrzError::ConnectionError(..) => Some("connection error"),
+        BrzError::UnexpectedHttpStatus {
+            code: 502..=504, ..
+        } => Some("gateway error"),
+        // Breezy's ConnectionError and ConnectionReset can arrive as a plain TransportError.
+        BrzError::TransportError(msg)
+            if CONNECTION_LOST_MESSAGES.iter().any(|m| msg.contains(m)) =>
+        {
+            Some("connection lost")
         }
-        Err(e) => {
-            return Err(e);
-        }
+        _ => None,
+    }
+}
+
+/// Run a push, and run it again with a growing wait while the connection keeps being lost.
+fn retry_push<T>(op: impl FnMut() -> Result<T, BrzError>) -> Result<T, BrzError> {
+    retry_push_with(op, std::thread::sleep)
+}
+
+fn retry_push_with<T>(
+    mut op: impl FnMut() -> Result<T, BrzError>,
+    mut sleep: impl FnMut(std::time::Duration),
+) -> Result<T, BrzError> {
+    use backoff::backoff::Backoff;
+    // Waits of 0.5 s, 1 s, 2 s, ... each with jitter.
+    let mut waits = backoff::ExponentialBackoff {
+        multiplier: 2.0,
+        max_interval: std::time::Duration::from_secs(128),
+        max_elapsed_time: None,
+        ..Default::default()
     };
-
-    target.push_branch(
-        source_branch,
-        branch_name.as_deref(),
-        stop_revision.as_ref(),
-        Some(overwrite),
-        tag_selector,
-    )?;
-
-    Ok(())
+    let mut tries = 1;
+    loop {
+        let e = match op() {
+            Ok(ret) => return Ok(ret),
+            Err(e) => e,
+        };
+        let Some(why) = connection_lost(&e).filter(|_| tries < PUSH_MAX_TRIES) else {
+            return Err(e);
+        };
+        let wait = waits.next_backoff().unwrap_or(waits.max_interval);
+        tries += 1;
+        // The error text can hold the URL with the password, so only its kind is logged.
+        log::warn!(
+            "Push failed ({}); try {} of {} in {:?}",
+            why,
+            tries,
+            PUSH_MAX_TRIES,
+            wait
+        );
+        sleep(wait);
+    }
 }
 
 /// Import branches into a new location.
@@ -213,15 +291,17 @@ impl Vcs for BzrVcs {
         tags: Vec<(String, Option<RevisionId>)>,
         update_current: bool,
     ) -> Result<(), BrzError> {
-        import_branches_bzr(
-            repo_url,
-            local_branch,
-            campaign,
-            log_id,
-            branches,
-            tags,
-            update_current,
-        )
+        retry_push(|| {
+            import_branches_bzr(
+                repo_url,
+                local_branch,
+                campaign,
+                log_id,
+                branches,
+                tags.clone(),
+                update_current,
+            )
+        })
     }
 }
 
@@ -333,15 +413,17 @@ impl Vcs for GitVcs {
         tags: Vec<(String, Option<RevisionId>)>,
         update_current: bool,
     ) -> Result<(), BrzError> {
-        import_branches_git(
-            repo_url,
-            local_branch,
-            campaign,
-            log_id,
-            branches,
-            tags,
-            update_current,
-        )
+        retry_push(|| {
+            import_branches_git(
+                repo_url,
+                local_branch,
+                campaign,
+                log_id,
+                branches,
+                tags.clone(),
+                update_current,
+            )
+        })
     }
 }
 
