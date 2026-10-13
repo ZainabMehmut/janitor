@@ -1315,6 +1315,21 @@ mod tests {
     }
 
     #[test]
+    fn test_cache_push_message_drops_credentials() {
+        let url: Url = "http://user:secret@janitor.local/git/imath"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            cache_push_message("Pushing", &url),
+            "Pushing packaging branch cache to http://janitor.local/git/imath"
+        );
+        assert_eq!(
+            cache_push_message("Pushed", &url),
+            "Pushed packaging branch cache to http://janitor.local/git/imath"
+        );
+    }
+
+    #[test]
     fn test_sanitise_url_for_log_passes_through_clean_urls() {
         // URLs that never had userinfo must be returned as-is so we
         // don't accidentally rewrite them (path/query preserved).
