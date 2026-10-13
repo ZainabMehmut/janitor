@@ -1320,6 +1320,70 @@ mod tests {
     use std::str::FromStr;
     use test_log::test;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_session_kind() {
+        use ognibuild::session::SessionKind;
+        let schroot = |name: &str| Ok(SessionKind::Schroot(name.to_string()));
+        let unshare = |suite: &str| Ok(SessionKind::Unshare(suite.to_string()));
+        assert_eq!(session_kind(None), Ok(SessionKind::Plain));
+        assert_eq!(
+            session_kind(Some("unstable-amd64-sbuild")),
+            schroot("unstable-amd64-sbuild")
+        );
+        assert_eq!(session_kind(Some("chroot:x")), schroot("chroot:x"));
+        assert_eq!(session_kind(Some("session:x")), schroot("session:x"));
+        assert_eq!(
+            session_kind(Some("unshare-sbuild")),
+            schroot("unshare-sbuild")
+        );
+        assert_eq!(session_kind(Some("")), schroot(""));
+        assert_eq!(session_kind(Some("unshare")), unshare("sid"));
+        assert_eq!(session_kind(Some("unshare:sid")), unshare("sid"));
+        assert_eq!(session_kind(Some("unshare:trixie")), unshare("trixie"));
+        assert!(session_kind(Some("unshare:")).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_open_session_plain() {
+        let session = open_session(None, None).unwrap();
+        assert_eq!(session.location(), Path::new("/"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_open_session_missing_image() {
+        let err = open_session(Some("unshare:no-such-suite"), None)
+            .err()
+            .unwrap();
+        assert!(err.starts_with("cached image "), "{}", err);
+        assert!(
+            err.contains("/ognibuild/images/debian-no-such-suite-"),
+            "{}",
+            err
+        );
+        assert!(err.ends_with(": ogni cache-env no-such-suite"), "{}", err);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs user namespaces, network access and the cached sid image"]
+    fn test_open_session_unshare() {
+        use ognibuild::debian::apt::{AptManager, SatisfyEntry};
+        let session = open_session(Some("unshare:sid"), None).unwrap();
+        assert_ne!(session.location(), Path::new("/"));
+        assert!(!session.exists(Path::new("/usr/bin/hello")));
+        ognibuild::debian::apt::run_apt(session.as_ref(), vec!["update"], vec![]).unwrap();
+        let apt = AptManager::new(session.as_ref(), None);
+        apt.satisfy(vec![SatisfyEntry::Required("hello".to_string())])
+            .unwrap();
+        let out = session
+            .check_output(vec!["/usr/bin/hello"], None, None, None)
+            .unwrap();
+        assert_eq!(out, b"Hello, world!\n");
+    }
+
     /// Regression for worker credential leaks. The cache push and
     /// branch-open log lines used to print URLs with embedded
     /// HTTP-basic creds (e.g. `http://frigg:<pass>@.../git/foo`)
