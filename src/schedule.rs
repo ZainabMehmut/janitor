@@ -511,7 +511,7 @@ pub async fn bulk_add_to_queue(
     refresh: bool,
 ) -> Result<(), Error> {
     let bucket = bucket.unwrap_or("default");
-    let mut codebase_values = sqlx::query_as::<_, (String, f64)>(
+    let codebase_values = sqlx::query_as::<_, (String, f64)>(
         "SELECT name, coalesce(value, 0)::float8 FROM codebase WHERE name IS NOT NULL",
     )
     .fetch_all(conn)
@@ -533,7 +533,7 @@ pub async fn bulk_add_to_queue(
     for req in todo {
         let normalized_codebase_value = if let Some(max_codebase_value) = max_codebase_value {
             std::cmp::min_by(
-                codebase_values.remove(&req.codebase).unwrap_or(0.0) / max_codebase_value,
+                codebase_values.get(&req.codebase).copied().unwrap_or(0.0) / max_codebase_value,
                 1.0,
                 |a, b| a.partial_cmp(b).unwrap(),
             )
