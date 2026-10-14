@@ -280,4 +280,22 @@ mod tests {
             redis::RedisError::from((redis::ErrorKind::UnexpectedReturnType, "Invalid type"));
         assert!(!RedisManager::is_connection_error(&parse_error));
     }
+
+    #[tokio::test]
+    async fn test_get_connection_manager_does_not_hang() {
+        // Nothing listens on this port; redis-rs retries the connect for about 9 s.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let manager =
+            RedisManager::new(RedisConfig::new(format!("redis://127.0.0.1:{}/", port))).unwrap();
+        let result =
+            tokio::time::timeout(Duration::from_secs(30), manager.get_connection_manager()).await;
+        assert!(matches!(result, Ok(Err(_))));
+        assert_eq!(
+            *manager.connection_state.read().await,
+            ConnectionState::Failed
+        );
+    }
 }
