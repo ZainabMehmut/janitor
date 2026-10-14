@@ -450,6 +450,15 @@ mod tests {
     }
 
     #[test]
+    fn cli_url_has_no_default() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let url = cmd.get_arguments().find(|a| a.get_id() == "url").unwrap();
+        assert!(url.is_required_set());
+        assert!(url.get_default_values().is_empty());
+    }
+
+    #[test]
     fn cli_reschedule_requires_run_or_result_code() {
         // Neither run_id nor result_code is required at parse time; the check happens
         // at runtime. Parsing with no filter should still succeed.
