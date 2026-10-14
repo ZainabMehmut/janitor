@@ -180,7 +180,7 @@ impl RateLimiter for FixedRateLimiter {
     fn check_allowed(&self, bucket: &str) -> RateLimitStatus {
         if let Some(open_mps_per_bucket) = &self.open_mps_per_bucket {
             if let Some(current) = open_mps_per_bucket.get(bucket) {
-                if *current > self.max_mps_per_bucket {
+                if *current >= self.max_mps_per_bucket {
                     return RateLimitStatus::BucketRateLimited {
                         bucket: bucket.to_string(),
                         open_mps: *current,
