@@ -963,7 +963,7 @@ mod tests {
             "CREATE TEMPORARY TABLE run (
                 codebase text, suite text, result_code text,
                 instigated_context text, context text, failure_details json,
-                start_time timestamptz, finish_time timestamptz,
+                start_time timestamp, finish_time timestamp,
                 failure_transient boolean)",
         )
         .execute(&pool)
@@ -971,9 +971,9 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO run (codebase, suite, result_code, start_time, finish_time) VALUES
-             ('cb', 'c', 'success', '2024-01-01 00:00:00+00', '2024-01-02 00:00:01.5+00'),
-             ('cb', 'c', 'some-failure', '2024-01-03 00:00:00+00', '2024-01-03 00:00:02+00'),
-             ('cb', 'c', 'some-failure', '2024-01-04 00:00:00+00', '2024-01-04 00:00:03.250001+00')",
+             ('cb', 'c', 'success', '2024-01-01 00:00:00', '2024-01-02 00:00:01.5'),
+             ('cb', 'c', 'some-failure', '2024-01-03 00:00:00', '2024-01-03 00:00:02'),
+             ('cb', 'c', 'some-failure', '2024-01-04 00:00:00', '2024-01-04 00:00:03.250001')",
         )
         .execute(&pool)
         .await
