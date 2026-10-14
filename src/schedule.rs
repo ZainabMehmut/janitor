@@ -526,7 +526,8 @@ pub async fn bulk_add_to_queue(
     } else {
         None
     };
-    if let Some(max_codebase_value) = max_codebase_value.filter(|&v| v > 0.0) {
+    let max_codebase_value = max_codebase_value.filter(|&v| v > 0.0);
+    if let Some(max_codebase_value) = max_codebase_value {
         log::info!("Maximum value: {}", max_codebase_value);
     }
     for req in todo {
