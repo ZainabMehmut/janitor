@@ -349,6 +349,8 @@ def build_klaus_app(codebase, repo_path):
             return env
 
     app = Klaus(codebase, repo_path)
+    # Every rule has defaults, so stop werkzeug redirecting .patch to .diff.
+    app.url_map.redirect_defaults = False
 
     for endpoint, rule in [
         ("blob", "/blob/"),
