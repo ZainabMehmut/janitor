@@ -1343,6 +1343,52 @@ db_test! {
 }
 
 db_test! {
+    async fn test_public_klaus_commit_patch_not_redirected(test_db: TestDatabase) {
+        if !klaus_available() {
+            eprintln!("skipping: klaus not importable");
+            return;
+        }
+        setup_test_database(test_db.pool()).await.unwrap();
+        seed_codebase(test_db.pool(), "patchy").await;
+
+        let tmp = TempDir::new().unwrap();
+        let repo = git2::Repository::init_bare(tmp.path().join("patchy")).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let blob = repo.blob(b"hello\n").unwrap();
+        let tree_id = {
+            let mut tb = repo.treebuilder(None).unwrap();
+            tb.insert("README", blob, 0o100644).unwrap();
+            tb.write().unwrap()
+        };
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        let state = build_state(&tmp, &test_db, AppRole::Public).await;
+        let app = web::create_public_app(state, 0);
+        let (addr, handle) = spawn(app).await;
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        for suffix in ["patch", "diff"] {
+            let resp = client
+                .get(format!("http://{}/git/patchy/commit/main.{}", addr, suffix))
+                .header("User-Agent", "Mozilla/5.0 (test)")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200, "commit/main.{} should not redirect", suffix);
+            let body = resp.text().await.unwrap();
+            assert!(body.contains("+hello"), "expected the diff, got:\n{}", body);
+        }
+
+        handle.abort();
+    }
+}
+
+db_test! {
     async fn test_public_klaus_tree_and_commit_views(test_db: TestDatabase) {
         // Exercise more than the index page: /tree/<rev>/ (browse
         // files) and /commit/<sha>/ (commit view). Catches regressions
