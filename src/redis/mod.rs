@@ -131,10 +131,8 @@ impl RedisManager {
                     return Ok(());
                 }
             }
-            _ => {}
+            _ => drop(state),
         }
-
-        // State is automatically dropped here
 
         // Try to connect
         self.connect().await
