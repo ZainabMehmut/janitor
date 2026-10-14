@@ -30,11 +30,11 @@ fn publish_mode_value(mode: &Mode) -> usize {
 pub struct ScheduleRequest {
     codebase: String,
     #[allow(dead_code)]
-    branch_url: String,
+    branch_url: Option<String>,
     campaign: String,
-    context: String,
-    value: i64,
-    success_chance: f64,
+    context: Option<String>,
+    value: Option<i64>,
+    success_chance: Option<f64>,
     command: String,
     change_set: Option<String>,
 }
@@ -54,7 +54,7 @@ SELECT
   codebase.branch_url AS branch_url,
   candidate.suite AS campaign,
   candidate.context AS context,
-  candidate.value AS value,
+  candidate.value::bigint AS value,
   candidate.success_chance AS success_chance,
   (
     SELECT array_agg(p.mode::text)
@@ -83,22 +83,28 @@ WHERE TRUE
 
     let rows = query.fetch_all(conn).await?;
 
-    Ok(rows.into_iter().map(|row| {
-        use sqlx::FromRow;
-        use sqlx::Row;
-        let mut req = ScheduleRequest::from_row(&row).unwrap();
+    let requests = rows
+        .into_iter()
+        .map(|row| {
+            use sqlx::FromRow;
+            use sqlx::Row;
+            let mut req = ScheduleRequest::from_row(&row)?;
 
-        let pm = row
-            .get::<Option<Vec<String>>, _>("publish_modes")
-            .unwrap_or_default();
+            let pm = row
+                .try_get::<Option<Vec<String>>, _>("publish_modes")?
+                .unwrap_or_default();
 
-        req.value += pm
-            .iter()
-            .map(|m| publish_mode_value(&m.parse().unwrap()))
-            .sum::<usize>() as i64;
+            let publish_value = pm
+                .iter()
+                .map(|m| publish_mode_value(&m.parse().unwrap()))
+                .sum::<usize>() as i64;
+            req.value = req.value.map(|v| v + publish_value);
 
-        req
-    }))
+            Ok(req)
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+
+    Ok(requests.into_iter())
 }
 
 async fn estimate_duration_campaign_codebase(
@@ -538,12 +544,12 @@ pub async fn bulk_add_to_queue(
             &req.codebase,
             &req.campaign,
             Some(&req.command),
-            Some(req.value as f64),
-            Some(req.success_chance),
+            req.value.map(|v| v as f64),
+            req.success_chance,
             Some(normalized_codebase_value),
             requester,
             default_offset,
-            Some(&req.context),
+            req.context.as_deref(),
             req.change_set.as_deref(),
             dry_run,
             refresh,
