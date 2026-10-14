@@ -53,3 +53,19 @@ $ podman run \
   --workdir /janitor \
   ghcr.io/jelmer/janitor/site:latest
 ```
+
+**Slow clones from salsa.debian.org (optional)** - any instance fetching from salsa.debian.org may see slow clones, because salsa slows down connections that use the hybrid post-quantum group `X25519MLKEM768`, which OpenSSL 3.5+ offers first. Operators who want to can point `OPENSSL_CONF` at a file like this one, which includes the system config and only sets the groups (the `?` prefix skips a name this OpenSSL does not know); it gives up the post-quantum key exchange:
+
+```ini
+# Debian's openssl.cnf without the hybrid X25519MLKEM768 group (slow with salsa.debian.org).
+.include /etc/ssl/openssl.cnf
+
+[openssl_init]
+ssl_conf = janitor_ssl_sect
+
+[janitor_ssl_sect]
+system_default = janitor_tls_sect
+
+[janitor_tls_sect]
+Groups = ?X25519:?secp256r1:?X448:?secp384r1:?secp521r1:?ffdhe2048:?ffdhe3072
+```
