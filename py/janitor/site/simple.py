@@ -463,6 +463,8 @@ async def create_app(
     else:
         setup_redis(app)
 
+    listeners: list[asyncio.Task] = []
+
     async def start_pubsub_forwarder(app):
         async def forward_redis(app, name):
             async with app["redis"].pubsub(ignore_subscribe_messages=True) as ch:
@@ -482,13 +484,15 @@ async def create_app(
             ("queue", "queue listening"),
             ("result", "result listening"),
         ]:
-            listener = create_background_task(forward_redis(app, name), title)
+            listeners.append(create_background_task(forward_redis(app, name), title))
 
-            async def stop_listener(listener, app):
-                listener.cancel()
-                await listener
+    async def stop_pubsub_forwarder(app):
+        for listener in listeners:
+            listener.cancel()
+        await asyncio.gather(*listeners, return_exceptions=True)
 
-            app.on_cleanup.append(functools.partial(stop_listener, listener))
+    app.on_startup.append(start_pubsub_forwarder)
+    app.on_shutdown.append(stop_pubsub_forwarder)
 
     for path, templatename in [
         ("/", "index"),
