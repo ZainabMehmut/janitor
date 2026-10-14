@@ -1021,6 +1021,44 @@ mod tests {
 
     #[cfg(feature = "testing")]
     #[tokio::test]
+    async fn test_iter_schedule_requests_from_candidates_with_nulls() {
+        let Some(db) = setup_run_database(&CodebaseName::new("cb").unwrap()).await else {
+            return;
+        };
+        let pool = db.pool();
+        sqlx::raw_sql(
+            "INSERT INTO codebase (name) VALUES ('bare');
+             INSERT INTO named_publish_policy (name, per_branch_policy) VALUES
+             ('default', ARRAY[ROW('main', 'propose', NULL)::branch_publish_policy]);
+             INSERT INTO candidate (suite, command, codebase, publish_policy)
+             VALUES ('lintian-fixes', 'lintian-brush', 'bare', 'default')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let requests: Vec<_> = iter_schedule_requests_from_candidates(pool, None, None)
+            .await
+            .unwrap()
+            .map(|r| {
+                (
+                    r.codebase,
+                    r.branch_url,
+                    r.context,
+                    r.value,
+                    r.success_chance,
+                )
+            })
+            .collect();
+        // Without a candidate value there is no publish-mode bonus either.
+        assert_eq!(
+            requests,
+            vec![(CodebaseName::new("bare").unwrap(), None, None, None, None)]
+        );
+    }
+
+    #[cfg(feature = "testing")]
+    #[tokio::test]
     async fn test_estimate_success_probability_and_duration() {
         let Some(db) = setup_run_database(&CodebaseName::new("cb").unwrap()).await else {
             return;
