@@ -512,7 +512,7 @@ pub async fn bulk_add_to_queue(
 ) -> Result<(), Error> {
     let bucket = bucket.unwrap_or("default");
     let mut codebase_values = sqlx::query_as::<_, (String, f64)>(
-        "SELECT name, coalesce(value, 0) FROM codebase WHERE name IS NOT NULL",
+        "SELECT name, coalesce(value, 0)::float8 FROM codebase WHERE name IS NOT NULL",
     )
     .fetch_all(conn)
     .await?
