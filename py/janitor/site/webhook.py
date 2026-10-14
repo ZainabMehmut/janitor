@@ -323,7 +323,7 @@ def main(argv=None):
     parser.add_argument("callback_url", type=str)
     args = parser.parse_args(argv)
 
-    logging.basicConfig(format="%(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     codebases = asyncio.run(get_codebases(args.runner_url))
 
