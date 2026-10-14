@@ -478,20 +478,17 @@ fn validate_git_service(service: &str, auth_context: &AuthContext) -> Result<()>
 }
 
 /// Copy the request headers into the CGI env dict as `HTTP_*`,
-/// filtering out:
-/// * hop-by-hop headers (RFC 7230 §6.1) that describe the connection
-///   to the proxy, not the end-to-end request;
-/// * `Content-Encoding`, because axum has already decompressed the
-///   body and git would otherwise try to decode a second time.
+/// filtering out hop-by-hop headers (RFC 7230 §6.1) that describe the
+/// connection to the proxy, not the end-to-end request.
+///
+/// `Content-Encoding` is kept: the body reaches git as the client sent
+/// it, and git inflates a gzip body itself when it sees the header.
 ///
 /// Pulled out so it can be unit-tested without spawning a real
 /// subprocess.
 fn forward_request_headers(headers: &HeaderMap, env_vars: &mut HashMap<String, String>) {
     for (name, value) in headers.iter() {
         if is_hop_by_hop(name.as_str()) {
-            continue;
-        }
-        if name.as_str().eq_ignore_ascii_case("content-encoding") {
             continue;
         }
         if let Ok(value_str) = value.to_str() {
@@ -785,6 +782,10 @@ pub async fn git_backend(
     );
 
     forward_request_headers(&headers, &mut env_vars);
+    // Without a body there is nothing to inflate, and git fails if told to.
+    if method != axum::http::Method::POST {
+        env_vars.remove("HTTP_CONTENT_ENCODING");
+    }
 
     for (key, value) in env_vars {
         cmd.env(key, value);
@@ -965,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn test_forward_request_headers_strips_content_encoding() {
+    fn test_forward_request_headers_keeps_content_encoding() {
         let mut headers = HeaderMap::new();
         headers.insert("content-encoding", "gzip".parse().unwrap());
         headers.insert(
@@ -977,10 +978,9 @@ mod tests {
         let mut env = HashMap::new();
         forward_request_headers(&headers, &mut env);
 
-        assert!(
-            !env.contains_key("HTTP_CONTENT_ENCODING"),
-            "Content-Encoding must not reach the CGI env (would cause double-decode): {:?}",
-            env
+        assert_eq!(
+            env.get("HTTP_CONTENT_ENCODING").map(String::as_str),
+            Some("gzip")
         );
         assert_eq!(
             env.get("HTTP_CONTENT_TYPE").map(String::as_str),

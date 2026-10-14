@@ -1092,6 +1092,71 @@ db_test! {
 }
 
 db_test! {
+    async fn test_admin_smart_protocol_clone_many_refs(test_db: TestDatabase) {
+        // 50 branches push the fetch request over 1024 bytes, where git starts to gzip it.
+        setup_test_database(test_db.pool()).await.unwrap();
+        seed_codebase(test_db.pool(), "manyrefs").await;
+
+        let tmp = TempDir::new().unwrap();
+        let bare = tmp.path().join("manyrefs");
+        let repo = git2::Repository::init_bare(&bare).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree_id = {
+            let tb = repo.treebuilder(None).unwrap();
+            tb.write().unwrap()
+        };
+        let tree = repo.find_tree(tree_id).unwrap();
+        let mut parent: Option<git2::Oid> = None;
+        for i in 0..50 {
+            let parents: Vec<git2::Commit> = parent
+                .iter()
+                .map(|id| repo.find_commit(*id).unwrap())
+                .collect();
+            let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+            let id = repo
+                .commit(
+                    Some("refs/heads/main"),
+                    &sig,
+                    &sig,
+                    &format!("commit {}", i),
+                    &tree,
+                    &parent_refs,
+                )
+                .unwrap();
+            repo.reference(&format!("refs/heads/topic-{}", i), id, false, "test")
+                .unwrap();
+            parent = Some(id);
+        }
+
+        let state = build_state(&tmp, &test_db, AppRole::Admin).await;
+        let app = web::create_admin_app(state, 0);
+        let (addr, handle) = spawn(app).await;
+
+        let dst = TempDir::new().unwrap();
+        let dst_path = dst.path().join("clone");
+        let out = std::process::Command::new("git")
+            .args(["clone", "-q", &format!("http://{}/manyrefs", addr)])
+            .arg(&dst_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("git clone spawn");
+        assert!(
+            out.status.success(),
+            "git clone failed: stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let cloned = git2::Repository::open(&dst_path).unwrap();
+        let topics = cloned
+            .references_glob("refs/remotes/origin/topic-*")
+            .unwrap()
+            .count();
+        assert_eq!(topics, 50, "every branch should have been fetched");
+
+        handle.abort();
+    }
+}
+
+db_test! {
     async fn test_public_receive_pack_denied_without_auth(test_db: TestDatabase) {
         // On the public app an unauthenticated receive-pack advertisement
         // request must be challenged with 401 (not silently allowed and
@@ -1357,12 +1422,12 @@ db_test! {
 
 db_test! {
     async fn test_admin_smart_protocol_strips_content_encoding(test_db: TestDatabase) {
-        // Prove end-to-end that `Content-Encoding: gzip` doesn't make
-        // it into git-http-backend's env (which would otherwise try
-        // to decompress a body axum has already decoded). We hit
-        // info/refs with a bogus `Content-Encoding: gzip` header on
-        // an empty body; the handler must still 200 instead of
-        // producing a corrupted response or 500ing.
+        // Prove end-to-end that `Content-Encoding: gzip` on a request
+        // without a body doesn't make it into git-http-backend's env
+        // (which would otherwise fail to inflate the empty body). We
+        // hit info/refs with a bogus `Content-Encoding: gzip` header;
+        // the handler must still 200 instead of producing a corrupted
+        // response or 500ing.
         setup_test_database(test_db.pool()).await.unwrap();
         seed_codebase(test_db.pool(), "ce").await;
         let tmp = TempDir::new().unwrap();
@@ -1396,6 +1461,11 @@ db_test! {
         assert!(
             body.len() > 20 && body.iter().take(4).all(|b| b.is_ascii_hexdigit()),
             "expected pkt-line prefix, got: {:?}",
+            &body[..body.len().min(80)]
+        );
+        assert!(
+            String::from_utf8_lossy(&body).contains("refs/heads/main"),
+            "expected the refs in the advertisement, got: {:?}",
             &body[..body.len().min(80)]
         );
 
