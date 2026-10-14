@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS codebase (
 );
 CREATE INDEX ON codebase (branch_url);
 CREATE INDEX ON codebase (name);
+CREATE INDEX ON codebase (value);
 
 CREATE TYPE merge_proposal_status AS ENUM ('open', 'closed', 'merged', 'applied', 'abandoned', 'rejected');
 CREATE TABLE IF NOT EXISTS merge_proposal (
