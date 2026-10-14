@@ -2516,4 +2516,32 @@ mod tests {
             ]
         );
     }
+
+    // --- armor_public_key ---
+
+    /// Matches `gpg --armor --export --export-options export-minimal` byte for byte.
+    #[test]
+    fn test_armor_public_key() {
+        use sequoia_openpgp::armor;
+        use std::io::Read;
+        let expected = "-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mDMEas9kehYJKwYBBAHaRw8BAQdAniGkn2PkPeqeAqqCjLDrnr2ysfKN13siYKrL
+cZwALxO0G1Rlc3QgS2V5IDx0ZXN0QGV4YW1wbGUuY29tPoiQBBMWCgA4FiEEJrOs
+n1LdWZZ0uToZMqJtrghZwagFAmrPZHoCGwMFCwkIBwIGFQoJCAsCBBYCAwECHgEC
+F4AACgkQMqJtrghZwah2vgD9GyhL2w9opRcmfw0f4URD5Tmt33RIXuji4aLvRRc7
+acIBANPYup0ov/aq2XHOEpmkaaw9B6gSHz4uf1urZs/js/sE
+=Skl1
+-----END PGP PUBLIC KEY BLOCK-----
+";
+        let mut binary = Vec::new();
+        armor::Reader::from_bytes(
+            expected.as_bytes(),
+            armor::ReaderMode::Tolerant(Some(armor::Kind::PublicKey)),
+        )
+        .read_to_end(&mut binary)
+        .unwrap();
+        assert_eq!(binary.len(), 228);
+        assert_eq!(super::armor_public_key(&binary).unwrap(), expected);
+    }
 }
