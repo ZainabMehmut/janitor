@@ -1391,6 +1391,59 @@ db_test! {
 }
 
 db_test! {
+    async fn test_public_klaus_serves_each_codebase(test_db: TestDatabase) {
+        // All codebases share one klaus app; each page must show its own
+        // repository and link back to it.
+        if !klaus_available() {
+            eprintln!("skipping: klaus not importable");
+            return;
+        }
+        setup_test_database(test_db.pool()).await.unwrap();
+        let tmp = TempDir::new().unwrap();
+        let mut commits = Vec::new();
+        for name in ["alpha", "beta"] {
+            seed_codebase(test_db.pool(), name).await;
+            let repo = git2::Repository::init_bare(tmp.path().join(name)).unwrap();
+            let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+            let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            let message = format!("{} commit", name);
+            let commit = repo
+                .commit(Some("refs/heads/main"), &sig, &sig, &message, &tree, &[])
+                .unwrap();
+            commits.push((name, message, commit));
+        }
+
+        let state = build_state(&tmp, &test_db, AppRole::Public).await;
+        let app = web::create_public_app(state, 0);
+        let (addr, handle) = spawn(app).await;
+
+        let client = reqwest::Client::new();
+        for (name, message, commit) in commits.iter().chain(commits.iter()) {
+            let resp = client
+                .get(format!("http://{}/git/{}/tree/main/", addr, name))
+                .header("User-Agent", "Mozilla/5.0 (test)")
+                .header("Accept", "text/html")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            let body = resp.text().await.unwrap();
+            assert!(body.contains(message.as_str()), "{} page: {}", name, body);
+            let link = format!("/git/{}/commit/{}/", name, commit);
+            assert!(body.contains(&link), "{} page lacks {}: {}", name, link, body);
+            for (other, other_message, _) in &commits {
+                if other != name {
+                    assert!(!body.contains(other_message.as_str()), "{} page: {}", name, body);
+                }
+            }
+        }
+
+        handle.abort();
+    }
+}
+
+db_test! {
     async fn test_public_klaus_static_assets_served(test_db: TestDatabase) {
         // klaus.rs mounts klaus's bundled static dir at /git/_static/.
         // Fetch one of its shipped files to prove the ServeDir mount

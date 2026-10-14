@@ -9,6 +9,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict};
 use std::path::Path;
 use tracing::{debug, warn};
@@ -101,8 +102,11 @@ pub async fn handle_klaus(
 /// WSGI invocation.
 type KlausResponse = (StatusCode, Vec<(String, String)>, Vec<u8>);
 
-/// Build a WSGI environ dict for `repo_path`, instantiate the klaus
-/// Flask app via Python, call it, and return (status, headers, body).
+/// The klaus Flask app shared by all codebases, and klaus's `FancyRepo`.
+static KLAUS: PyOnceLock<(Py<PyAny>, Py<PyAny>)> = PyOnceLock::new();
+
+/// Build a WSGI environ dict for `repo_path`, call the klaus Flask app
+/// via Python, and return (status, headers, body).
 fn invoke_klaus(
     codebase: &str,
     repo_path: &Path,
@@ -113,9 +117,11 @@ fn invoke_klaus(
     body: &[u8],
 ) -> Result<KlausResponse> {
     Python::attach(|py| -> Result<_> {
-        // Build the Flask/Klaus app for this repository. We recreate it
-        // per request - klaus keeps no meaningful state across requests.
-        let klaus_app = build_klaus_app(py, codebase, repo_path)?;
+        let (klaus_app, fancy_repo) = KLAUS.get_or_try_init(py, || build_klaus_app(py))?;
+        let repo = fancy_repo
+            .bind(py)
+            .call1((repo_path.to_string_lossy().as_ref(), py.None()))
+            .map_err(py_err)?;
 
         // Build a WSGI environ dict.
         let io = py
@@ -131,6 +137,10 @@ fn invoke_klaus(
             .set_item("SCRIPT_NAME", script_name)
             .map_err(py_err)?;
         environ.set_item("PATH_INFO", path_info).map_err(py_err)?;
+        environ
+            .set_item("janitor.codebase", codebase)
+            .map_err(py_err)?;
+        environ.set_item("janitor.repo", &repo).map_err(py_err)?;
         environ
             .set_item("QUERY_STRING", query_string)
             .map_err(py_err)?;
@@ -231,7 +241,10 @@ fn invoke_klaus(
         )
         .map_err(py_err)?;
 
-        let iterable = klaus_app.call1((environ, start_response)).map_err(py_err)?;
+        let iterable = klaus_app
+            .bind(py)
+            .call1((environ, start_response))
+            .map_err(py_err)?;
 
         let mut body_out: Vec<u8> = Vec::new();
         for chunk in iterable.try_iter().map_err(py_err)? {
@@ -299,27 +312,24 @@ pub fn klaus_static_dir() -> Result<std::path::PathBuf> {
     })
 }
 
-/// Build a klaus Flask app scoped to one repository.
-fn build_klaus_app<'py>(
-    py: Python<'py>,
-    codebase: &str,
-    repo_path: &Path,
-) -> Result<Bound<'py, PyAny>> {
+/// Build the klaus Flask app, which serves the repository passed in the
+/// WSGI environ, and return it together with klaus's `FancyRepo` class.
+fn build_klaus_app(py: Python<'_>) -> Result<(Py<PyAny>, Py<PyAny>)> {
     let builtins = py
         .import("builtins")
         .map_err(|e| GitStoreError::HttpError(format!("import builtins: {}", e)))?;
 
     let src = r#"
-def build_klaus_app(codebase, repo_path):
-    from flask import Flask
+def build_klaus_app():
+    from flask import Flask, request
     from klaus import utils, views
     from klaus.repo import FancyRepo
 
     class Klaus(Flask):
-        def __init__(self, codebase, repo_path):
-            super().__init__("klaus")
-            self.codebase = codebase
-            self.valid_repos = {codebase: FancyRepo(repo_path, namespace=None)}
+        @property
+        def valid_repos(self):
+            environ = request.environ
+            return {environ["janitor.codebase"]: environ["janitor.repo"]}
 
         def should_use_ctags(self, git_repo, git_commit):
             return False
@@ -330,6 +340,8 @@ def build_klaus_app(codebase, repo_path):
             if endpoint == "static":
                 filename = values.get("filename", "")
                 return f"/git/_static/{filename}"
+            # The codebase is in SCRIPT_NAME rather than in the routes.
+            values.pop("repo", None)
             return super().url_for(endpoint, **values)
 
         def create_jinja_environment(self):
@@ -348,7 +360,12 @@ def build_klaus_app(codebase, repo_path):
             env.globals["SITE_NAME"] = "Codebase list"
             return env
 
-    app = Klaus(codebase, repo_path)
+    app = Klaus("klaus")
+
+    @app.url_value_preprocessor
+    def add_repo(endpoint, values):
+        if values is not None:
+            values["repo"] = request.environ["janitor.codebase"]
 
     for endpoint, rule in [
         ("blob", "/blob/"),
@@ -369,11 +386,9 @@ def build_klaus_app(codebase, repo_path):
         ("download", "/tarball/<path:rev>/"),
         ("repo_list", "/.."),
     ]:
-        app.add_url_rule(
-            rule, view_func=getattr(views, endpoint), defaults={"repo": codebase}
-        )
+        app.add_url_rule(rule, view_func=getattr(views, endpoint))
 
-    return app
+    return app, FancyRepo
 "#;
     let globals = PyDict::new(py);
     globals.set_item("__builtins__", builtins).map_err(py_err)?;
@@ -391,8 +406,7 @@ def build_klaus_app(codebase, repo_path):
         .map_err(py_err)?
         .ok_or_else(|| GitStoreError::HttpError("build_klaus_app not defined".to_string()))?;
 
-    let repo_path_str = repo_path.to_string_lossy().into_owned();
-    builder.call1((codebase, repo_path_str)).map_err(py_err)
+    builder.call0().and_then(|r| r.extract()).map_err(py_err)
 }
 
 fn py_err(e: PyErr) -> GitStoreError {
