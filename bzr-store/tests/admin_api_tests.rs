@@ -520,3 +520,51 @@ test_with_database! {
         handle.abort();
     }
 }
+
+test_with_database! {
+    async fn test_bad_path_segments_get_400(test_db: TestDatabase) {
+        setup_test_database(test_db.pool()).await.unwrap();
+        seed_codebase(test_db.pool(), "foo").await;
+
+        let tmp = TempDir::new().unwrap();
+        let cfg = build_config(tmp.path(), test_db_url(&test_db));
+        let (admin, public) = create_applications(cfg, janitor_config_with_campaign())
+            .await
+            .unwrap();
+        let (admin_addr, admin_handle) = spawn(admin).await;
+        let (public_addr, public_handle) = spawn(public).await;
+
+        // One name per route family; `%2F` keeps it in one URL segment.
+        let client = reqwest::Client::new();
+        let mut statuses = Vec::new();
+        for (addr, method, path) in [
+            (public_addr, reqwest::Method::GET, "/bzr/..%2Fghost/"),
+            (public_addr, reqwest::Method::POST, "/bzr/..%2Fghost/.bzr/smart"),
+            (admin_addr, reqwest::Method::GET, "/..%2Fghost/info"),
+            (admin_addr, reqwest::Method::POST, "/foo/campaign/..%2Fghost/.bzr/smart"),
+            (admin_addr, reqwest::Method::POST, "/foo/remotes/..%2Fghost"),
+        ] {
+            let resp = client
+                .request(method, format!("http://{}{}", addr, path))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body("url=bzr%3A%2F%2Fexample.invalid%2Ffoo")
+                .send()
+                .await
+                .unwrap();
+            statuses.push((path, resp.status().as_u16()));
+        }
+        assert_eq!(
+            statuses,
+            vec![
+                ("/bzr/..%2Fghost/", 400),
+                ("/bzr/..%2Fghost/.bzr/smart", 400),
+                ("/..%2Fghost/info", 400),
+                ("/foo/campaign/..%2Fghost/.bzr/smart", 400),
+                ("/foo/remotes/..%2Fghost", 400),
+            ]
+        );
+
+        admin_handle.abort();
+        public_handle.abort();
+    }
+}
