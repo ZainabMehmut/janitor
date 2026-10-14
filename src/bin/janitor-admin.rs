@@ -13,11 +13,7 @@ use std::process::ExitCode;
 #[command(version, about = "Administer a janitor instance over its HTTP API")]
 struct Cli {
     /// Base URL of the janitor site (e.g. https://janitor.debian.net).
-    #[arg(
-        long,
-        env = "JANITOR_URL",
-        default_value = "https://janitor.debian.net"
-    )]
+    #[arg(long, env = "JANITOR_URL")]
     url: Url,
 
     /// Username for HTTP basic auth (admin).
@@ -457,7 +453,13 @@ mod tests {
     fn cli_reschedule_requires_run_or_result_code() {
         // Neither run_id nor result_code is required at parse time; the check happens
         // at runtime. Parsing with no filter should still succeed.
-        let cli = Cli::try_parse_from(["janitor-admin", "reschedule"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "janitor-admin",
+            "--url",
+            "https://example.com",
+            "reschedule",
+        ])
+        .unwrap();
         match cli.command {
             Command::Reschedule(args) => {
                 assert!(args.run_id.is_none());
