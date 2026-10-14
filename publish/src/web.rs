@@ -8,6 +8,7 @@ use axum::routing::{delete, get, post, put};
 use axum::Router;
 use breezyshim::error::Error as BrzError;
 use log::error;
+use sequoia_openpgp::armor;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1361,6 +1362,15 @@ struct Credentials {
     hosting: Vec<ForgeCredentials>,
 }
 
+/// ASCII-armor a binary OpenPGP public key, like `gpg --armor --export`.
+fn armor_public_key(data: &[u8]) -> std::io::Result<String> {
+    use std::io::Write;
+    let mut writer = armor::Writer::new(Vec::new(), armor::Kind::PublicKey)?;
+    writer.write_all(data)?;
+    String::from_utf8(writer.finalize()?)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
 /// `GET /credentials`: surface the publisher's SSH public keys, minimal
 /// PGP exports, and per-forge login state.
 ///
@@ -1414,10 +1424,9 @@ async fn get_credentials(State(state): State<Arc<AppState>>) -> impl IntoRespons
         match tokio::task::spawn_blocking(move || {
             let mut keys = Vec::new();
             for entry in gpg.keylist(true) {
-                let exported = gpg.key_export_minimal(&entry.fpr);
-                match String::from_utf8(exported) {
+                match armor_public_key(&gpg.key_export_minimal(&entry.fpr)) {
                     Ok(armored) => keys.push(armored),
-                    Err(e) => log::warn!("Skipping PGP key {}: invalid UTF-8: {}", entry.fpr, e),
+                    Err(e) => log::warn!("Skipping PGP key {}: {}", entry.fpr, e),
                 }
             }
             keys

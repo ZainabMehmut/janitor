@@ -105,6 +105,7 @@ pyo3-async-runtimes = "0.28"
 tower = "0.5"
 tracing = "0.1"
 base64 = "0.22"
+sequoia-openpgp = { version = "2.4", default-features = false, features = ["crypto-nettle"] }
 nix = ">=0.30,<0.32"
 askama = ">=0.15,<0.17"
 
