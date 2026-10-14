@@ -700,6 +700,89 @@ mod tests {
         assert_eq!(publish_mode_value(&Mode::PushDerived), 200);
     }
 
+    #[tokio::test]
+    async fn test_bulk_add_to_queue() {
+        let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+            eprintln!("TEST_DATABASE_URL not set, skipping");
+            return;
+        };
+        let admin = PgPool::connect(&url).await.unwrap();
+        let name = format!("janitor_test_bulk_add_{}", std::process::id());
+        let create = format!("CREATE DATABASE {}", name);
+        sqlx::query(sqlx::AssertSqlSafe(create))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let options: sqlx::postgres::PgConnectOptions = url.parse().unwrap();
+        let pool = PgPool::connect_with(options.database(&name)).await.unwrap();
+        sqlx::raw_sql(crate::schema::CORE_SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO codebase (name, branch_url, url) VALUES
+                 ('pkg-a', 'https://example.com/a', 'https://example.com/a'),
+                 ('pkg-b', 'https://example.com/b', 'https://example.com/b');
+             INSERT INTO named_publish_policy (name, per_branch_policy)
+                 VALUES ('p', ARRAY[ROW('main', 'propose', NULL)::branch_publish_policy]);
+             INSERT INTO candidate (codebase, suite, command, publish_policy)
+                 VALUES ('pkg-a', 'lintian-fixes', 'cmd', 'p');
+             INSERT INTO candidate
+                 (codebase, suite, command, publish_policy, context, value, success_chance)
+                 VALUES ('pkg-b', 'lintian-fixes', 'cmd', 'p', 'ctx', 10, 0.5),
+                        ('pkg-b', 'fresh-releases', 'cmd', 'p', 'ctx', 10, 0.5);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Codebase values all NULL, all 0, then set.
+        let mut queues = vec![];
+        for values in [
+            "UPDATE codebase SET value = NULL",
+            "UPDATE codebase SET value = 0",
+            "UPDATE codebase SET value = CASE name WHEN 'pkg-a' THEN 10 ELSE 5 END",
+        ] {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM queue; {}",
+                values
+            )))
+            .execute(&pool)
+            .await
+            .unwrap();
+            let todo = iter_schedule_requests_from_candidates(&pool, None, None)
+                .await
+                .unwrap()
+                .collect::<Vec<_>>();
+            bulk_add_to_queue(&pool, &todo, false, 0.0, None, None, false)
+                .await
+                .unwrap();
+            let queue = sqlx::query_as::<_, (String, String, i64)>(
+                "SELECT codebase, suite, priority FROM queue ORDER BY codebase, suite",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            queues.push(queue);
+        }
+        pool.close().await;
+        let drop = format!("DROP DATABASE {}", name);
+        sqlx::query(sqlx::AssertSqlSafe(drop))
+            .execute(&admin)
+            .await
+            .unwrap();
+
+        for queue in &queues {
+            assert_eq!(queue.len(), 3);
+            // Both campaigns of pkg-b get the same priority.
+            assert_eq!(queue[1].1, "fresh-releases");
+            assert_eq!(queue[2].1, "lintian-fixes");
+            assert_eq!(queue[1].2, queue[2].2);
+        }
+        // pkg-b has half the value of pkg-a, so it is scheduled later.
+        assert!(queues[2][1].2 > queues[0][1].2);
+    }
+
     #[test]
     fn test_calculate_offset_basic() {
         let estimated_duration = Duration::seconds(60);
@@ -996,6 +1079,66 @@ mod tests {
             Duration::seconds(28802) + Duration::microseconds(250000)
         );
         assert_eq!(total, 3);
+    }
+
+    #[tokio::test]
+    async fn test_iter_schedule_requests_from_candidates() {
+        let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+            eprintln!("TEST_DATABASE_URL not set, skipping");
+            return;
+        };
+        let admin = PgPool::connect(&url).await.unwrap();
+        let name = format!("janitor_test_schedule_requests_{}", std::process::id());
+        let create = format!("CREATE DATABASE {}", name);
+        sqlx::query(sqlx::AssertSqlSafe(create))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let options: sqlx::postgres::PgConnectOptions = url.parse().unwrap();
+        let pool = PgPool::connect_with(options.database(&name)).await.unwrap();
+        sqlx::raw_sql(crate::schema::CORE_SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO codebase (name) VALUES ('pkg-a');
+             INSERT INTO codebase (name, branch_url, url)
+                 VALUES ('pkg-b', 'https://example.com/b', 'https://example.com/b');
+             INSERT INTO named_publish_policy (name, per_branch_policy)
+                 VALUES ('p', ARRAY[ROW('main', 'propose', NULL)::branch_publish_policy]);
+             INSERT INTO candidate (codebase, suite, command, publish_policy)
+                 VALUES ('pkg-a', 'lintian-fixes', 'cmd', 'p');
+             INSERT INTO candidate
+                 (codebase, suite, command, publish_policy, context, value, success_chance)
+                 VALUES ('pkg-b', 'lintian-fixes', 'cmd', 'p', 'ctx', 10, 0.5);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = iter_schedule_requests_from_candidates(&pool, None, None)
+            .await
+            .map(|requests| requests.collect::<Vec<_>>());
+        pool.close().await;
+        let drop = format!("DROP DATABASE {}", name);
+        sqlx::query(sqlx::AssertSqlSafe(drop))
+            .execute(&admin)
+            .await
+            .unwrap();
+
+        let mut requests = result.unwrap();
+        requests.sort_by(|x, y| x.codebase.cmp(&y.codebase));
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].codebase, "pkg-a");
+        assert_eq!(requests[0].branch_url, None);
+        assert_eq!(requests[0].context, None);
+        assert_eq!(requests[0].value, None);
+        assert_eq!(requests[0].success_chance, None);
+        assert_eq!(requests[1].codebase, "pkg-b");
+        assert_eq!(requests[1].context.as_deref(), Some("ctx"));
+        // 10 from the candidate plus 400 for the propose mode.
+        assert_eq!(requests[1].value, Some(410));
+        assert_eq!(requests[1].success_chance, Some(0.5));
     }
 
     #[test]
