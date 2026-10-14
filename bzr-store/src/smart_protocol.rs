@@ -36,8 +36,10 @@ use breezyshim::repository::Repository;
 use breezyshim::transport::Transport;
 use tracing::{debug, info, warn};
 
+use janitor::codebase::CodebaseName;
+
 use crate::error::{BzrError, Result};
-use crate::web::AppState;
+use crate::web::{path_segment, AppState};
 
 /// Canonical incomplete-request error body emitted by Python.
 const INCOMPLETE_REQUEST_ERROR: &[u8] = b"error\x01incomplete request\n";
@@ -218,29 +220,31 @@ pub async fn smart_protocol_dispatch(
 /// `POST /:codebase/.bzr/smart`
 pub async fn smart_protocol_codebase_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<CodebaseName>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
-    smart_protocol_dispatch(state, codebase, None, None, headers, body).await
+    smart_protocol_dispatch(state, codebase.into(), None, None, headers, body).await
 }
 
 /// `POST /:codebase/:campaign/.bzr/smart`
 pub async fn smart_protocol_campaign_handler(
     State(state): State<AppState>,
-    Path((codebase, campaign)): Path<(String, String)>,
+    Path((codebase, campaign)): Path<(CodebaseName, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
-    smart_protocol_dispatch(state, codebase, Some(campaign), None, headers, body).await
+    let campaign = Some(path_segment(&campaign)?);
+    smart_protocol_dispatch(state, codebase.into(), campaign, None, headers, body).await
 }
 
 /// `POST /:codebase/:campaign/:role/.bzr/smart`
 pub async fn smart_protocol_role_handler(
     State(state): State<AppState>,
-    Path((codebase, campaign, role)): Path<(String, String, String)>,
+    Path((codebase, campaign, role)): Path<(CodebaseName, String, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
-    smart_protocol_dispatch(state, codebase, Some(campaign), Some(role), headers, body).await
+    let (campaign, role) = (Some(path_segment(&campaign)?), Some(path_segment(&role)?));
+    smart_protocol_dispatch(state, codebase.into(), campaign, role, headers, body).await
 }

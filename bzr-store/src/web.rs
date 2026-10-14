@@ -16,6 +16,7 @@ use axum::{
 };
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use janitor::codebase::CodebaseName;
 use serde::{Deserialize, Serialize};
 use tera::{Context, Tera};
 use tokio::fs;
@@ -369,20 +370,20 @@ pub fn create_public_app(state: AppState, client_max_size: usize) -> Router {
 /// `/{campaign}/{role}/.bzr/smart`.
 async fn bzr_smart_sub_dispatcher(
     State(state): State<AppState>,
-    Path((codebase, sub_path)): Path<(String, String)>,
+    Path((codebase, sub_path)): Path<(CodebaseName, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
     let parts: Vec<&str> = sub_path.trim_end_matches('/').splitn(4, '/').collect();
     match parts.as_slice() {
         [".bzr", "smart"] => {
-            smart_protocol_dispatch(state, codebase, None, None, headers, body).await
+            smart_protocol_dispatch(state, codebase.into(), None, None, headers, body).await
         }
         [campaign, ".bzr", "smart"] => {
             smart_protocol_dispatch(
                 state,
-                codebase,
-                Some(campaign.to_string()),
+                codebase.into(),
+                Some(path_segment(campaign)?),
                 None,
                 headers,
                 body,
@@ -392,9 +393,9 @@ async fn bzr_smart_sub_dispatcher(
         [campaign, role, ".bzr", "smart"] => {
             smart_protocol_dispatch(
                 state,
-                codebase,
-                Some(campaign.to_string()),
-                Some(role.to_string()),
+                codebase.into(),
+                Some(path_segment(campaign)?),
+                Some(path_segment(role)?),
                 headers,
                 body,
             )
@@ -402,6 +403,13 @@ async fn bzr_smart_sub_dispatcher(
         }
         _ => Ok((StatusCode::NOT_FOUND, "Not found").into_response()),
     }
+}
+
+/// A campaign, role or remote name, which must be one plain path segment.
+pub(crate) fn path_segment(segment: &str) -> Result<String> {
+    janitor::security::validate_filename(segment)
+        .map(|()| segment.to_string())
+        .map_err(BzrError::invalid_request)
 }
 
 /// `GET /` on the public app — matches
@@ -535,9 +543,9 @@ async fn list_repositories_handler(State(state): State<AppState>) -> Result<Resp
 /// repository for `codebase` exists on disk.
 async fn create_repository_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<CodebaseName>,
 ) -> Result<Json<RepositoryCreatedResponse>> {
-    let repo_path = RepositoryPath::codebase_only(codebase);
+    let repo_path = RepositoryPath::codebase_only(codebase.into());
     let path = state
         .repository_manager
         .ensure_repository(&repo_path)
@@ -554,9 +562,9 @@ async fn create_repository_handler(
 /// `GET /{codebase}/info` — admin repository metadata.
 async fn repository_info_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<CodebaseName>,
 ) -> Result<Json<serde_json::Value>> {
-    let repo_path = RepositoryPath::codebase_only(codebase);
+    let repo_path = RepositoryPath::codebase_only(codebase.into());
     let info = state
         .repository_manager
         .get_repository_info(&repo_path)
@@ -570,10 +578,10 @@ async fn repository_info_handler(
 /// unified diff between two revids in text/x-diff.
 async fn diff_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<CodebaseName>,
     Query(query): Query<DiffQuery>,
 ) -> Result<Response> {
-    let repo_path = RepositoryPath::codebase_only(codebase);
+    let repo_path = RepositoryPath::codebase_only(codebase.into());
     let diff = state
         .repository_manager
         .get_diff(&repo_path, &query.old, &query.new)
@@ -586,10 +594,10 @@ async fn diff_handler(
 /// range info. Matches `py/janitor/bzr_store.py::bzr_revision_info_request`.
 async fn revision_info_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<CodebaseName>,
     Query(query): Query<RevisionInfoQuery>,
 ) -> Result<Json<Vec<RevisionInfo>>> {
-    let repo_path = RepositoryPath::codebase_only(codebase);
+    let repo_path = RepositoryPath::codebase_only(codebase.into());
     let revisions = state
         .repository_manager
         .get_revision_info(&repo_path, &query.old, &query.new)
@@ -604,7 +612,7 @@ async fn revision_info_handler(
 /// urlencoded with a `url` field.
 async fn configure_remote_handler(
     State(state): State<AppState>,
-    Path((codebase, remote)): Path<(String, String)>,
+    Path((codebase, remote)): Path<(CodebaseName, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<RemoteConfiguredResponse>> {
@@ -612,7 +620,7 @@ async fn configure_remote_handler(
     // not the shared repo root. Model this with a RepositoryPath that
     // treats `remote` as the campaign slot (the on-disk layout is the
     // same).
-    let repo_path = RepositoryPath::new(codebase, Some(remote.clone()), None);
+    let repo_path = RepositoryPath::new(codebase.into(), Some(path_segment(&remote)?), None);
 
     let url = extract_remote_url(&headers, &body)?;
 
@@ -667,9 +675,9 @@ fn extract_remote_url(headers: &HeaderMap, body: &Bytes) -> Result<String> {
 /// `parent_location` config entry per branch.
 async fn list_remotes_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<CodebaseName>,
 ) -> Result<Json<RemotesListResponse>> {
-    let repo_path = RepositoryPath::codebase_only(codebase);
+    let repo_path = RepositoryPath::codebase_only(codebase.into());
     let fs_path = state.config.repository_path.join(&repo_path.codebase);
 
     if !fs_path.exists() {
