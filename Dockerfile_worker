@@ -61,6 +61,10 @@ COPY autopkgtest-wrapper /usr/local/bin/autopkgtest-wrapper
 
 ENV AUTOPKGTEST=/usr/local/bin/autopkgtest-wrapper
 
+# Leave out the hybrid post-quantum TLS group: salsa.debian.org is slow with it.
+COPY worker/openssl-groups.cnf /etc/janitor/openssl-groups.cnf
+ENV OPENSSL_CONF=/etc/janitor/openssl-groups.cnf
+
 EXPOSE 9821
 
 # tini-static reaps zombies that janitor-worker, running as PID 1, would otherwise leave.

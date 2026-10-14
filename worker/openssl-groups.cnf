@@ -1,0 +1,11 @@
+# Debian's openssl.cnf without the hybrid X25519MLKEM768 group (slow with salsa.debian.org).
+.include /etc/ssl/openssl.cnf
+
+[openssl_init]
+ssl_conf = janitor_ssl_sect
+
+[janitor_ssl_sect]
+system_default = janitor_tls_sect
+
+[janitor_tls_sect]
+Groups = ?X25519:?secp256r1:?X448:?secp384r1:?secp521r1:?ffdhe2048:?ffdhe3072

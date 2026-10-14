@@ -53,3 +53,5 @@ $ podman run \
   --workdir /janitor \
   ghcr.io/jelmer/janitor/site:latest
 ```
+
+**Worker TLS groups** - `janitor-worker` sets `OPENSSL_CONF=/etc/janitor/openssl-groups.cnf`, which keeps Debian's `openssl.cnf` but drops the hybrid post-quantum key exchange `X25519MLKEM768`: with it, a bare clone of polkit from salsa.debian.org takes 20-26 s instead of about 8 s. Run with `--env OPENSSL_CONF=/etc/ssl/openssl.cnf` to get the post-quantum key exchange back.
