@@ -19,6 +19,7 @@
 import argparse
 import asyncio
 import logging
+import os
 import sys
 
 from aiohttp import ClientSession
@@ -43,13 +44,21 @@ parser.add_argument("--dry-run", action="store_true")
 parser.add_argument(
     "--base-url", type=str, default="https://janitor.debian.net", help="Instance URL"
 )
+parser.add_argument(
+    "--session-id",
+    type=str,
+    default=os.environ.get("JANITOR_SESSION_ID"),
+    help="session_id cookie of an admin login (default: $JANITOR_SESSION_ID).",
+)
 
 args = parser.parse_args()
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
-async def reprocess_logs(base_url, run_ids=None, dry_run=False, reschedule=False):
+async def reprocess_logs(
+    base_url, run_ids=None, dry_run=False, reschedule=False, session_id=None
+):
     params = []
     if dry_run:
         params.append(("dry_run", "1"))
@@ -58,7 +67,11 @@ async def reprocess_logs(base_url, run_ids=None, dry_run=False, reschedule=False
     for run_id in run_ids or []:
         params.append(("run_id", run_id))
     url = URL(base_url) / "cupboard/api/reprocess-logs"
-    async with ClientSession() as session, session.post(url, data=params) as resp:
+    cookies = {"session_id": session_id} if session_id else None
+    async with (
+        ClientSession(cookies=cookies) as session,
+        session.post(url, data=params) as resp,
+    ):
         if resp.status != 200:
             logging.fatal("reprocessing failed: %d", resp.status)
             return 1
@@ -69,7 +82,11 @@ async def reprocess_logs(base_url, run_ids=None, dry_run=False, reschedule=False
 sys.exit(
     asyncio.run(
         reprocess_logs(
-            args.base_url, args.run_id, dry_run=args.dry_run, reschedule=args.reschedule
+            args.base_url,
+            args.run_id,
+            dry_run=args.dry_run,
+            reschedule=args.reschedule,
+            session_id=args.session_id,
         )
     )
 )

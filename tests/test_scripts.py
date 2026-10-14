@@ -19,15 +19,18 @@ import asyncio
 import os
 import sys
 
+import pytest
 from aiohttp import web
 
 TOPDIR = os.path.join(os.path.dirname(__file__), "..")
 
 
-async def run_script(aiohttp_server, name, path, argv):
+async def run_script(aiohttp_server, name, path, argv, session_id=None, env=None):
     posted = []
 
     async def handler(request):
+        if request.cookies.get("session_id") != session_id:
+            raise web.HTTPUnauthorized()
         post = await request.post()
         posted.append(list(post.items()))
         return web.json_response([])
@@ -42,6 +45,7 @@ async def run_script(aiohttp_server, name, path, argv):
         "--base-url",
         str(server.make_url("/")),
         *argv,
+        env=env,
     )
     assert await asyncio.wait_for(proc.wait(), 60) == 0
     return posted
@@ -100,3 +104,30 @@ async def test_reprocess_build_results_all(aiohttp_server):
         [],
     )
     assert posted == [[]]
+
+
+@pytest.mark.parametrize(
+    "name,path,argv",
+    [
+        ("reschedule.py", "/cupboard/api/mass-reschedule", ["never-processed"]),
+        ("reprocess-build-results.py", "/cupboard/api/reprocess-logs", []),
+    ],
+)
+async def test_session_id(aiohttp_server, name, path, argv):
+    posted = await run_script(
+        aiohttp_server,
+        name,
+        path,
+        ["--session-id=admin-session", *argv],
+        session_id="admin-session",
+    )
+    assert len(posted) == 1
+    posted = await run_script(
+        aiohttp_server,
+        name,
+        path,
+        argv,
+        session_id="admin-session",
+        env=dict(os.environ, JANITOR_SESSION_ID="admin-session"),
+    )
+    assert len(posted) == 1
