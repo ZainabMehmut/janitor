@@ -59,6 +59,12 @@ jobs:
         run: brz whoami "CI <ci@noreply.github.com>"
       - name: Verify docker daemon is reachable
         run: docker info
+      - name: Install debversion extension in postgres
+        run: |
+          docker exec ${{ job.services.postgres.id }} apt-get update
+          docker exec ${{ job.services.postgres.id }} \
+            apt-get install -y --no-install-recommends \
+            postgresql-16-debversion
       - name: Build
         run: cargo build --verbose --workspace
       - name: Run tests
