@@ -118,23 +118,18 @@ impl RedisManager {
 
     /// Ensure we have a valid connection, attempting to reconnect if necessary
     async fn ensure_connected(&self) -> Result<(), JanitorError> {
-        let state = self.connection_state.read().await;
-
-        match *state {
+        let state = *self.connection_state.read().await;
+        match state {
             ConnectionState::Connected => return Ok(()),
             ConnectionState::Connecting => {
                 // Wait a bit for ongoing connection attempt
-                drop(state);
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                let state = self.connection_state.read().await;
-                if *state == ConnectionState::Connected {
+                if *self.connection_state.read().await == ConnectionState::Connected {
                     return Ok(());
                 }
             }
             _ => {}
         }
-
-        // State is automatically dropped here
 
         // Try to connect
         self.connect().await
