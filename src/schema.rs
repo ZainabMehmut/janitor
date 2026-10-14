@@ -26,58 +26,94 @@ pub async fn setup_debian_test_database(pool: &sqlx::PgPool) -> Result<(), sqlx:
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "testing"))]
 mod tests {
     use super::*;
+    use crate::test_utils::TestDatabase;
 
-    #[test]
-    fn test_core_schema_is_not_empty() {
-        assert!(!CORE_SCHEMA.is_empty());
-        assert!(CORE_SCHEMA.len() > 1000); // Should be a substantial schema
+    async fn table_names(pool: &sqlx::PgPool, names: &[&str]) -> Vec<String> {
+        sqlx::query_scalar(
+            "SELECT table_name::text FROM information_schema.tables \
+             WHERE table_schema = 'public' AND table_name = ANY($1) \
+             ORDER BY table_name",
+        )
+        .bind(names)
+        .fetch_all(pool)
+        .await
+        .unwrap()
     }
 
-    #[test]
-    fn test_debian_schema_is_not_empty() {
-        assert!(!DEBIAN_SCHEMA.is_empty());
-        assert!(DEBIAN_SCHEMA.len() > 100); // Debian schema is smaller
-    }
+    #[tokio::test]
+    async fn test_core_schema_creates_tables() {
+        let Some(db) = TestDatabase::new_optional().await.unwrap() else {
+            return;
+        };
+        setup_test_database(db.pool()).await.unwrap();
 
-    #[test]
-    fn test_core_schema_contains_expected_tables() {
-        // Check for key tables
-        assert!(CORE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS codebase"));
-        assert!(CORE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS merge_proposal"));
-        assert!(CORE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS run"));
-        assert!(CORE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS change_set"));
-        assert!(CORE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS queue"));
-        assert!(CORE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS named_publish_policy"));
-        assert!(CORE_SCHEMA.contains("CREATE TABLE IF NOT EXISTS worker"));
-    }
-
-    #[test]
-    fn test_debian_schema_contains_expected_table() {
-        assert!(DEBIAN_SCHEMA.contains("CREATE TABLE debian_build"));
-        assert!(DEBIAN_SCHEMA.contains("run_id"));
-        assert!(DEBIAN_SCHEMA.contains("distribution"));
-        assert!(DEBIAN_SCHEMA.contains("version debversion"));
-        assert!(DEBIAN_SCHEMA.contains("source text"));
-    }
-
-    #[test]
-    fn test_core_schema_contains_sql_elements() {
-        // Check for various SQL elements
-        assert!(CORE_SCHEMA.contains("CREATE OR REPLACE VIEW"));
-        assert!(
-            CORE_SCHEMA.contains("CREATE INDEX") || CORE_SCHEMA.contains("CREATE UNIQUE INDEX")
+        let expected = [
+            "change_set",
+            "codebase",
+            "merge_proposal",
+            "named_publish_policy",
+            "queue",
+            "run",
+            "worker",
+        ];
+        assert_eq!(table_names(db.pool(), &expected).await, expected);
+        assert_eq!(
+            table_names(db.pool(), &["debian_build"]).await,
+            Vec::<String>::new()
         );
-        assert!(CORE_SCHEMA.contains("CREATE OR REPLACE FUNCTION"));
-        assert!(CORE_SCHEMA.contains("references"));
-        assert!(CORE_SCHEMA.contains("not null"));
     }
 
-    #[test]
-    fn test_schemas_are_different() {
-        assert_ne!(CORE_SCHEMA, DEBIAN_SCHEMA);
-        assert!(CORE_SCHEMA.len() > DEBIAN_SCHEMA.len());
+    #[tokio::test]
+    async fn test_debian_schema_creates_debian_build() {
+        let Some(db) = TestDatabase::new_optional().await.unwrap() else {
+            return;
+        };
+        setup_debian_test_database(db.pool()).await.unwrap();
+
+        let columns: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT column_name::text, udt_name::text, is_nullable::text \
+             FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name = 'debian_build' \
+             ORDER BY ordinal_position",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        let expected = [
+            ("run_id", "text", "NO"),
+            ("version", "debversion", "NO"),
+            ("distribution", "text", "NO"),
+            ("source", "text", "NO"),
+            ("binary_packages", "_text", "YES"),
+            ("lintian_result", "json", "YES"),
+        ];
+        assert_eq!(
+            columns,
+            expected
+                .iter()
+                .map(|(n, t, null)| (n.to_string(), t.to_string(), null.to_string()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_debian_build_requires_existing_run() {
+        let Some(db) = TestDatabase::new_optional().await.unwrap() else {
+            return;
+        };
+        setup_debian_test_database(db.pool()).await.unwrap();
+
+        let err = sqlx::query(
+            "INSERT INTO debian_build (run_id, version, distribution, source) \
+             VALUES ('no-such-run', '1.0-1', 'unstable', 'foo')",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap_err();
+        let db_err = err.as_database_error().unwrap();
+        assert_eq!(db_err.code().as_deref(), Some("23503"));
     }
 }
