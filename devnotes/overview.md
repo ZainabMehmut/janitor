@@ -1,173 +1,191 @@
-The janitor can manage automated changes to a set of
-projects in version control.
+# How Janitor works
 
-It does this through a number of interconnected
-services, each of which provides some basic features:
+The Janitor can manage automated changes to a set of projects in version
+control.
 
- * a rest service
- * /metrics target for use with prometheus
- * /ready and /healthy targets for use with kubernetes or other
-   health-checking services
+It does this through a number of interconnected services, each of which
+provides some basic features:
 
-Access to the rest services is unauthenticated and is meant to be restricted
-to the other services and administrators.
- 
-Some services also provide a separate rest service on a different,
-for exposure to the internet. In particular:
+- a REST API
+- `/metrics` for use with Prometheus
+- `/health` and `/ready` for use with Kubernetes or other health-checking
+  services (not every service has all three)
 
- * janitor.runner: /runner target
- * janitor.git_store: /git
- * janitor.bzr_store: /bzr
- * janitor.debian.archive: /dists
+Access to the REST APIs is unauthenticated and is meant to be restricted to
+the other services and administrators.
 
-The runner
-==========
+Some services also provide a separate REST API on a different port, for
+exposure to the internet. In particular (ports as set in the container
+images):
 
-A "codebase" is a place in a VCS repository that changes can be made to.
-Generally, it will refer to the root of a branch in a repository
-(either Git or Bazaar), but it can also refer to a subpath.
-Codebases can also be "nascent", which means that they don't exist
-anywhere yet, but are created and populated by the janitor.
+- `janitor-runner`: port 9919, used by the workers, and a reverse proxy
+  usually serves it under `/runner/`
+- `janitor-git-store`: port 9924, `/git/`
+- `janitor-bzr-store`: port 9930, `/bzr/`
+- `janitor-site`: port 8090, the web UI and the public API
 
-"campaigns" are efforts to fix a particular issue across the
-codebases. Campaigns do not have to be relevant for all
-of the codebases, but the idea is that a campaign tries to
-improve one particular aspect of each codebase. An example
-would be fixing a particular kind of formatting. 
+`janitor-archive` serves `/dists` on its only port, 9914.
 
-Usually, a campaign has a default command that should be run against
-all codebases. Extra arguments and environment variables can be
-specified on a per-codebase basis.
+## The runner
 
-A "candidate" is a record that a particular campaign should run for
-a particular codebase. As long as a candidate exists,
-the janitor will make sure the command gets run every now and then.
+A {term}`codebase` is a place in a VCS repository that changes can be made to.
+Generally, it will refer to the root of a branch in a repository (either Git or
+Bazaar), but it can also refer to a subpath. Codebases can also be
+{term}`nascent`, which means that they don't exist anywhere yet, but are
+created and populated by the Janitor.
+
+{term}`Campaigns <campaign>` are efforts to fix a particular issue across the
+codebases. Campaigns do not have to be relevant for all of the codebases, but
+the idea is that a campaign tries to improve one particular aspect of each
+codebase. An example would be fixing a particular kind of formatting.
+
+Usually, a campaign has a default command that should be run against all
+codebases. Extra arguments and environment variables can be specified on a
+per-codebase basis.
+
+A {term}`candidate` is a record that a particular campaign should run for a
+particular codebase. As long as a candidate exists, the Janitor will make
+sure the command gets run every now and then.
 
 Scheduling runs for candidates happens regularly, and takes into account
 several factors:
 
- * the score for the codebase
-   (so e.g. more popular projects can be prioiritized)
- * the score for the candidate
-   (so e.g. more impacting candidates are processed more frequently)
- * previous track record for the run
-   (if it often generates new changes successfully, it's prioritized)
- * expected actions after a successful run - priority is
-   given to runs that will be pushed or included in a merge proposal
+- the value of the codebase (so e.g. more popular projects can be prioritized)
+- the value of the candidate (so e.g. higher-impact candidates are processed
+  more often)
+- previous track record for the run (if it often generates new changes
+  successfully, it's prioritized)
+- expected actions after a successful run: priority is given to runs that will
+  be pushed or included in a merge proposal
 
-Items in the queue sit in various predefined buckets. These allow
-particular runs to be prioritized, e.g. because they're associated
-with an existing merge proposal that is now conflicting.
+Items in the queue sit in various predefined buckets. These allow particular
+runs to be prioritized, e.g. because they're associated with an existing merge
+proposal that is now conflicting. See
+{doc}`How work is scheduled </scheduling>` for the details.
 
-Workers retrieve the first item in the queue, process it and then
-upload the results. This creates a "run", with a result code,
-possible artifacts (including logs), a description and some other
-metadata.
+Workers retrieve the first item in the queue, process it and then upload the
+results. This creates a {term}`run`, with a {term}`result code`, possible
+artifacts (including logs), a description and some other metadata.
 
-Runs can be successful, be a no-op ("nothing-to-do") a continuation of
-a successful run without additional changes ("nothing-new-to-do")
-or have failed (any other result code). Some failures are classified
-as transient, which means that the expectation is that a repeat
-run will succeed. The scheduler takes this into account, and
-runs with transient failures are ignored in various places.
+Runs can be successful, be a no-op (`nothing-to-do`), be a continuation of a
+successful run without additional changes (`nothing-new-to-do`), or have failed
+(any other result code). Some failures are classified as {term}`transient`,
+which means a repeat run is expected to succeed. The scheduler takes this into
+account, and runs with transient failures are ignored in various places.
 
-The publisher
-=============
+(the-publisher)=
 
-Once a run is approved for publishing, it's the publisher's job to
-either create a merge proposal or to push the changes directly to
-the VCS.
+## The publisher
 
-The publisher can be manually operated, e.g. if somebody
-requests a run from the web UI that is always executed.
+Once a run is approved for publishing, it's the publisher's job to either
+create a merge proposal or to push the changes directly to the VCS.
 
-Each candidate has a "publish_policy" associated with it, which
-describes the mode to use ("push", "propose", "attempt-push") and
-a rate limiting bucket. So long as the number of
-open merge proposals is below the rate-limiting threshold,
-new merge proposals can be created. Different algorithms
-for rate-limiting are supported, but the default is slow-start.
+The publisher can also be driven by hand: a publish that somebody requests
+from the web UI skips the rate limits.
 
-The "attempt-push" mode will try to push first, but if it
-gets a permission denied error (because the janitor does
-not have write access) it will create a merge proposal instead.
+Each candidate has a {term}`publish policy` (`publish-policy` when uploading
+candidates). A publish policy is a named record, set through the publisher's
+`PUT /policy/{name}` API, that holds a mode for each branch of the run and a
+rate-limiting bucket. A candidate without a publish policy is never published.
+The modes are:
 
-The publisher will regularly scan old merge proposals for their
-status, and take appropriate action:
+- `push`: push the changes to the target branch
+- `propose`: create a merge proposal
+- `attempt-push`: try to push first, but if it gets a permission denied error
+  (because the Janitor does not have write access), create a merge proposal
+  instead
+- `push-derived`: push to a separate branch, named after the campaign's
+  `branch_name`, without creating a merge proposal
+- `build-only` (the default in the database schema) and `skip`: do not
+  publish
+- `bts`: report to a bug tracker, not supported by the publisher yet
 
- * it triggers new runs (with priority) for merge proposals for
-   which the target branch has changed and that now conflict
- * it will close merge proposals for which the latest run
-   was nothing-to-do or too trivial - generally because the target
-   has incorporated our changes, just not via a merge
- * it will close merge proposals for which
-   the codebase is abandoned, e.g. because the debian
-   package has been removed from the archive
+So long as the number of open merge proposals is below the rate-limiting
+threshold, new merge proposals can be created. Different algorithms for
+rate-limiting are supported: {term}`slow start` (`--slowstart`), a fixed limit
+(`--max-mps-per-bucket`), or none, which is the default.
 
-It also updates its own records about the merge proposals, for
-convenient use in the web UI.
+The publisher will regularly scan old merge proposals for their status, and
+take appropriate action:
 
-The publisher regularly publishes runs that have not been published
-before in any way.
+- it triggers new runs (with priority) for merge proposals for which the
+  target branch has changed and that now conflict
+- it will close merge proposals for which the latest run was `nothing-to-do`
+  or too trivial: generally because the target branch has incorporated the
+  changes, just not via a merge
+- it will close merge proposals for which the codebase is abandoned, e.g.
+  because the Debian package has been removed from the archive
+
+It also updates its own records about the merge proposals, for convenient use
+in the web UI.
+
+The publisher regularly publishes runs that have not been published before in
+any way.
 
 It prioritizes publishing of runs with a high value, as reported by the
 worker.
 
-Each cycle, it publishes by pushing changes directly to the target and
-creating new merge proposals. It tries hard not too produce too many changes
-at once or overwhelm:
+Each cycle (every `--interval` seconds, by default 7200), it publishes by
+pushing changes directly to the target branch and creating new merge
+proposals. It tries hard not to produce too many changes at once or to
+overwhelm the {term}`forges <forge>`:
 
- * Honor 429s (and their Retry-After header) that forges sent
- * Obey the per-candidate rate-limiting-bucket
- * At most X pushes (configurable)
- * At most Y new merge proposals (configurable)
+- honor 429s (and their `Retry-After` header) that forges send
+- obey the rate-limiting bucket of the candidate's publish policy
+- at most `--push-limit` pushes per cycle
+- at most `--modify-mp-limit` merge proposal updates per cycle
 
-The Git/Bzr Store
-=================
+## The Git and Bazaar stores
 
-These are simple implementations of a Git and Bazaar servers,
-available over HTTP and with a web UI built in. The only Janitor-specific
-properties they have are:
+These are simple implementations of Git and Bazaar servers, available over
+HTTP and with a web UI built in. The only Janitor-specific properties they
+have are:
 
- * repositories are created automatically for codebases the janitor has a record for
- * writing to repositories is restricted to authenticated users, specifically
-   those with worker credentials
+- repositories are created automatically for codebases the Janitor has a
+  record for
+- writing to repositories is restricted to authenticated users, specifically
+  those with worker credentials
 
-Each also provide an endpoint for getting the diff between two arbitrary runs.
+Each also provides an endpoint for getting the diff between two arbitrary
+runs.
 
-The Differ
-==========
+## The differ
 
-The (binary) differ takes the artifacts from two runs and compares them using a particular
-diffing tool. It can cache the results. Currently supported are diffoscope and
-debdiff.
+The (binary) differ takes the artifacts from two runs and compares them using
+a particular diffing tool. It can cache the results. Currently supported are
+`diffoscope` and `debdiff`.
 
-The Worker
-==========
+## The worker
 
-The worker is where the bulk of the work happens, but it's fairly simple overall.
+The worker is where the bulk of the work happens, but it's fairly simple
+overall.
 
-It runs an endless loop and repeatedly:
+With `--loop`, it runs an endless loop and repeatedly:
 
- * fetches an assignment from the runner
- * downloads the specified repository
- * validates the repository
- * runs the codemod specified
- * builds the projects
- * runs validation on the output
- * uploads the output
+- fetches an assignment from the runner
+- downloads the specified repository
+- validates the repository
+- runs the codemod specified
+- builds the project
+- runs validation on the output
+- uploads the output
 
-The worker provides a web UI and rest API as well, which are used by
-the runner to health-check it and query for intermediate results.
+The worker also provides a web UI and a REST API. The runner uses them to
+health-check the worker and to query intermediate results.
 
-The Archiver (optional)
-=======================
+## The archiver (optional)
 
-This Debian specific component can generate APT repositories that
-include the artifacts of all successful runs.
+This Debian-specific component can generate APT repositories that include the
+artifacts of all successful runs.
 
-The Auto-Uploader (optional)
-============================
+## The dependency server (optional)
 
-This Debian specific component automatically uploads
-the artifacts of successful runs using dput.
+The dependency server (`dep-server`, from
+[ognibuild](https://github.com/jelmer/ognibuild)) finds the packages that
+provide missing build dependencies. Workers use it in generic builds when the
+runner is started with `--public-dep-server-url`.
+
+## The auto-uploader (optional)
+
+This Debian-specific component automatically uploads the artifacts of
+successful runs using `dput`.
