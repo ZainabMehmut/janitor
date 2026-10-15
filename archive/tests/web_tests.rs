@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
-use janitor::{schema::setup_test_database, test_with_database};
+use janitor::{schema::setup_debian_test_database, test_with_database};
 use janitor_archive::config::{AptRepositoryConfig, ArchiveConfig};
 use janitor_archive::database::ArchiveDatabase;
 use janitor_archive::repository::{RepositoryGenerationConfig, RepositoryGenerator};
@@ -62,25 +62,6 @@ fn write_file(path: &Path, content: &[u8]) {
     std::fs::write(path, content).unwrap();
 }
 
-/// Core schema plus a `debian_build` table with a text version, since
-/// the test database does not have the debversion extension.
-async fn setup_database(pool: &sqlx::PgPool) {
-    setup_test_database(pool).await.unwrap();
-    sqlx::query(
-        "CREATE TABLE debian_build (
-             run_id text not null references run (id),
-             version text not null,
-             distribution text not null,
-             source text not null,
-             binary_packages text[],
-             lintian_result json
-         )",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
 async fn insert_run(pool: &sqlx::PgPool, run_id: &str) {
     sqlx::query(
         "INSERT INTO codebase (name, branch_url, url, vcs_type)
@@ -107,7 +88,7 @@ async fn insert_run(pool: &sqlx::PgPool, run_id: &str) {
 
 test_with_database! {
     async fn suite_binary_by_hash_is_served(test_db: TestDatabase) {
-        setup_database(test_db.pool()).await;
+        setup_debian_test_database(test_db.pool()).await.unwrap();
         let (app, tmp) = build_app(test_db.pool().clone()).await;
         let base = tmp.path().join("lintian-fixes/main");
         write_file(&base.join("binary-amd64/by-hash/SHA256/abcd"), b"binary");
@@ -126,7 +107,7 @@ test_with_database! {
 
 test_with_database! {
     async fn on_demand_binary_indices_are_served(test_db: TestDatabase) {
-        setup_database(test_db.pool()).await;
+        setup_debian_test_database(test_db.pool()).await.unwrap();
         insert_run(test_db.pool(), "run-1").await;
         let (app, tmp) = build_app(test_db.pool().clone()).await;
 

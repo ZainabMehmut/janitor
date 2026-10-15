@@ -947,40 +947,52 @@ mod tests {
         assert_eq!(offset, 80000.0);
     }
 
-    #[tokio::test]
-    async fn test_estimate_success_probability_and_duration() {
-        let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
-            eprintln!("TEST_DATABASE_URL not set, skipping");
-            return;
-        };
-        // A single connection, so that the temporary table is visible to all queries.
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&url)
+    /// Load the production schema into a fresh test database and add
+    /// the `codebase` and `change_set` rows that runs reference.
+    #[cfg(feature = "testing")]
+    async fn setup_run_database(codebase: &str) -> Option<crate::test_utils::TestDatabase> {
+        let db = crate::test_utils::TestDatabase::new_optional()
             .await
-            .unwrap();
+            .unwrap()?;
+        crate::schema::setup_test_database(db.pool()).await.unwrap();
         sqlx::query(
-            "CREATE TEMPORARY TABLE run (
-                codebase text, suite text, result_code text,
-                instigated_context text, context text, failure_details json,
-                start_time timestamp, finish_time timestamp,
-                failure_transient boolean)",
+            "INSERT INTO codebase (name, branch_url, url, vcs_type) VALUES ($1, $2, $2, 'git')",
         )
-        .execute(&pool)
+        .bind(codebase)
+        .bind(format!("https://example.invalid/{}", codebase))
+        .execute(db.pool())
         .await
         .unwrap();
+        sqlx::query("INSERT INTO change_set (id, campaign) VALUES ('cs', 'lintian-fixes')")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        Some(db)
+    }
+
+    #[cfg(feature = "testing")]
+    #[tokio::test]
+    async fn test_estimate_success_probability_and_duration() {
+        let Some(db) = setup_run_database("cb").await else {
+            return;
+        };
+        let pool = db.pool();
         sqlx::query(
-            "INSERT INTO run (codebase, suite, result_code, start_time, finish_time) VALUES
-             ('cb', 'c', 'success', '2024-01-01 00:00:00', '2024-01-02 00:00:01.5'),
-             ('cb', 'c', 'some-failure', '2024-01-03 00:00:00', '2024-01-03 00:00:02'),
-             ('cb', 'c', 'some-failure', '2024-01-04 00:00:00', '2024-01-04 00:00:03.250001')",
+            "INSERT INTO run (id, codebase, suite, change_set, logfilenames, result_code,
+                              start_time, finish_time) VALUES
+             ('r1', 'cb', 'lintian-fixes', 'cs', '{}', 'success',
+              '2024-01-01 00:00:00', '2024-01-02 00:00:01.5'),
+             ('r2', 'cb', 'lintian-fixes', 'cs', '{}', 'some-failure',
+              '2024-01-03 00:00:00', '2024-01-03 00:00:02'),
+             ('r3', 'cb', 'lintian-fixes', 'cs', '{}', 'some-failure',
+              '2024-01-04 00:00:00', '2024-01-04 00:00:03.250001')",
         )
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
 
         let (probability, duration, total) =
-            estimate_success_probability_and_duration(&pool, "cb", "c", None)
+            estimate_success_probability_and_duration(pool, "cb", "lintian-fixes", None)
                 .await
                 .unwrap();
         assert_eq!(probability, 11.0 / 31.0 * 0.5);
@@ -1013,41 +1025,27 @@ mod tests {
         assert!(DEFAULT_NORMALIZED_CODEBASE_VALUE > MINIMUM_NORMALIZED_CODEBASE_VALUE);
     }
 
+    #[cfg(feature = "testing")]
     #[tokio::test]
     async fn test_estimate_success_probability_with_previous_runs() {
-        let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
-            eprintln!("TEST_DATABASE_URL not set, skipping");
+        let Some(db) = setup_run_database("foo").await else {
             return;
         };
-        // A single connection so the temporary table stays visible.
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&url)
-            .await
-            .unwrap();
+        let pool = db.pool();
         sqlx::query(
-            "CREATE TEMPORARY TABLE run (
-                codebase text, suite text, result_code text,
-                instigated_context text, context text, failure_details json,
-                failure_transient boolean,
-                start_time timestamp, finish_time timestamp)",
+            "INSERT INTO run (id, codebase, suite, change_set, logfilenames, result_code,
+                              start_time, finish_time) VALUES
+             ('r1', 'foo', 'lintian-fixes', 'cs', '{}', 'success',
+              '2024-01-01 10:00:00', '2024-01-01 10:01:00'),
+             ('r2', 'foo', 'lintian-fixes', 'cs', '{}', 'worker-failure',
+              '2024-01-02 10:00:00', '2024-01-02 10:00:30')",
         )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO run VALUES
-                ('foo', 'lintian-fixes', 'success', NULL, NULL, NULL, NULL,
-                 '2024-01-01 10:00:00', '2024-01-01 10:01:00'),
-                ('foo', 'lintian-fixes', 'worker-failure', NULL, NULL, NULL, NULL,
-                 '2024-01-02 10:00:00', '2024-01-02 10:00:30')",
-        )
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
 
         let (probability, duration, total) =
-            estimate_success_probability_and_duration(&pool, "foo", "lintian-fixes", None)
+            estimate_success_probability_and_duration(pool, "foo", "lintian-fixes", None)
                 .await
                 .unwrap();
         // The old worker-failure run is ignored.
