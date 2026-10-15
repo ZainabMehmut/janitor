@@ -28,8 +28,7 @@ $ sudo apt install \
 If you're working on Debian-targeted code, you may also want to install:
 
 ```console
-$ sudo apt install \
-    devscripts
+$ sudo apt install devscripts
 ```
 
 - - -
@@ -92,8 +91,14 @@ manageable. If you're working on a feature that is not directly related to the
 Janitor itself but specific to one of the other projects, please consider
 whether it would be better to add it there instead.
 
-Conversely, any code that purely deals with VCS interactions should probably
-be in silver-platter.
+Any code that purely deals with VCS interactions should probably
+be in silver-platter or Breezy.
+
+The site (except for the cupboard, which will be split out in the future)
+shipped with the janitor itself is meant to be an example
+of how to build a frontend for the Janitor, and is not meant to be a
+full-fledged site. Each deployment will probably want their own version of
+it.
 
 ### Maintenance Overhead
 
@@ -101,8 +106,40 @@ Every bit of code that is added to the Janitor increases the maintenance
 overhead, but this is especially true for code that needs to be kept up to date
 with other parts of the codebase or with external dependencies.
 
-Please consider whether the code or text you are adding is really
+Please consider whether the code or test you are adding is really
 necessary, and how easily it can bitrot.
+
+### On tests
+
+Unit tests should live in the same file as the code they are testing.
+Integration tests should live in the `tests/` directory.
+
+Please share logic between tests where relevant. Don't add many separate
+integration test files with their own setup, teardown and helper code.
+
+Other anti-patterns:
+
+ * Rely on the real database schema, don't recreate bits of it in the test
+   code (e.g. creating temporary tables). This leads to brittle tests that
+   break when the schema changes, or pass when they should be failing.
+ * When writing files in tests, make sure they are in temporary directories
+   rather than in the current directory
+ * Only use mocks if you absolutely have to; in most cases there
+   are better ways to test code that interacts with external systems.
+ * Don't test for obvious things - like reading a text file and then
+   asserting that it has the exact expected contents.
+ * Be careful when checking HTML output; if you check for exact
+   output that will break when e.g. new attributes are added.
+   Use HTML parsers like soup to assert what's the case.
+
+### Comments
+
+If the motivation for code is unclear or if it's hard to understand,
+comments can be useful. However, more useful than code that's hard to
+understand with comments is code that's easy to understand.
+
+Comments are useful, but please don't overdo them. Justify why the
+code is what it is currently.
 
 ### Keep Changes Small and Self-Contained
 
