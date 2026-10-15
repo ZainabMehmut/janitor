@@ -963,7 +963,7 @@ mod tests {
             "CREATE TEMPORARY TABLE run (
                 codebase text, suite text, result_code text,
                 instigated_context text, context text, failure_details json,
-                start_time timestamptz, finish_time timestamptz,
+                start_time timestamp, finish_time timestamp,
                 failure_transient boolean)",
         )
         .execute(&pool)
