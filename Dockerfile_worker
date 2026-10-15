@@ -40,7 +40,6 @@ RUN apt-get update --yes \
  && apt-get upgrade --yes \
  && apt-get satisfy --yes --no-install-recommends \
         ca-certificates \
-        libpython3-dev \
         python3-breezy \
         brz-debian \
         dpkg-dev \
@@ -50,6 +49,8 @@ RUN apt-get update --yes \
         sbuild \
         schroot \
         mmdebstrap \
+ && apt-get satisfy --yes --no-install-recommends \
+        "libpython$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')" \
  && apt-get clean
 
 # unshare mode is the only sbuild chroot mode that works unprivileged in a rootless container
