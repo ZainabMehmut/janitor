@@ -1,34 +1,15 @@
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
-use janitor::{schema::setup_test_database, test_with_database};
+use janitor::{schema::setup_debian_test_database, test_with_database};
 use janitor_archive::config::AptRepositoryConfig;
 use janitor_archive::database::ArchiveDatabase;
 use janitor_archive::repository::{RepositoryGenerationConfig, RepositoryGenerator};
 use janitor_archive::scanner::PackageScanner;
 
-/// Core schema plus a `debian_build` table with a text version, since
-/// the test database does not have the debversion extension.
-async fn setup_database(pool: &sqlx::PgPool) {
-    setup_test_database(pool).await.unwrap();
-    sqlx::query(
-        "CREATE TABLE debian_build (
-             run_id text not null references run (id),
-             version text not null,
-             distribution text not null,
-             source text not null,
-             binary_packages text[],
-             lintian_result json
-         )",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
 test_with_database! {
     async fn generate_repository_fails_on_by_hash_cleanup_error(test_db: TestDatabase) {
-        setup_database(test_db.pool()).await;
+        setup_debian_test_database(test_db.pool()).await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let scanner = PackageScanner::new(tmp.path().join("artifacts").to_str().unwrap())
             .await
