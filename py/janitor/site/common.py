@@ -159,7 +159,7 @@ async def get_unchanged_run(
 ):
     query = """
 SELECT
-    id, command, start_time, finish_time, description,
+    id, command, start_time, finish_time, description, codebase,
     debian_build.version AS build_version,
     debian_build.distribution AS build_distribution, result_code, value,
     main_branch_revision, revision, context, result, suite,

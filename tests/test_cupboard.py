@@ -37,6 +37,8 @@ from janitor.site.cupboard import create_app
 from janitor.site.cupboard.api import create_app as create_api_app
 from janitor.site.cupboard.publish import iter_publish_history
 
+from .conftest import _insert_codebase, _insert_run
+
 
 @web.middleware
 async def dummy_user_middleware(request, handler):
@@ -205,35 +207,6 @@ def test_publish():
 def test_run():
     env = Environment(loader=template_loader)
     env.get_template("cupboard/run.html")
-
-
-async def _insert_codebase(conn, name):
-    await conn.execute(
-        "INSERT INTO codebase (name, branch_url, url) VALUES ($1, $2, $2)",
-        name,
-        f"https://example.com/{name}.git",
-    )
-
-
-async def _insert_run(
-    conn, *, run_id, codebase, campaign="mycampaign", start_time, finish_time
-):
-    await conn.execute(
-        "INSERT INTO change_set (id, campaign) VALUES ($1, $2)", run_id, campaign
-    )
-    await conn.execute(
-        "INSERT INTO run (id, command, result_code, start_time, finish_time, "
-        "main_branch_revision, revision, result, suite, vcs_type, branch_url, "
-        "subpath, logfilenames, value, change_set, codebase) "
-        "VALUES ($1, 'true', 'success', $2, $3, 'revid', 'revid', '{}', $4, "
-        "'git', $5, '', '{}', 1, $1, $6)",
-        run_id,
-        start_time,
-        finish_time,
-        campaign,
-        f"https://example.com/{codebase}.git",
-        codebase,
-    )
 
 
 async def test_codebase_redirect_to_latest_run(aiohttp_client, db):

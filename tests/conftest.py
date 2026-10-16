@@ -35,5 +35,34 @@ async def con(db: asyncpg.Pool) -> AsyncGenerator[asyncpg.Connection, None]:
         yield con
 
 
+async def _insert_codebase(conn, name):
+    await conn.execute(
+        "INSERT INTO codebase (name, branch_url, url) VALUES ($1, $2, $2)",
+        name,
+        f"https://example.com/{name}.git",
+    )
+
+
+async def _insert_run(
+    conn, *, run_id, codebase, campaign="mycampaign", start_time, finish_time
+):
+    await conn.execute(
+        "INSERT INTO change_set (id, campaign) VALUES ($1, $2)", run_id, campaign
+    )
+    await conn.execute(
+        "INSERT INTO run (id, command, result_code, start_time, finish_time, "
+        "main_branch_revision, revision, result, suite, vcs_type, branch_url, "
+        "subpath, logfilenames, value, change_set, codebase) "
+        "VALUES ($1, 'true', 'success', $2, $3, 'revid', 'revid', '{}', $4, "
+        "'git', $5, '', '{}', 1, $1, $6)",
+        run_id,
+        start_time,
+        finish_time,
+        campaign,
+        f"https://example.com/{codebase}.git",
+        codebase,
+    )
+
+
 async def test_db_returns_janitor_db(db) -> None:
     assert isinstance(db, asyncpg.Pool)
