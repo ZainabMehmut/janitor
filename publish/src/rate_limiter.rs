@@ -9,6 +9,10 @@ use std::collections::HashMap;
 #[path = "rate_limiter_slow_start_tests.rs"]
 mod slow_start_tests;
 
+#[cfg(test)]
+#[path = "rate_limiter_fixed_tests.rs"]
+mod fixed_tests;
+
 /// Status of a rate limit check.
 #[derive(Debug)]
 pub enum RateLimitStatus {
@@ -180,7 +184,7 @@ impl RateLimiter for FixedRateLimiter {
     fn check_allowed(&self, bucket: &str) -> RateLimitStatus {
         if let Some(open_mps_per_bucket) = &self.open_mps_per_bucket {
             if let Some(current) = open_mps_per_bucket.get(bucket) {
-                if *current > self.max_mps_per_bucket {
+                if *current >= self.max_mps_per_bucket {
                     return RateLimitStatus::BucketRateLimited {
                         bucket: bucket.to_string(),
                         open_mps: *current,
