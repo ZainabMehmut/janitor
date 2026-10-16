@@ -55,10 +55,10 @@
             }
 
             var preloaded = {};
-            var todo = {{ todo[1: ] | tojson }};
-            var queued = new Set();
+            var todo = {{ todo | tojson }};
+            var queued = new Set([{{ run_id | tojson }}]);
             todo.forEach(function(entry) {
-                queued.add(entry[1]);
+                queued.add(entry.id);
             });
 
             preloadSome();
@@ -89,9 +89,9 @@
                     dataType: 'json',
                     success: function(data) {
                         data.forEach(function(entry) {
-                            if (!queued.has(entry[1])) {
+                            if (!queued.has(entry.id)) {
                                 todo.push(entry);
-                                queued.add(entry[1]);
+                                queued.add(entry.id);
                             }
                         });
                         cb();
