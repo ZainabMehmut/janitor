@@ -28,6 +28,7 @@ minijinja = { version = "2", features = ["loader"] }
 redis = { workspace = true, features = ["tokio-comp", "json", "connection-manager"] }
 rslock = { workspace = true, default-features = false, features = ["tokio-comp"] }
 reqwest.workspace = true
+sequoia-openpgp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 shlex.workspace = true
