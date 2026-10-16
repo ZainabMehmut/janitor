@@ -881,7 +881,7 @@ impl PublishWorker {
         role: &str,
         revision: &RevisionId,
         log_id: &str,
-        unchanged_id: &str,
+        unchanged_id: Option<&str>,
         derived_branch_name: &str,
         rate_limit_bucket: Option<&str>,
         vcs_manager: &dyn VcsManager,
@@ -912,7 +912,7 @@ impl PublishWorker {
             mode,
             role: role.to_owned(),
             log_id: log_id.to_owned(),
-            unchanged_id: Some(unchanged_id.to_owned()),
+            unchanged_id: unchanged_id.map(str::to_owned),
             require_binary_diff,
             allow_create_proposal,
             external_url: self.external_url.clone(),
@@ -2782,10 +2782,7 @@ pub async fn publish_from_policy(
             role,
             &revision,
             &run.id,
-            unchanged_run
-                .as_ref()
-                .map(|(id, _)| id.as_str())
-                .unwrap_or(""),
+            unchanged_run.as_ref().map(|(id, _)| id.as_str()),
             &derived_name,
             rate_limit_bucket,
             vcs_manager,
@@ -2975,31 +2972,11 @@ pub async fn publish_and_store(
     require_binary_diff: bool,
     requester: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Resolve the role-specific source branch + tip revision from
-    // the run's result_branches. If the run didn't touch this role
-    // there's nothing to publish - log and return.
-    let (remote_branch_name, _base_revision, revision) = match run.get_result_branch(role) {
-        Some(t) => t,
-        None => {
-            log::warn!(
-                "publish_and_store: run {} has no result branch for role {}",
-                run.id,
-                role
-            );
-            return Ok(());
-        }
-    };
-    let revision = match revision {
-        Some(r) => r,
-        None => {
-            log::warn!(
-                "publish_and_store: run {} role {} has no tip revision",
-                run.id,
-                role
-            );
-            return Ok(());
-        }
-    };
+    let (remote_branch_name, _base_revision, revision) = run
+        .get_result_branch(role)
+        .ok_or_else(|| format!("run {} has no result branch for role {}", run.id, role))?;
+    let revision =
+        revision.ok_or_else(|| format!("run {} role {} has no tip revision", run.id, role))?;
 
     // target_branch_url is the run's target_branch_url (or branch_url
     // fallback) with the role's remote branch name appended as a
@@ -3041,29 +3018,16 @@ pub async fn publish_and_store(
 
     let derived_name = derived_branch_name(conn, campaign_config, run, role).await?;
 
-    // Resolve the right VcsManager for the run's vcs_type.
-    let vcs_type_parsed = match <VcsType as std::str::FromStr>::from_str(&run.vcs_type) {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!(
-                "publish_and_store: unknown vcs_type {:?} for run {}: {}",
-                run.vcs_type,
-                run.id,
-                e
-            );
-            return Ok(());
-        }
-    };
-    let vcs_manager = match vcs_managers.get(&vcs_type_parsed) {
-        Some(m) => m.as_ref(),
-        None => {
-            log::warn!(
-                "publish_and_store: no VcsManager registered for vcs_type {:?}",
-                vcs_type_parsed
-            );
-            return Ok(());
-        }
-    };
+    let vcs_type: VcsType = run.vcs_type.parse().map_err(|e| {
+        format!(
+            "unknown vcs_type {:?} for run {}: {}",
+            run.vcs_type, run.id, e
+        )
+    })?;
+    let vcs_manager = vcs_managers
+        .get(&vcs_type)
+        .ok_or_else(|| format!("no VcsManager registered for vcs_type {:?}", vcs_type))?
+        .as_ref();
 
     // Convert result_tags from (String, String) -> (String, RevisionId).
     let tags: Option<Vec<(String, RevisionId)>> = run.result_tags.as_ref().map(|t| {
@@ -3090,7 +3054,7 @@ pub async fn publish_and_store(
             role,
             &revision,
             &run.id,
-            unchanged_run_id.as_deref().unwrap_or(""),
+            unchanged_run_id.as_deref(),
             &derived_name,
             rate_limit_bucket,
             vcs_manager,
@@ -4161,7 +4125,7 @@ async fn check_existing_mp(
                 &mp_run.role,
                 &last_run_revision_value,
                 &last_run.id,
-                unchanged_run_id.as_deref().unwrap_or(""),
+                unchanged_run_id.as_deref(),
                 &derived_name,
                 rate_limit_bucket.as_deref(),
                 vcs_manager_for_publish,
