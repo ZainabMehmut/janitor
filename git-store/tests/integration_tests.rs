@@ -477,10 +477,15 @@ db_test! {
 
 /// True when the Python interpreter this build was linked against
 /// has `klaus` importable. Skipping keeps CI green on hosts without
-/// the Python side installed.
+/// the Python side installed, unless `TEST_REQUIRE_KLAUS` is set, in
+/// which case a missing klaus panics so CI signals loud.
 fn klaus_available() -> bool {
     use pyo3::prelude::*;
-    Python::attach(|py| py.import("klaus").is_ok())
+    let available = Python::attach(|py| py.import("klaus").is_ok());
+    if !available && std::env::var_os("TEST_REQUIRE_KLAUS").is_some() {
+        panic!("klaus is not importable and TEST_REQUIRE_KLAUS is set");
+    }
+    available
 }
 
 db_test! {
