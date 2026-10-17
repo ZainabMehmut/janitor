@@ -183,7 +183,11 @@ oauth2_provider {
   client_id: "some-client-id"
   client_secret: "totally-secret"
   base_url: "https://gitlab.com"
+  # Group on the identity provider whose members' review verdicts take
+  # effect. If unset, every logged-in user is a QA reviewer.
   qa_reviewer_group: "janitor-team/qa-reviewers"
+  # Group on the identity provider whose members can perform admin actions.
+  # If unset, every logged-in user is an admin.
   admin_group: "janitor-team/admins"
 }
 
