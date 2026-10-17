@@ -137,3 +137,32 @@ test_with_database! {
         );
     }
 }
+
+test_with_database! {
+    async fn request_paths_stay_in_the_archive(test_db: TestDatabase) {
+        setup_debian_test_database(test_db.pool()).await.unwrap();
+        insert_run(test_db.pool(), "run-1").await;
+        let (app, tmp) = build_app(test_db.pool().clone()).await;
+        write_file(&tmp.path().join("secret"), b"secret");
+        write_file(&tmp.path().join("outside/source/Sources"), b"secret");
+        // `..` is resolved against real directories, so these have to exist.
+        std::fs::create_dir_all(tmp.path().join("lintian-fixes/pool")).unwrap();
+
+        let (status, _) = get(&app, "/dists/run/run-1/Release").await;
+        assert_eq!(status, StatusCode::OK);
+
+        for uri in [
+            "/pool/..%2F..%2Fsecret",
+            "/dists/lintian-fixes/..%2Foutside/source/Sources",
+            "/dists/lintian-fixes/%2E%2E%2Foutside/source/Sources",
+            "/dists/run/run-1/..%2F..%2F..%2Foutside/source/Sources",
+        ] {
+            assert_eq!(
+                get(&app, uri).await,
+                (StatusCode::NOT_FOUND, Vec::new()),
+                "{}",
+                uri
+            );
+        }
+    }
+}

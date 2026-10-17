@@ -6,15 +6,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Form, Path, State},
+    body::Body,
+    extract::{Form, Path, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::fs;
 use tokio::sync::RwLock;
+use tower::ServiceExt;
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, info, warn};
 
@@ -157,66 +159,59 @@ impl ArchiveWebService {
             // missing its first Release file.
             .route("/ready", get(archive_ready_handler))
             // Repository serving endpoints
-            .route("/dists/{suite}/Release", get(serve_release))
-            .route("/dists/{suite}/Release.gpg", get(serve_release_gpg))
-            .route("/dists/{suite}/InRelease", get(serve_inrelease))
-            // axum 0.8 requires whole-segment captures, so the
-            // `binary-:arch` partial captures of axum 0.7 become
-            // `{binary_arch}` here; the handlers strip the
-            // `binary-` prefix from the captured value.
+            .route("/dists/{suite}/Release", get(serve_suite_file))
+            .route("/dists/{suite}/Release.gpg", get(serve_suite_file))
+            .route("/dists/{suite}/InRelease", get(serve_suite_file))
             .route(
                 "/dists/{suite}/{component}/{binary_arch}/Packages",
-                get(serve_packages),
+                get(serve_suite_file),
             )
             .route(
                 "/dists/{suite}/{component}/{binary_arch}/Packages.gz",
-                get(serve_packages_gz),
+                get(serve_suite_file),
             )
             .route(
                 "/dists/{suite}/{component}/{binary_arch}/Packages.bz2",
-                get(serve_packages_bz2),
+                get(serve_suite_file),
             )
             .route(
                 "/dists/{suite}/{component}/source/Sources",
-                get(serve_sources),
+                get(serve_suite_file),
             )
             .route(
                 "/dists/{suite}/{component}/source/Sources.gz",
-                get(serve_sources_gz),
+                get(serve_suite_file),
             )
             .route(
                 "/dists/{suite}/{component}/source/Sources.bz2",
-                get(serve_sources_bz2),
+                get(serve_suite_file),
             )
             // By-hash serving
             .route(
                 "/dists/{suite}/{component}/{binary_arch}/by-hash/{algo}/{hash}",
-                get(serve_by_hash),
+                get(serve_suite_file),
             )
             .route(
                 "/dists/{suite}/{component}/source/by-hash/{algo}/{hash}",
-                get(serve_by_hash),
+                get(serve_suite_file),
             )
             // On-demand dists: /dists/{kind=cs|run|<campaign>}/{id}/...
-            .route(
-                "/dists/{kind}/{id}/{file}",
-                get(serve_on_demand_release_file),
-            )
+            .route("/dists/{kind}/{id}/{file}", get(serve_on_demand_file))
             .route(
                 "/dists/{kind}/{id}/{component}/{binary_arch}/{file}",
-                get(serve_on_demand_component_file),
+                get(serve_on_demand_file),
             )
             .route(
                 "/dists/{kind}/{id}/{component}/source/{file}",
-                get(serve_on_demand_source_file),
+                get(serve_on_demand_file),
             )
             .route(
                 "/dists/{kind}/{id}/{component}/{binary_arch}/by-hash/{algo}/{hash}",
-                get(serve_on_demand_binary_by_hash),
+                get(serve_on_demand_file),
             )
             .route(
                 "/dists/{kind}/{id}/{component}/source/by-hash/{algo}/{hash}",
-                get(serve_on_demand_source_by_hash),
+                get(serve_on_demand_file),
             )
             // Publishing and management endpoints
             .route("/publish", post(publish_repository))
@@ -252,286 +247,46 @@ impl ArchiveWebService {
     }
 }
 
-/// Serve the on-disk Release file for a configured suite. If the
-/// Release file has not been generated yet, return 404. Callers
-/// depending on this signal (e.g. deployment scripts polling for
-/// first-publish completion) rely on the difference between a real
-/// 200 and "still generating".
-async fn serve_release(
+/// Serve a file from the dists tree of a configured suite. Files that
+/// have not been generated yet give a 404.
+async fn serve_suite_file(
     Path(params): Path<HashMap<String, String>>,
     State(state): State<AppState>,
+    request: Request,
 ) -> Result<Response, StatusCode> {
     let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
-
-    debug!("Serving Release file for suite: {}", suite);
-
     let repo_config = state
         .config
         .repositories
         .get(suite)
         .ok_or(StatusCode::NOT_FOUND)?;
-
-    let release_path = repo_config.suite_path().join("Release");
-    let content = fs::read(&release_path)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-
-    let mut headers = HeaderMap::new();
-    headers.insert("Content-Type", HeaderValue::from_static("text/plain"));
-    headers.insert(
-        "Cache-Control",
-        HeaderValue::from_static("public, max-age=300"),
-    );
-    Ok((headers, content).into_response())
+    serve_from_dir(repo_config.suite_path(), 2, request).await
 }
 
-/// Serve Release.gpg file.
-async fn serve_release_gpg(
-    Path(params): Path<HashMap<String, String>>,
-    State(state): State<AppState>,
+/// Serve the file named by the request path, minus its first `skip`
+/// segments, from `dir`.
+///
+/// `ServeDir` decodes the path itself and only accepts plain file
+/// names, so `..` or an encoded `/` can not escape `dir`.
+async fn serve_from_dir(
+    dir: PathBuf,
+    skip: usize,
+    mut request: Request,
 ) -> Result<Response, StatusCode> {
-    let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
-
-    debug!("Serving Release.gpg file for suite: {}", suite);
-
-    let repo_config = state
-        .config
-        .repositories
-        .get(suite)
+    let rest = request
+        .uri()
+        .path()
+        .splitn(skip + 2, '/')
+        .nth(skip + 1)
         .ok_or(StatusCode::NOT_FOUND)?;
-
-    let release_gpg_path = repo_config.suite_path().join("Release.gpg");
-
-    match fs::read(&release_gpg_path).await {
-        Ok(content) => {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                "Content-Type",
-                HeaderValue::from_static("application/pgp-signature"),
-            );
-            headers.insert(
-                "Cache-Control",
-                HeaderValue::from_static("public, max-age=300"),
-            );
-
-            Ok((headers, content).into_response())
-        }
-        Err(_) => Err(StatusCode::NOT_FOUND),
-    }
-}
-
-/// Serve InRelease file.
-async fn serve_inrelease(
-    Path(params): Path<HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
-
-    debug!("Serving InRelease file for suite: {}", suite);
-
-    let repo_config = state
-        .config
-        .repositories
-        .get(suite)
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let inrelease_path = repo_config.suite_path().join("InRelease");
-
-    let content = fs::read(&inrelease_path)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-
-    let mut headers = HeaderMap::new();
-    headers.insert("Content-Type", HeaderValue::from_static("text/plain"));
-    headers.insert(
-        "Cache-Control",
-        HeaderValue::from_static("public, max-age=300"),
-    );
-    Ok((headers, content).into_response())
-}
-
-/// Serve Packages file.
-async fn serve_packages(
-    Path(params): Path<HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
-    let component = params.get("component").ok_or(StatusCode::BAD_REQUEST)?;
-    // axum 0.8 captures whole segments only; the route binds the full
-    // `binary-<arch>` directory name as `binary_arch`, and we strip
-    // the `binary-` prefix here so the rest of the handler keeps the
-    // bare arch (`amd64` etc.) it expected before.
-    let binary_arch = params.get("binary_arch").ok_or(StatusCode::BAD_REQUEST)?;
-    let arch = binary_arch
-        .strip_prefix("binary-")
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    debug!(
-        "Serving Packages file for {}/{}/binary-{}",
-        suite, component, arch
-    );
-
-    serve_component_file(
-        &state,
-        suite,
-        component,
-        &format!("binary-{}/Packages", arch),
-        "text/plain",
-    )
-    .await
-}
-
-/// Serve compressed Packages file.
-async fn serve_packages_gz(
-    Path(params): Path<HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
-    let component = params.get("component").ok_or(StatusCode::BAD_REQUEST)?;
-    // axum 0.8 captures whole segments only; the route binds the full
-    // `binary-<arch>` directory name as `binary_arch`, and we strip
-    // the `binary-` prefix here so the rest of the handler keeps the
-    // bare arch (`amd64` etc.) it expected before.
-    let binary_arch = params.get("binary_arch").ok_or(StatusCode::BAD_REQUEST)?;
-    let arch = binary_arch
-        .strip_prefix("binary-")
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    serve_component_file(
-        &state,
-        suite,
-        component,
-        &format!("binary-{}/Packages.gz", arch),
-        "application/gzip",
-    )
-    .await
-}
-
-/// Serve bzip2 compressed Packages file.
-async fn serve_packages_bz2(
-    Path(params): Path<HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
-    let component = params.get("component").ok_or(StatusCode::BAD_REQUEST)?;
-    // axum 0.8 captures whole segments only; the route binds the full
-    // `binary-<arch>` directory name as `binary_arch`, and we strip
-    // the `binary-` prefix here so the rest of the handler keeps the
-    // bare arch (`amd64` etc.) it expected before.
-    let binary_arch = params.get("binary_arch").ok_or(StatusCode::BAD_REQUEST)?;
-    let arch = binary_arch
-        .strip_prefix("binary-")
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    serve_component_file(
-        &state,
-        suite,
-        component,
-        &format!("binary-{}/Packages.bz2", arch),
-        "application/x-bzip2",
-    )
-    .await
-}
-
-/// Serve Sources file.
-async fn serve_sources(
-    Path(params): Path<HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
-    let component = params.get("component").ok_or(StatusCode::BAD_REQUEST)?;
-
-    serve_component_file(&state, suite, component, "source/Sources", "text/plain").await
-}
-
-/// Serve compressed Sources file.
-async fn serve_sources_gz(
-    Path(params): Path<HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
-    let component = params.get("component").ok_or(StatusCode::BAD_REQUEST)?;
-
-    serve_component_file(
-        &state,
-        suite,
-        component,
-        "source/Sources.gz",
-        "application/gzip",
-    )
-    .await
-}
-
-/// Serve bzip2 compressed Sources file.
-async fn serve_sources_bz2(
-    Path(params): Path<HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
-    let component = params.get("component").ok_or(StatusCode::BAD_REQUEST)?;
-
-    serve_component_file(
-        &state,
-        suite,
-        component,
-        "source/Sources.bz2",
-        "application/x-bzip2",
-    )
-    .await
-}
-
-/// Serve by-hash files.
-async fn serve_by_hash(
-    Path(params): Path<HashMap<String, String>>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
-    let component = params.get("component").ok_or(StatusCode::BAD_REQUEST)?;
-    let binary_arch = params.get("binary_arch");
-    let algo = params.get("algo").ok_or(StatusCode::BAD_REQUEST)?;
-    let hash = params.get("hash").ok_or(StatusCode::BAD_REQUEST)?;
-
-    let repo_config = state
-        .config
-        .repositories
-        .get(suite)
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let by_hash_path = if let Some(binary_arch) = binary_arch {
-        // Binary by-hash: /dists/suite/component/binary-arch/by-hash/algo/hash
-        let arch = binary_arch
-            .strip_prefix("binary-")
-            .ok_or(StatusCode::NOT_FOUND)?;
-        repo_config
-            .component_arch_path(component, arch)
-            .join("by-hash")
-            .join(algo)
-            .join(hash)
-    } else {
-        // Source by-hash: /dists/suite/component/source/by-hash/algo/hash
-        repo_config
-            .source_path(component)
-            .join("by-hash")
-            .join(algo)
-            .join(hash)
-    };
-
-    match fs::read(&by_hash_path).await {
-        Ok(content) => {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                "Content-Type",
-                HeaderValue::from_static("application/octet-stream"),
-            );
-            headers.insert(
-                "Cache-Control",
-                HeaderValue::from_static("public, max-age=86400"),
-            ); // 24 hours
-
-            Ok((headers, content).into_response())
-        }
-        Err(_) => Err(StatusCode::NOT_FOUND),
-    }
+    *request.uri_mut() = format!("/{}", rest)
+        .parse()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let Ok(response) = ServeDir::new(dir)
+        .append_index_html_on_directories(false)
+        .oneshot(request)
+        .await;
+    Ok(response.map(Body::new))
 }
 
 /// `POST /publish` -- trigger a republish across every configured
@@ -713,38 +468,6 @@ async fn handle_pgp_keys(State(state): State<AppState>) -> Response {
     }
 }
 
-/// Helper function to serve component files.
-async fn serve_component_file(
-    state: &AppState,
-    suite: &str,
-    component: &str,
-    file_path: &str,
-    content_type: &str,
-) -> Result<Response, StatusCode> {
-    let repo_config = state
-        .config
-        .repositories
-        .get(suite)
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let full_path = repo_config.suite_path().join(component).join(file_path);
-
-    // 404 on missing artefacts rather than synthesising an empty
-    // response -- otherwise a botched publish reads as success to
-    // any client polling for freshness.
-    let content = fs::read(&full_path)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-
-    let mut headers = HeaderMap::new();
-    headers.insert("Content-Type", HeaderValue::from_str(content_type).unwrap());
-    headers.insert(
-        "Cache-Control",
-        HeaderValue::from_static("public, max-age=300"),
-    );
-    Ok((headers, content).into_response())
-}
-
 /// Return true when `kind` is a recognized on-demand dispatcher
 /// segment. `cs` and `run` are always allowed; anything else must
 /// match a configured campaign.
@@ -844,189 +567,24 @@ async fn prepare_on_demand(
     }
 }
 
-async fn read_and_respond(
-    path: PathBuf,
-    content_type: &'static str,
-) -> Result<Response, StatusCode> {
-    match fs::read(&path).await {
-        Ok(bytes) => {
-            let mut headers = HeaderMap::new();
-            headers.insert("Content-Type", HeaderValue::from_static(content_type));
-            Ok((headers, bytes).into_response())
-        }
-        Err(_) => Err(StatusCode::NOT_FOUND),
-    }
-}
-
-/// `GET /dists/:kind/:id/:file` -- serve Release, Release.gpg, or
-/// InRelease from an on-demand dists tree.
-async fn serve_on_demand_release_file(
-    Path((kind, id, file)): Path<(String, String, String)>,
+/// Serve a file from an on-demand dists tree, generating the tree first
+/// if it is missing or stale.
+async fn serve_on_demand_file(
+    Path(params): Path<HashMap<String, String>>,
     State(state): State<AppState>,
+    request: Request,
 ) -> Result<Response, StatusCode> {
-    if !matches!(file.as_str(), "Release" | "Release.gpg" | "InRelease") {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    let base: PathBuf = match prepare_on_demand(&state, &kind, &id).await? {
-        Some(p) => p,
-        None => return Err(StatusCode::NOT_FOUND),
-    };
-    let content_type = if file == "Release.gpg" {
-        "application/pgp-signature"
-    } else {
-        "text/plain"
-    };
-    read_and_respond(base.join(&file), content_type).await
-}
-
-/// Map a Packages-family filename to its content type. `None` if
-/// the filename is not a recognized Packages variant -- the handler
-/// must then return 404. Pulled out as a pure helper so the
-/// classification can be unit-tested.
-fn packages_content_type(file: &str) -> Option<&'static str> {
-    match file {
-        "Packages" => Some("text/plain"),
-        "Packages.gz" => Some("application/gzip"),
-        "Packages.bz2" => Some("application/x-bzip2"),
-        _ => None,
-    }
-}
-
-/// Map a Sources-family filename to its content type. `None` if
-/// the filename is not a recognized Sources variant.
-fn sources_content_type(file: &str) -> Option<&'static str> {
-    match file {
-        "Sources" => Some("text/plain"),
-        "Sources.gz" => Some("application/gzip"),
-        "Sources.bz2" => Some("application/x-bzip2"),
-        _ => None,
-    }
-}
-
-/// `GET /dists/:kind/:id/:component/binary-:arch/:file` -- serve
-/// Packages / Packages.gz / Packages.bz2 from an on-demand dists tree.
-async fn serve_on_demand_component_file(
-    Path((kind, id, component, binary_arch, file)): Path<(String, String, String, String, String)>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    if !binary_arch.starts_with("binary-") {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    let base: PathBuf = match prepare_on_demand(&state, &kind, &id).await? {
-        Some(p) => p,
-        None => return Err(StatusCode::NOT_FOUND),
-    };
-    let path = base.join(&component).join(&binary_arch).join(&file);
-    let content_type = packages_content_type(&file).ok_or(StatusCode::NOT_FOUND)?;
-    read_and_respond(path, content_type).await
-}
-
-/// `GET /dists/:kind/:id/:component/source/:file` -- serve
-/// Sources / Sources.gz / Sources.bz2.
-async fn serve_on_demand_source_file(
-    Path((kind, id, component, file)): Path<(String, String, String, String)>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let base: PathBuf = match prepare_on_demand(&state, &kind, &id).await? {
-        Some(p) => p,
-        None => return Err(StatusCode::NOT_FOUND),
-    };
-    let path = base.join(&component).join("source").join(&file);
-    let content_type = sources_content_type(&file).ok_or(StatusCode::NOT_FOUND)?;
-    read_and_respond(path, content_type).await
-}
-
-/// `GET /dists/:kind/:id/:component/binary-:arch/by-hash/:algo/:hash`
-async fn serve_on_demand_binary_by_hash(
-    Path((kind, id, component, binary_arch, algo, hash)): Path<(
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-    )>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    if !binary_arch.starts_with("binary-") {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    let base: PathBuf = match prepare_on_demand(&state, &kind, &id).await? {
-        Some(p) => p,
-        None => return Err(StatusCode::NOT_FOUND),
-    };
-    let path = base
-        .join(&component)
-        .join(&binary_arch)
-        .join("by-hash")
-        .join(&algo)
-        .join(&hash);
-    read_and_respond(path, "application/octet-stream").await
-}
-
-/// `GET /dists/:kind/:id/:component/source/by-hash/:algo/:hash`
-async fn serve_on_demand_source_by_hash(
-    Path((kind, id, component, algo, hash)): Path<(String, String, String, String, String)>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let base: PathBuf = match prepare_on_demand(&state, &kind, &id).await? {
-        Some(p) => p,
-        None => return Err(StatusCode::NOT_FOUND),
-    };
-    let path = base
-        .join(&component)
-        .join("source")
-        .join("by-hash")
-        .join(&algo)
-        .join(&hash);
-    read_and_respond(path, "application/octet-stream").await
+    let kind = params.get("kind").ok_or(StatusCode::BAD_REQUEST)?;
+    let id = params.get("id").ok_or(StatusCode::BAD_REQUEST)?;
+    let base = prepare_on_demand(&state, kind, id)
+        .await?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    serve_from_dir(base, 3, request).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_packages_content_type_known_variants() {
-        assert_eq!(packages_content_type("Packages"), Some("text/plain"));
-        assert_eq!(
-            packages_content_type("Packages.gz"),
-            Some("application/gzip")
-        );
-        assert_eq!(
-            packages_content_type("Packages.bz2"),
-            Some("application/x-bzip2")
-        );
-    }
-
-    #[test]
-    fn test_packages_content_type_unknown_returns_none() {
-        // Unknown filename -> handler must 404. Common attempts an
-        // attacker might make to trick the dispatcher:
-        assert_eq!(packages_content_type("Packages.xz"), None);
-        assert_eq!(packages_content_type("packages"), None); // wrong case
-        assert_eq!(packages_content_type("Sources"), None); // wrong family
-        assert_eq!(packages_content_type(""), None);
-        assert_eq!(packages_content_type("../etc/passwd"), None);
-    }
-
-    #[test]
-    fn test_sources_content_type_known_variants() {
-        assert_eq!(sources_content_type("Sources"), Some("text/plain"));
-        assert_eq!(sources_content_type("Sources.gz"), Some("application/gzip"));
-        assert_eq!(
-            sources_content_type("Sources.bz2"),
-            Some("application/x-bzip2")
-        );
-    }
-
-    #[test]
-    fn test_sources_content_type_unknown_returns_none() {
-        assert_eq!(sources_content_type("Sources.xz"), None);
-        assert_eq!(sources_content_type("sources"), None);
-        assert_eq!(sources_content_type("Packages"), None);
-        assert_eq!(sources_content_type(""), None);
-    }
 
     #[tokio::test]
     async fn test_health_ok_returns_ok_body() {
