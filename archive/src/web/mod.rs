@@ -1,5 +1,5 @@
 //! axum handlers: serve `/dists/...` files, expose `/publish`, `/ready`,
-//! `/last-publish`, `/pgp_keys`, `/gpg-key`, `/pool/...`, `/metrics`.
+//! `/last-publish`, `/pgp_keys`, `/gpg-key`, `/metrics`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -223,9 +223,6 @@ impl ArchiveWebService {
             .route("/last-publish", get(last_publish_status))
             .route("/gpg-key", get(serve_gpg_key))
             .route("/pgp_keys", get(handle_pgp_keys))
-            // Static file serving for pool. Catch-all uses the
-            // axum 0.8 `{*name}` syntax (was `*path` in 0.7).
-            .route("/pool/{*path}", get(serve_pool_file))
             .route("/metrics", get(shared::metrics_ok))
             // One span per request, exported when zipkin_address is set.
             .layer(TraceLayer::new_for_http())
@@ -526,58 +523,6 @@ async fn serve_by_hash(
                 "Content-Type",
                 HeaderValue::from_static("application/octet-stream"),
             );
-            headers.insert(
-                "Cache-Control",
-                HeaderValue::from_static("public, max-age=86400"),
-            ); // 24 hours
-
-            Ok((headers, content).into_response())
-        }
-        Err(_) => Err(StatusCode::NOT_FOUND),
-    }
-}
-
-/// Serve pool files (package .deb files).
-async fn serve_pool_file(
-    Path(path): Path<String>,
-    State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    debug!("Serving pool file: {}", path);
-
-    // Construct the full path to the pool file
-    // Pool files are typically stored outside the dists directory
-    let pool_path = state
-        .config
-        .repositories
-        .values()
-        .next()
-        .map(|repo| repo.base_path.join("pool").join(&path))
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    match fs::read(&pool_path).await {
-        Ok(content) => {
-            let mut headers = HeaderMap::new();
-
-            // Set appropriate content type based on file extension
-            if path.ends_with(".deb") {
-                headers.insert(
-                    "Content-Type",
-                    HeaderValue::from_static("application/vnd.debian.binary-package"),
-                );
-            } else if path.ends_with(".dsc") {
-                headers.insert("Content-Type", HeaderValue::from_static("text/plain"));
-            } else if path.ends_with(".tar.gz") || path.ends_with(".tar.xz") {
-                headers.insert(
-                    "Content-Type",
-                    HeaderValue::from_static("application/x-tar"),
-                );
-            } else {
-                headers.insert(
-                    "Content-Type",
-                    HeaderValue::from_static("application/octet-stream"),
-                );
-            }
-
             headers.insert(
                 "Cache-Control",
                 HeaderValue::from_static("public, max-age=86400"),
