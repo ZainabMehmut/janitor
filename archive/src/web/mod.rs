@@ -195,8 +195,14 @@ impl ArchiveWebService {
                 "/dists/{suite}/{component}/source/by-hash/{algo}/{hash}",
                 get(serve_suite_file),
             )
+            .route(
+                "/dists/{suite}/{component}/by-hash/{algo}/{hash}",
+                get(serve_suite_file),
+            )
             // On-demand dists: /dists/{kind=cs|run|<campaign>}/{id}/...
-            .route("/dists/{kind}/{id}/{file}", get(serve_on_demand_file))
+            // Either the Release of an on-demand repository or a
+            // component file of a suite, like Contents-<arch>.
+            .route("/dists/{kind}/{id}/{file}", get(serve_dists_file))
             .route(
                 "/dists/{kind}/{id}/{component}/{binary_arch}/{file}",
                 get(serve_on_demand_file),
@@ -255,12 +261,35 @@ async fn serve_suite_file(
     request: Request,
 ) -> Result<Response, StatusCode> {
     let suite = params.get("suite").ok_or(StatusCode::BAD_REQUEST)?;
+    serve_from_suite(&state, suite, request).await
+}
+
+async fn serve_from_suite(
+    state: &AppState,
+    suite: &str,
+    request: Request,
+) -> Result<Response, StatusCode> {
     let repo_config = state
         .config
         .repositories
         .get(suite)
         .ok_or(StatusCode::NOT_FOUND)?;
     serve_from_dir(repo_config.suite_path(), 2, request).await
+}
+
+/// Serve `/dists/{a}/{b}/{file}`. On-demand repositories only have
+/// their Release files at that level, so anything else is a component
+/// file of suite `a`, like `Contents-amd64` in component `b`.
+async fn serve_dists_file(
+    Path((a, b, file)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, StatusCode> {
+    if matches!(file.as_str(), "Release" | "InRelease" | "Release.gpg") {
+        serve_from_on_demand(&state, &a, &b, request).await
+    } else {
+        serve_from_suite(&state, &a, request).await
+    }
 }
 
 /// Serve the file named by the request path, minus its first `skip`
@@ -576,7 +605,16 @@ async fn serve_on_demand_file(
 ) -> Result<Response, StatusCode> {
     let kind = params.get("kind").ok_or(StatusCode::BAD_REQUEST)?;
     let id = params.get("id").ok_or(StatusCode::BAD_REQUEST)?;
-    let base = prepare_on_demand(&state, kind, id)
+    serve_from_on_demand(&state, kind, id, request).await
+}
+
+async fn serve_from_on_demand(
+    state: &AppState,
+    kind: &str,
+    id: &str,
+    request: Request,
+) -> Result<Response, StatusCode> {
+    let base = prepare_on_demand(state, kind, id)
         .await?
         .ok_or(StatusCode::NOT_FOUND)?;
     serve_from_dir(base, 3, request).await
