@@ -40,6 +40,9 @@ jobs:
       # Fail loudly if the Redis testcontainer can't start (e.g. docker
       # broken on the runner) instead of silently skipping tests.
       TEST_REQUIRE_REDIS: "1"
+      # Same for klaus: without klaus the git-store browser tests skip,
+      # and a skip is indistinguishable from a pass in the summary.
+      TEST_REQUIRE_KLAUS: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -51,9 +54,9 @@ jobs:
             pkg-config libgpgme-dev protobuf-compiler diffoscope nettle-dev
       - name: Upgrade pip
         run: python -m pip install --upgrade pip setuptools_rust setuptools
-      - name: Install breezy, diffoscope
+      - name: Install breezy, diffoscope, klaus
         run: python -m pip install --upgrade "breezy<4" diffoscope jsondiff \
-            "brz-debian@git+https://github.com/breezy-team/breezy-debian"
+            klaus "brz-debian@git+https://github.com/breezy-team/breezy-debian"
       # TODO(jelmer): Add proper test isolation so this isn't necessary
       - name: Setup bzr identity
         run: brz whoami "CI <ci@noreply.github.com>"
