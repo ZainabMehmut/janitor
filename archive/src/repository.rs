@@ -500,14 +500,12 @@ impl RepositoryGenerator {
                             }
                             Err(e) => return Err(e),
                         };
-                    for (pkg_name, files) in pkg_files {
+                    for (location, files) in pkg_files {
                         if files.is_empty() {
                             continue;
                         }
                         entries.push(ContentsEntry {
-                            // dak's Contents format uses
-                            // `<component>/<package>`.
-                            qualified_name: format!("{}/{}", component, pkg_name),
+                            qualified_name: location,
                             files,
                         });
                     }

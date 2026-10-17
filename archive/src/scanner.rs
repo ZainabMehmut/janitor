@@ -140,7 +140,7 @@ impl PackageScanner {
     }
 
     /// Extract per-`.deb` file listings for a build, keyed by
-    /// binary package name, for the Contents-<arch> generator (see
+    /// `<section>/<package>`, for the Contents-<arch> generator (see
     /// [`crate::contents`]). Covers every `.deb` whose architecture
     /// is `arch` or `all`.
     ///
@@ -365,15 +365,11 @@ pub(crate) fn pool_directory(suite_name: &str, codebase: &str, run_id: &str) -> 
     format!("{}/pkg/{}/{}", suite_name, codebase, run_id)
 }
 
-/// Parse the package name out of a `.deb` filename.
-///
-/// Debian .deb filenames follow `<name>_<version>_<arch>.deb`. The
-/// name portion is everything before the first underscore. Returns
-/// None if the filename doesn't match that pattern (e.g. old-style
-/// or unusual names) -- callers should skip such files rather than
 /// File listings of the `.deb`s in `dir` whose architecture is `arch`
-/// or `all`, as `(package_name, files)`. `all` packages install on
-/// every architecture, so they belong in every Contents-<arch>.
+/// or `all`, as `(location, files)`, where location is
+/// `<section>/<package>` as Contents files give it. `all` packages
+/// install on every architecture, so they belong in every
+/// Contents-<arch>.
 async fn list_contents(dir: &Path, arch: &str) -> ArchiveResult<Vec<(String, Vec<String>)>> {
     let mut out = Vec::new();
     let mut read = tokio::fs::read_dir(dir).await.map_err(ArchiveError::Io)?;
@@ -392,11 +388,21 @@ async fn list_contents(dir: &Path, arch: &str) -> ArchiveResult<Vec<(String, Vec
         if pkg_arch != arch && pkg_arch != "all" {
             continue;
         }
-        out.push((pkg_name, crate::deb::list_deb_files(&entry.path())?));
+        let location = match crate::deb::deb_section(&entry.path())? {
+            Some(section) => format!("{}/{}", section, pkg_name),
+            None => pkg_name,
+        };
+        out.push((location, crate::deb::list_deb_files(&entry.path())?));
     }
     Ok(out)
 }
 
+/// Parse the package name out of a `.deb` filename.
+///
+/// Debian .deb filenames follow `<name>_<version>_<arch>.deb`. The
+/// name portion is everything before the first underscore. Returns
+/// None if the filename doesn't match that pattern (e.g. old-style
+/// or unusual names) -- callers should skip such files rather than
 /// misclassify them.
 pub(crate) fn deb_package_name(filename: &str) -> Option<String> {
     let stem = filename.strip_suffix(".deb")?;
@@ -778,11 +784,20 @@ mod tests {
     }
 
     /// A `.deb` with a real control file, so dpkg-scanpackages accepts it.
-    fn write_deb(path: &std::path::Path, package: &str, arch: &str, files: &[&str]) {
-        let control = format!(
+    fn write_deb(
+        path: &std::path::Path,
+        package: &str,
+        arch: &str,
+        section: Option<&str>,
+        files: &[&str],
+    ) {
+        let mut control = format!(
             "Package: {}\nVersion: 1.0\nArchitecture: {}\nMaintainer: Test <test@example.com>\nDescription: test\n",
             package, arch
         );
+        if let Some(section) = section {
+            control.push_str(&format!("Section: {}\n", section));
+        }
         let control_tar = gzipped_tar(&[("./control", control.as_bytes())]);
         let data_entries: Vec<(&str, &[u8])> = files.iter().map(|f| (*f, &b""[..])).collect();
         let data_tar = gzipped_tar(&data_entries);
@@ -816,6 +831,7 @@ mod tests {
             &run_dir.join("hello_1.0_amd64.deb"),
             "hello",
             "amd64",
+            Some("utils"),
             &["./usr/bin/hello"],
         );
 
@@ -852,55 +868,13 @@ mod tests {
                 .scan_deb_contents_for_build(&build, "amd64")
                 .await
                 .unwrap(),
-            vec![("hello".to_string(), vec!["usr/bin/hello".to_string()])]
+            vec![("utils/hello".to_string(), vec!["usr/bin/hello".to_string()])]
         );
-    }
-
-    fn write_mini_deb(path: &std::path::Path, files: &[&str]) {
-        use std::io::Write;
-        let mut tar_bytes: Vec<u8> = Vec::new();
-        {
-            let mut builder = tar::Builder::new(&mut tar_bytes);
-            for f in files {
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Regular);
-                header.set_path(f).unwrap();
-                header.set_size(0);
-                header.set_mode(0o644);
-                header.set_cksum();
-                builder.append(&header, std::io::empty()).unwrap();
-            }
-            builder.finish().unwrap();
-        }
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        gz.write_all(&tar_bytes).unwrap();
-        let data_bytes = gz.finish().unwrap();
-
-        let file = std::fs::File::create(path).unwrap();
-        let mut ar_builder = ar::Builder::new(file);
-        ar_builder
-            .append(
-                &ar::Header::new(b"debian-binary".to_vec(), 4),
-                b"2.0\n" as &[u8],
-            )
-            .unwrap();
-        ar_builder
-            .append(
-                &ar::Header::new(b"control.tar.gz".to_vec(), 4),
-                b"junk" as &[u8],
-            )
-            .unwrap();
-        ar_builder
-            .append(
-                &ar::Header::new(b"data.tar.gz".to_vec(), data_bytes.len() as u64),
-                data_bytes.as_slice(),
-            )
-            .unwrap();
     }
 
     /// End-to-end: seed a local artifact store with a fake
     /// `.deb`, run `scan_deb_contents_for_build`, and verify we get
-    /// `(package_name, file_list)` back. Contents-<arch>
+    /// `(location, file_list)` back. Contents-<arch>
     /// generation calls into this same path.
     #[tokio::test]
     async fn scan_deb_contents_returns_files_by_package() {
@@ -910,15 +884,28 @@ mod tests {
         // LocalArtifactManager stores runs at <root>/<run_id>/*.
         let run_dir = store.path().join("run-1");
         std::fs::create_dir_all(&run_dir).unwrap();
-        write_mini_deb(&run_dir.join("hello_1.0_amd64.deb"), &["./usr/bin/hello"]);
+        write_deb(
+            &run_dir.join("hello_1.0_amd64.deb"),
+            "hello",
+            "amd64",
+            Some("utils"),
+            &["./usr/bin/hello"],
+        );
         // Add an arch-mismatched .deb that should be filtered out.
-        write_mini_deb(
+        write_deb(
             &run_dir.join("hello_1.0_arm64.deb"),
+            "hello",
+            "arm64",
+            Some("utils"),
             &["./usr/bin/hello-arm"],
         );
-        // Add an `_all` .deb that should be included for every arch.
-        write_mini_deb(
+        // Add an `_all` .deb without a section, which should be
+        // included for every arch.
+        write_deb(
             &run_dir.join("hello-data_1.0_all.deb"),
+            "hello-data",
+            "all",
+            None,
             &["./usr/share/hello-data/readme"],
         );
 
@@ -938,12 +925,17 @@ mod tests {
             .scan_deb_contents_for_build(&build, "amd64")
             .await
             .unwrap();
-        got.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(got.len(), 2, "expected amd64 + all package; arm64 filtered");
-        assert_eq!(got[0].0, "hello");
-        assert_eq!(got[0].1, vec!["usr/bin/hello"]);
-        assert_eq!(got[1].0, "hello-data");
-        assert_eq!(got[1].1, vec!["usr/share/hello-data/readme"]);
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "hello-data".to_string(),
+                    vec!["usr/share/hello-data/readme".to_string()]
+                ),
+                ("utils/hello".to_string(), vec!["usr/bin/hello".to_string()]),
+            ]
+        );
     }
 
     /// A build whose artifact store is missing must surface a typed

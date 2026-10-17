@@ -283,8 +283,7 @@ test_with_database! {
             .map(|l| l.split_whitespace().collect())
             .filter(|f: &Vec<&str>| f[0] == "usr/bin/hello")
             .collect();
-        // TODO: Debian uses the package's section here (devel/hello).
-        assert_eq!(hello, vec![vec!["usr/bin/hello", "main/hello"]], "{body}");
+        assert_eq!(hello, vec![vec!["usr/bin/hello", "devel/hello"]], "{body}");
     }
 }
 

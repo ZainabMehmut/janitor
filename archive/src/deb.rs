@@ -55,29 +55,88 @@ pub fn list_deb_files(deb_path: &Path) -> ArchiveResult<Vec<String>> {
     )))
 }
 
-/// Wrap the given `data.tar.*` reader in the right decompressor
-/// based on the ar member's filename, then walk the tar entries and
-/// collect regular-file paths.
-fn read_data_tar<R: Read>(name: &str, reader: R, deb_path: &Path) -> ArchiveResult<Vec<String>> {
-    let boxed: Box<dyn Read> = match name {
-        "data.tar" => Box::new(reader),
-        "data.tar.gz" => Box::new(flate2::read::GzDecoder::new(reader)),
-        "data.tar.bz2" => Box::new(bzip2::read::BzDecoder::new(reader)),
-        "data.tar.xz" => Box::new(xz2::read::XzDecoder::new(reader)),
-        "data.tar.zst" | "data.tar.zstd" => Box::new(
+/// The `Section` field of a `.deb`'s control file, if it has one.
+pub fn deb_section(deb_path: &Path) -> ArchiveResult<Option<String>> {
+    let file = File::open(deb_path).map_err(ArchiveError::Io)?;
+    let mut ar = ar::Archive::new(BufReader::new(file));
+    while let Some(entry) = ar.next_entry() {
+        let entry = entry.map_err(|e| {
+            ArchiveError::PackageScanning(format!(
+                "reading ar entry in {}: {}",
+                deb_path.display(),
+                e
+            ))
+        })?;
+        let name = String::from_utf8_lossy(entry.header().identifier()).into_owned();
+        if !name.starts_with("control.tar") {
+            continue;
+        }
+        let mut tar = tar::Archive::new(decompress_tar(&name, entry, deb_path)?);
+        for entry in tar
+            .entries()
+            .map_err(|e| ArchiveError::PackageScanning(format!("tar entries: {}", e)))?
+        {
+            let mut entry =
+                entry.map_err(|e| ArchiveError::PackageScanning(format!("tar entry: {}", e)))?;
+            let path = entry
+                .path()
+                .map_err(|e| ArchiveError::PackageScanning(format!("tar path: {}", e)))?;
+            if path != Path::new("./control") && path != Path::new("control") {
+                continue;
+            }
+            let mut text = String::new();
+            entry.read_to_string(&mut text).map_err(ArchiveError::Io)?;
+            let control: deb822_fast::Deb822 = text.parse().map_err(|e| {
+                ArchiveError::PackageScanning(format!(
+                    "control file of {}: {}",
+                    deb_path.display(),
+                    e
+                ))
+            })?;
+            return Ok(control
+                .iter()
+                .next()
+                .and_then(|p| p.get("Section"))
+                .map(str::to_string));
+        }
+        break;
+    }
+    Err(ArchiveError::PackageScanning(format!(
+        "no control file in {}",
+        deb_path.display()
+    )))
+}
+
+/// Wrap the reader of tar member `name` (e.g. `data.tar.xz`) in the
+/// decompressor its extension asks for.
+fn decompress_tar<'a, R: Read + 'a>(
+    name: &str,
+    reader: R,
+    deb_path: &Path,
+) -> ArchiveResult<Box<dyn Read + 'a>> {
+    let compression = name.split_once(".tar").map_or("", |(_, c)| c);
+    Ok(match compression {
+        "" => Box::new(reader),
+        ".gz" => Box::new(flate2::read::GzDecoder::new(reader)),
+        ".bz2" => Box::new(bzip2::read::BzDecoder::new(reader)),
+        ".xz" => Box::new(xz2::read::XzDecoder::new(reader)),
+        ".zst" | ".zstd" => Box::new(
             zstd::stream::Decoder::new(reader)
                 .map_err(|e| ArchiveError::PackageScanning(format!("zstd init: {}", e)))?,
         ),
-        other => {
+        _ => {
             return Err(ArchiveError::PackageScanning(format!(
-                "unknown data.tar compression '{}' in {}",
-                other,
+                "unknown compression of {} in {}",
+                name,
                 deb_path.display()
             )));
         }
-    };
+    })
+}
 
-    let mut tar = tar::Archive::new(boxed);
+/// Walk the given `data.tar.*` member and collect regular-file paths.
+fn read_data_tar<R: Read>(name: &str, reader: R, deb_path: &Path) -> ArchiveResult<Vec<String>> {
+    let mut tar = tar::Archive::new(decompress_tar(name, reader, deb_path)?);
     let mut out = Vec::new();
     for entry in tar
         .entries()
@@ -195,6 +254,20 @@ mod tests {
                 data_bytes.as_slice(),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn deb_section_reads_control() {
+        let deb = Path::new("tests/data/hello_2.10-3_amd64.deb");
+        assert_eq!(deb_section(deb).unwrap(), Some("devel".to_string()));
+    }
+
+    #[test]
+    fn deb_section_without_control_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let deb = tmp.path().join("hello.deb");
+        write_minimal_deb(&deb, &["./usr/bin/hello"], &[], "gz");
+        assert!(deb_section(&deb).is_err());
     }
 
     #[test]
