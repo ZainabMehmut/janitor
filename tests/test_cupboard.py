@@ -15,6 +15,8 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
+import sys
+import types
 from datetime import timedelta
 
 import aiohttp_jinja2
@@ -35,6 +37,7 @@ from janitor.site import (
 )
 from janitor.site.cupboard import create_app
 from janitor.site.cupboard.api import create_app as create_api_app
+from janitor.site.cupboard.api import select_runs_to_reprocess
 from janitor.site.cupboard.publish import iter_publish_history
 
 from .conftest import _insert_codebase, _insert_run
@@ -479,3 +482,145 @@ async def test_publish_history_limit_zero_lists_nothing(con):
     assert len(await iter_publish_history(con)) == 2
     assert len(await iter_publish_history(con, limit=1)) == 1
     assert await iter_publish_history(con, limit=0) == []
+
+
+@pytest.fixture
+def reprocess_logs_stub(monkeypatch):
+    # The handler imports this module on each request and only hands the rows on.
+    async def reprocess_run_logs(**kwargs):
+        return None
+
+    stub = types.ModuleType("janitor.reprocess_logs")
+    vars(stub).update(
+        reprocess_run_logs=reprocess_run_logs,
+        process_dist_log=None,
+        process_sbuild_log=None,
+    )
+    monkeypatch.setitem(sys.modules, "janitor.reprocess_logs", stub)
+
+
+async def test_reprocess_logs_bulk_filters_by_campaign(
+    aiohttp_client, db, reprocess_logs_stub
+):
+    client = await create_api_client(aiohttp_client, db, user=ADMIN_USER)
+    async with db.acquire() as conn:
+        await _insert_codebase(conn, "foo")
+        await _insert_codebase(conn, "bar")
+        now = utcnow()
+        await _insert_run(
+            conn,
+            run_id="matching",
+            codebase="foo",
+            campaign="lintian-fixes",
+            start_time=now - timedelta(minutes=30),
+            finish_time=now,
+            result_code="build-failed",
+        )
+        await _insert_run(
+            conn,
+            run_id="other-campaign",
+            codebase="bar",
+            campaign="multiarch-hints",
+            start_time=now - timedelta(minutes=30),
+            finish_time=now,
+            result_code="build-failed",
+        )
+
+    resp = await client.post("/reprocess-logs", data={"campaign": "lintian-fixes"})
+    assert resp.status == 200
+    body = await resp.json()
+    assert [row["log_id"] for row in body] == ["matching"]
+
+
+async def test_reprocess_logs_bulk_filters_by_description_re(
+    aiohttp_client, db, reprocess_logs_stub
+):
+    client = await create_api_client(aiohttp_client, db, user=ADMIN_USER)
+    async with db.acquire() as conn:
+        await _insert_codebase(conn, "foo")
+        await _insert_codebase(conn, "bar")
+        now = utcnow()
+        await _insert_run(
+            conn,
+            run_id="matching",
+            codebase="foo",
+            start_time=now - timedelta(minutes=30),
+            finish_time=now,
+            result_code="build-failed",
+            description="sbuild timed out",
+        )
+        await _insert_run(
+            conn,
+            run_id="non-matching",
+            codebase="bar",
+            start_time=now - timedelta(minutes=30),
+            finish_time=now,
+            result_code="build-failed",
+            description="missing build dependency",
+        )
+
+    resp = await client.post("/reprocess-logs", data={"description_re": "timed out"})
+    assert resp.status == 200
+    body = await resp.json()
+    assert [row["log_id"] for row in body] == ["matching"]
+
+
+async def test_reprocess_logs_bulk_filters_by_min_age(
+    aiohttp_client, db, reprocess_logs_stub
+):
+    client = await create_api_client(aiohttp_client, db, user=ADMIN_USER)
+    async with db.acquire() as conn:
+        await _insert_codebase(conn, "foo")
+        await _insert_codebase(conn, "bar")
+        now = utcnow()
+        await _insert_run(
+            conn,
+            run_id="old-enough",
+            codebase="foo",
+            start_time=now - timedelta(days=10, minutes=30),
+            finish_time=now - timedelta(days=10),
+            result_code="build-failed",
+        )
+        await _insert_run(
+            conn,
+            run_id="too-recent",
+            codebase="bar",
+            start_time=now - timedelta(minutes=30),
+            finish_time=now,
+            result_code="build-failed",
+        )
+
+    resp = await client.post("/reprocess-logs", data={"min_age": "5"})
+    assert resp.status == 200
+    body = await resp.json()
+    assert [row["log_id"] for row in body] == ["old-enough"]
+
+
+async def test_reprocess_logs_bulk_invalid_regex(
+    aiohttp_client, db, reprocess_logs_stub
+):
+    client = await create_api_client(aiohttp_client, db, user=ADMIN_USER)
+    resp = await client.post("/reprocess-logs", data={"description_re": "("})
+    assert resp.status == 400
+
+
+async def test_reprocess_logs_bulk_selects_every_unpack_code(db):
+    async with db.acquire() as conn:
+        now = utcnow()
+        for run_id, result_code in [
+            ("patch", "unpack-patch-application-failed"),
+            ("upstream", "unpack-unexpected-local-upstream-changes"),
+            ("other", "success"),
+        ]:
+            await _insert_codebase(conn, run_id)
+            await _insert_run(
+                conn,
+                run_id=run_id,
+                codebase=run_id,
+                start_time=now - timedelta(minutes=30),
+                finish_time=now,
+                result_code=result_code,
+            )
+        rows = await select_runs_to_reprocess(conn)
+
+    assert sorted(row["id"] for row in rows) == ["patch", "upstream"]
