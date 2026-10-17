@@ -125,6 +125,6 @@ default = ["gcp", "gcs", "debian"]
 debian = ["dep:debversion"]
 gcp = ["stackdriver_logger", "gcs"]
 gcs = ["dep:google-cloud-storage", "dep:google-cloud-auth", "dep:google-cloud-gax", "dep:bytes"]
-testing = ["sqlx/postgres", "sqlx/runtime-tokio", "sqlx/tls-rustls"]
+testing = ["sqlx/postgres", "sqlx/runtime-tokio", "sqlx/tls-rustls-aws-lc-rs"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 

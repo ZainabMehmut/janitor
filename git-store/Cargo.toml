@@ -25,7 +25,7 @@ pyo3 = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_urlencoded = "0.7"
-sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls", "chrono", "uuid"] }
+sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls-aws-lc-rs", "chrono", "uuid"] }
 tera = "1.19"
 thiserror = "1.0"
 tokio = { version = "1.0", features = ["full"] }
@@ -42,7 +42,7 @@ libc = "0.2"
 reqwest = { version = "0.12", features = ["json"] }
 serial_test = "3"
 tempfile = "3.19"
-testcontainers-modules = { version = "0.15", features = ["postgres"] }
+testcontainers-modules = { version = "0.15", default-features = false, features = ["postgres", "aws-lc-rs"] }
 tokio-test = "0.4"
 tower = { version = "0.5", features = ["util"] }
 uuid = { version = "1.6", features = ["v4"] }

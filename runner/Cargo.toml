@@ -43,8 +43,8 @@ google-cloud-storage = { workspace = true, optional = true }
 google-cloud-auth = { workspace = true, optional = true }
 thiserror = "2.0"
 tempfile = { workspace = true }
-testcontainers = { version = "0.27", optional = true }
-testcontainers-modules = { version = "0.15", features = ["redis"], optional = true }
+testcontainers = { version = "0.27", default-features = false, features = ["aws-lc-rs"], optional = true }
+testcontainers-modules = { version = "0.15", default-features = false, features = ["redis", "aws-lc-rs"], optional = true }
 
 [dev-dependencies]
 janitor-runner = { path = ".", features = ["testing"] }
