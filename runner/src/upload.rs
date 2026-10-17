@@ -641,4 +641,52 @@ mod tests {
         assert_eq!(sanitize_filename("..dangerous"), "dangerous");
         assert_eq!(sanitize_filename("dangerous.."), "dangerous");
     }
+
+    fn files_under(dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files.extend(files_under(&path));
+            } else {
+                files.push(path);
+            }
+        }
+        files
+    }
+
+    #[tokio::test]
+    async fn test_process_upload_leaves_no_log_in_the_storage_dir() {
+        let storage = tempfile::tempdir().unwrap();
+        let processor = UploadProcessor::new(storage.path().to_path_buf(), 1024, 4096);
+        let body = "--b\r\n\
+            Content-Disposition: form-data; name=\"metadata\"; filename=\"result.json\"\r\n\r\n\
+            {\"code\":\"success\",\"description\":\"ok\"}\r\n\
+            --b\r\n\
+            Content-Disposition: form-data; name=\"file\"; filename=\"build.log\"\r\n\r\n\
+            build output\n\r\n\
+            --b--\r\n";
+        let request = axum::http::Request::builder()
+            .header("content-type", "multipart/form-data; boundary=b")
+            .body(axum::body::Body::from(body))
+            .unwrap();
+        let multipart = <Multipart as axum::extract::FromRequest<()>>::from_request(request, &())
+            .await
+            .unwrap();
+
+        let uploaded = processor
+            .process_upload(multipart, &janitor::RunId::new("run-1").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            (uploaded.log_files, files_under(storage.path())),
+            (
+                vec![UploadedLog {
+                    filename: "build.log".to_string(),
+                    data: b"build output\n".to_vec(),
+                }],
+                vec![]
+            )
+        );
+    }
 }
