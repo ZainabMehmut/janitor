@@ -2,7 +2,7 @@ use crate::Mode;
 use breezyshim::branch::Branch;
 use breezyshim::transport::Transport;
 use breezyshim::RevisionId;
-use sqlx::{FromRow, PgPool, Row};
+use sqlx::PgPool;
 use url::Url;
 
 /// Persist the result of a publish attempt: insert a `publish` row,
@@ -654,6 +654,26 @@ pub struct UnpublishedBranch {
     pub name: Option<String>,
 }
 
+/// `(role, remote_name, base_revision, revision, mode, frequency_days)`
+/// as projected from `publish_ready.unpublished_branches`.
+type UnpublishedBranchRecord = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i32>,
+);
+
+#[derive(sqlx::FromRow)]
+struct PublishReadyRow {
+    #[sqlx(flatten)]
+    run: janitor::state::Run,
+    rate_limit_bucket: String,
+    policy_command: String,
+    unpublished_branches: Vec<UnpublishedBranchRecord>,
+}
+
 /// Iterate through runs that are ready to be published.
 pub async fn iter_publish_ready(
     conn: &PgPool,
@@ -698,10 +718,8 @@ pub async fn iter_publish_ready(
             -- array including a `publish_mode` enum), but the
             -- consumer-side decode is `Vec<(String, Option<String>, ...,
             -- Option<String>, Option<i32>)>` (RECORD[] with mode as
-            -- text). Without the projection sqlx silently `Err`s the
-            -- try_get and the per-branch loop iterates zero rows,
-            -- exactly the symptom that kept `0 published` in the
-            -- log even though there were 19 publish-ready entries.
+            -- text). Without the projection the column fails to
+            -- decode.
             array( \
                 SELECT row( \
                     role, remote_name, base_revision, revision, \
@@ -723,68 +741,38 @@ pub async fn iter_publish_ready(
         " ORDER BY change_set_state = 'publishing' DESC, value DESC NULLS LAST, finish_time DESC",
     );
 
-    let query = query.build();
+    let rows: Vec<PublishReadyRow> = query.build_query_as().fetch_all(conn).await?;
 
-    let rows = query.fetch_all(conn).await?;
-
-    let mut result = vec![];
-    for row in rows {
-        // Decode the unpublished_branches array
-        // Note: We keep revision IDs as strings in the database, and convert to RevisionId when needed
-        let unpublished_branches: Vec<UnpublishedBranch> = if let Ok(branches_data) = row
-            .try_get::<Vec<(
-                String,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                Option<i32>,
-            )>, _>("unpublished_branches")
-        {
-            branches_data
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            // Revision IDs are kept as strings in the database.
+            let unpublished_branches = row
+                .unpublished_branches
                 .into_iter()
                 .map(
-                    |(
-                        role,
-                        remote_name,
-                        base_revision_str,
-                        revision_str,
-                        mode,
-                        max_frequency_days,
-                    )| {
+                    |(role, remote_name, base_revision, revision, mode, max_frequency_days)| {
                         UnpublishedBranch {
                             role,
                             remote_name,
-                            base_revision: base_revision_str
+                            base_revision: base_revision
                                 .map(|s| RevisionId::from(s.as_bytes().to_vec())),
-                            revision: revision_str.map(|s| RevisionId::from(s.as_bytes().to_vec())),
+                            revision: revision.map(|s| RevisionId::from(s.as_bytes().to_vec())),
                             publish_mode: mode,
                             max_frequency_days,
                             name: None, // name is not part of the result_branch_with_policy type
                         }
                     },
                 )
-                .collect()
-        } else {
-            // Fallback to empty if decoding fails
-            Vec::new()
-        };
-
-        let run = janitor::state::Run::from_row(&row).map_err(|e| {
-            sqlx::Error::Decode(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Failed to parse run from row: {}", e),
-            )))
-        })?;
-
-        result.push((
-            run,
-            row.get("rate_limit_bucket"),
-            row.get("policy_command"),
-            unpublished_branches,
-        ));
-    }
-    Ok(result)
+                .collect();
+            (
+                row.run,
+                row.rate_limit_bucket,
+                row.policy_command,
+                unpublished_branches,
+            )
+        })
+        .collect())
 }
 
 #[cfg(test)]

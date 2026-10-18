@@ -1,6 +1,6 @@
 use chrono::TimeDelta;
 use sqlx::postgres::types::PgInterval;
-use sqlx::{Error, FromRow, PgPool, Row};
+use sqlx::{Error, FromRow, PgPool};
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
@@ -189,7 +189,7 @@ impl<'a> Queue<'a> {
         refresh: bool,
         requester: Option<&str>,
     ) -> Result<(i32, String), Error> {
-        let row = sqlx::query(
+        let row: Option<(i32, String)> = sqlx::query_as(
             "INSERT INTO queue (command, priority, bucket, context, estimated_duration, suite, refresh, requester, change_set, codebase)
              VALUES ($1, (SELECT COALESCE(MIN(priority), 0) FROM queue) + $2::bigint, $3::queue_bucket, $4, $5, $6::suite_name, $7, $8, $9, $10)
              ON CONFLICT (codebase, suite, coalesce(change_set, ''::text))
@@ -219,21 +219,16 @@ impl<'a> Queue<'a> {
         .await?;
 
         if let Some(row) = row {
-            let id: i32 = row.try_get("id")?;
-            let bucket: String = row.try_get("bucket")?;
-            Ok((id, bucket))
+            Ok(row)
         } else {
-            let row = sqlx::query(
-                "SELECT id, bucket FROM queue WHERE codebase = $1 AND suite = $2 AND coalesce(change_set, ''::text) = $3"
+            sqlx::query_as(
+                "SELECT id, bucket::text FROM queue WHERE codebase = $1 AND suite = $2 AND coalesce(change_set, ''::text) = $3"
             )
             .bind(codebase)
             .bind(campaign)
             .bind(change_set.unwrap_or(""))
             .fetch_one(self.pool)
-            .await?;
-            let id: i32 = row.try_get("id")?;
-            let bucket: String = row.try_get("bucket")?;
-            Ok((id, bucket))
+            .await
         }
     }
 
@@ -281,18 +276,75 @@ impl<'a> Queue<'a> {
     }
 
     pub async fn get_buckets(&self) -> Result<Vec<(String, i64)>, Error> {
-        let rows =
-            sqlx::query("SELECT bucket, count(*) FROM queue GROUP BY bucket ORDER BY bucket ASC")
-                .fetch_all(self.pool)
-                .await?;
+        sqlx::query_as(
+            "SELECT bucket::text, count(*) FROM queue GROUP BY bucket ORDER BY bucket ASC",
+        )
+        .fetch_all(self.pool)
+        .await
+    }
+}
 
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                let bucket: String = row.try_get("bucket").unwrap();
-                let count: i64 = row.try_get("count").unwrap();
-                (bucket, count)
-            })
-            .collect())
+#[cfg(all(test, feature = "testing"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_add_and_get_buckets() {
+        let Some(db) = crate::test_utils::TestDatabase::new_optional()
+            .await
+            .unwrap()
+        else {
+            return;
+        };
+        crate::schema::setup_test_database(db.pool()).await.unwrap();
+        sqlx::query(
+            "INSERT INTO codebase (name, branch_url, url, vcs_type) \
+             VALUES ('cb', 'https://example.invalid/cb', 'https://example.invalid/cb', 'git')",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let queue = Queue::new(db.pool());
+
+        let (id, bucket) = queue
+            .add(
+                "cb",
+                "cmd",
+                "lintian-fixes",
+                None,
+                0.0,
+                "missing-deps",
+                None,
+                None,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(bucket, "missing-deps");
+
+        // Re-adding with a lower-priority bucket leaves the existing
+        // entry alone and returns it.
+        let (id2, bucket2) = queue
+            .add(
+                "cb",
+                "cmd",
+                "lintian-fixes",
+                None,
+                0.0,
+                "default",
+                None,
+                None,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!((id2, bucket2.as_str()), (id, "missing-deps"));
+
+        assert_eq!(
+            queue.get_buckets().await.unwrap(),
+            vec![("missing-deps".to_string(), 1)]
+        );
     }
 }

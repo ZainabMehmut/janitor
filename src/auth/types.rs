@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Worker authentication information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct WorkerAuth {
     /// Worker name/username
     pub name: String,

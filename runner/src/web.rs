@@ -717,13 +717,14 @@ async fn kill(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> imp
 /// `GET /codebases` -- return the codebase table as a JSON list.
 async fn get_codebases(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.database.get_codebases().await {
-        Ok(codebases) => (StatusCode::OK, Json(serde_json::Value::Array(codebases))),
+        Ok(codebases) => (StatusCode::OK, Json(codebases)).into_response(),
         Err(e) => {
             log::error!("Failed to get codebases: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Database error"})),
             )
+                .into_response()
         }
     }
 }
@@ -768,7 +769,7 @@ fn main_branch_name(branch_url: Option<&str>) -> String {
 /// empty object on success.
 async fn update_codebases(
     State(state): State<Arc<AppState>>,
-    Json(codebases): Json<Vec<serde_json::Value>>,
+    Json(codebases): Json<Vec<crate::database::CodebaseUpload>>,
 ) -> impl IntoResponse {
     match state.database.upload_codebases(&codebases).await {
         Ok(()) => (StatusCode::OK, Json(json!({}))),
@@ -819,13 +820,14 @@ async fn delete_candidate(
 /// `GET /candidates` -- return the candidate table as a JSON list.
 async fn get_candidates(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.database.get_candidates().await {
-        Ok(candidates) => (StatusCode::OK, Json(serde_json::Value::Array(candidates))),
+        Ok(candidates) => (StatusCode::OK, Json(candidates)).into_response(),
         Err(e) => {
             log::error!("Failed to get candidates: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Database error"})),
             )
+                .into_response()
         }
     }
 }

@@ -4,8 +4,9 @@ use crate::{BuilderResult, JanitorResult};
 use breezyshim::RevisionId;
 use chrono::{DateTime, Duration, Utc};
 use redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
 use sqlx::postgres::types::PgInterval;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use std::collections::HashMap;
 
 /// Wire-shape of a queue row joined against `codebase`, used by both
@@ -88,6 +89,25 @@ impl QueueRowJoined {
             },
         }
     }
+}
+
+/// Value stored per queue id in the `assigned-queue-items` Redis hash.
+#[derive(Serialize, Deserialize)]
+struct AssignmentInfo {
+    worker_name: String,
+    log_id: String,
+    assigned_at: String,
+}
+
+/// Worker health record stored in the `worker-health` Redis hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerHealth {
+    /// Reported worker status.
+    pub status: String,
+    /// Run the worker is currently processing, if any.
+    pub current_run: Option<String>,
+    /// RFC 3339 timestamp of the last heartbeat.
+    pub last_heartbeat: String,
 }
 
 // Re-export from main crate
@@ -220,34 +240,16 @@ impl RunnerDatabase {
         &self,
         run: Run,
     ) -> Result<JanitorResult, sqlx::Error> {
-        let remotes_data = self.get_run_remotes(&run.id).await?;
         let resume = self
             .get_resume_info(&run.id, &run.codebase, &run.suite)
             .await?;
-        let target_data = self.get_run_target(&run.id).await?;
-        let builder_result_data = self.get_run_builder_result(&run.id).await?;
+        let debian_build = self.get_run_debian_build(&run.id).await?;
 
-        // Convert JSON data to proper structs
-        let remotes = remotes_data.map(|data| {
-            data.into_iter()
-                .map(|(name, remote_info)| {
-                    let url = remote_info
-                        .get("url")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    (name, crate::ResultRemote { url })
-                })
-                .collect()
+        let builder_result = debian_build.map(BuilderResult::from);
+        let target = builder_result.as_ref().map(|br| crate::ResultTarget {
+            name: br.kind().to_string(),
+            details: br.to_json(),
         });
-
-        let target = target_data.and_then(|data| {
-            let name = data.get("name")?.as_str()?.to_string();
-            let details = data.get("details")?.clone();
-            Some(crate::ResultTarget { name, details })
-        });
-
-        let builder_result = builder_result_data.and_then(|data| serde_json::from_value(data).ok());
 
         Ok(JanitorResult {
             log_id: run.id,
@@ -271,7 +273,8 @@ impl RunnerDatabase {
                     .map(|(name, rev)| (name, Some(RevisionId::from(rev.as_bytes()))))
                     .collect()
             }),
-            remotes,
+            // TODO: remote URLs reported by the worker are not stored.
+            remotes: None,
             branches: run.result_branches.map(|branches| {
                 branches
                     .into_iter()
@@ -293,14 +296,20 @@ impl RunnerDatabase {
     /// Get a run by ID.
     pub async fn get_run(&self, run_id: &str) -> Result<Option<JanitorResult>, sqlx::Error> {
         // run.vcs_type and run.suite are postgres enums; cast both to
-        // text so sqlx decodes them as Strings for the Run struct.
+        // text so sqlx decodes them as Strings for the Run struct. The
+        // timestamps are stored without a time zone, and result_branches
+        // is built from new_result_branch as the RECORD[] Run expects.
         let run: Option<Run> = sqlx::query_as(
             r#"
             SELECT id, command, description, result_code, main_branch_revision, revision,
                    context, result, suite::text AS suite, instigated_context, vcs_type::text AS vcs_type, branch_url,
-                   logfilenames, worker_name, result_branches, result_tags, target_branch_url,
+                   logfilenames, worker,
+                   array(SELECT row(role, remote_name, base_revision, revision)
+                         FROM new_result_branch WHERE run_id = run.id) AS result_branches,
+                   result_tags, target_branch_url,
                    change_set, failure_details, failure_transient, failure_stage, codebase,
-                   start_time, finish_time, value
+                   (start_time AT TIME ZONE 'UTC') AS start_time,
+                   (finish_time AT TIME ZONE 'UTC') AS finish_time, value
             FROM run WHERE id = $1
             "#,
         )
@@ -930,11 +939,11 @@ INSERT INTO run (
             let mut conn = redis_client.get_multiplexed_async_connection().await?;
 
             // Store assignment with worker info and timestamp
-            let assignment_info = serde_json::json!({
-                "worker_name": worker_name,
-                "log_id": log_id,
-                "assigned_at": Utc::now().to_rfc3339(),
-            });
+            let assignment_info = AssignmentInfo {
+                worker_name: worker_name.to_string(),
+                log_id: log_id.to_string(),
+                assigned_at: Utc::now().to_rfc3339(),
+            };
 
             // Atomically claim the queue item. HSETNX only writes the field
             // when it does not already exist, so two concurrent assigns for
@@ -945,7 +954,7 @@ INSERT INTO run (
                 .hset_nx(
                     "assigned-queue-items",
                     queue_id.to_string(),
-                    assignment_info.to_string(),
+                    serde_json::to_string(&assignment_info)?,
                 )
                 .await?;
             if !claimed {
@@ -977,22 +986,11 @@ INSERT INTO run (
             let assignments: HashMap<String, String> = conn.hgetall("assigned-queue-items").await?;
 
             for (queue_id_str, assignment_info_str) in assignments {
-                if let (Ok(queue_id), Ok(assignment_info)) = (
+                if let (Ok(queue_id), Ok(info)) = (
                     queue_id_str.parse::<i64>(),
-                    serde_json::from_str::<serde_json::Value>(&assignment_info_str),
+                    serde_json::from_str::<AssignmentInfo>(&assignment_info_str),
                 ) {
-                    if let (Some(worker_name), Some(log_id), Some(assigned_at)) = (
-                        assignment_info.get("worker_name").and_then(|v| v.as_str()),
-                        assignment_info.get("log_id").and_then(|v| v.as_str()),
-                        assignment_info.get("assigned_at").and_then(|v| v.as_str()),
-                    ) {
-                        result.push((
-                            queue_id,
-                            worker_name.to_string(),
-                            log_id.to_string(),
-                            assigned_at.to_string(),
-                        ));
-                    }
+                    result.push((queue_id, info.worker_name, info.log_id, info.assigned_at));
                 }
             }
         }
@@ -1051,15 +1049,8 @@ INSERT INTO run (
                 .hget::<&str, String, String>("assigned-queue-items", queue_id.to_string())
                 .await
             {
-                if let Ok(assignment_info) =
-                    serde_json::from_str::<serde_json::Value>(&assignment_info_str)
-                {
-                    if let (Some(worker_name), Some(log_id)) = (
-                        assignment_info.get("worker_name").and_then(|v| v.as_str()),
-                        assignment_info.get("log_id").and_then(|v| v.as_str()),
-                    ) {
-                        return Ok(Some((worker_name.to_string(), log_id.to_string())));
-                    }
+                if let Ok(info) = serde_json::from_str::<AssignmentInfo>(&assignment_info_str) {
+                    return Ok(Some((info.worker_name, info.log_id)));
                 }
             }
         }
@@ -1095,17 +1086,11 @@ INSERT INTO run (
                 .hget::<&str, String, String>("assigned-queue-items", queue_id.to_string())
                 .await
             {
-                if let Ok(assignment_info) =
-                    serde_json::from_str::<serde_json::Value>(&assignment_info_str)
-                {
-                    if let Some(worker_name) =
-                        assignment_info.get("worker_name").and_then(|v| v.as_str())
-                    {
-                        // Remove from worker's set
-                        let _: () = conn
-                            .srem(format!("worker-queue-items:{}", worker_name), queue_id)
-                            .await?;
-                    }
+                if let Ok(info) = serde_json::from_str::<AssignmentInfo>(&assignment_info_str) {
+                    // Remove from worker's set
+                    let _: () = conn
+                        .srem(format!("worker-queue-items:{}", info.worker_name), queue_id)
+                        .await?;
                 }
             }
 
@@ -1128,14 +1113,18 @@ INSERT INTO run (
         if let Some(redis_client) = self.redis() {
             let mut conn = redis_client.get_multiplexed_async_connection().await?;
 
-            let health_info = serde_json::json!({
-                "status": status,
-                "current_run": current_run,
-                "last_heartbeat": Utc::now().to_rfc3339(),
-            });
+            let health_info = WorkerHealth {
+                status: status.to_string(),
+                current_run: current_run.map(String::from),
+                last_heartbeat: Utc::now().to_rfc3339(),
+            };
 
             let _: () = conn
-                .hset("worker-health", worker_name, health_info.to_string())
+                .hset(
+                    "worker-health",
+                    worker_name,
+                    serde_json::to_string(&health_info)?,
+                )
                 .await?;
 
             // Set expiration for worker health (cleanup stale workers)
@@ -1149,7 +1138,7 @@ INSERT INTO run (
     pub async fn get_worker_health(
         &self,
         worker_name: &str,
-    ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<WorkerHealth>, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(redis_client) = self.redis() {
             let mut conn = redis_client.get_multiplexed_async_connection().await?;
 
@@ -1158,7 +1147,7 @@ INSERT INTO run (
                 .await
             {
                 Ok(health_str) => {
-                    let health_info: serde_json::Value = serde_json::from_str(&health_str)?;
+                    let health_info: WorkerHealth = serde_json::from_str(&health_str)?;
                     return Ok(Some(health_info));
                 }
                 Err(_) => {
@@ -1173,7 +1162,7 @@ INSERT INTO run (
     /// Get all worker health statuses.
     pub async fn get_all_worker_health(
         &self,
-    ) -> Result<HashMap<String, serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<HashMap<String, WorkerHealth>, Box<dyn std::error::Error + Send + Sync>> {
         let mut result = HashMap::new();
 
         if let Some(redis_client) = self.redis() {
@@ -1181,7 +1170,7 @@ INSERT INTO run (
             let workers: HashMap<String, String> = conn.hgetall("worker-health").await?;
 
             for (worker_name, health_str) in workers {
-                if let Ok(health_info) = serde_json::from_str::<serde_json::Value>(&health_str) {
+                if let Ok(health_info) = serde_json::from_str::<WorkerHealth>(&health_str) {
                     result.insert(worker_name, health_info);
                 }
             }
@@ -1500,7 +1489,7 @@ INSERT INTO run (
 
     /// Get statistics about failed runs and retries.
     pub async fn get_failure_stats(&self) -> Result<HashMap<String, i64>, sqlx::Error> {
-        let rows = sqlx::query(
+        let rows: Vec<(String, i64)> = sqlx::query_as(
             r#"
             SELECT 
                 'total_failed' as stat_name, 
@@ -1524,72 +1513,28 @@ INSERT INTO run (
         .fetch_all(self.pool())
         .await?;
 
-        let mut stats = HashMap::new();
-        for row in rows {
-            let stat_name: String = row.get("stat_name");
-            let count: i64 = row.get("count");
-            stats.insert(stat_name, count);
-        }
-
-        Ok(stats)
+        Ok(rows.into_iter().collect())
     }
 
     /// Get all codebases from the database.
-    pub async fn get_codebases(&self) -> Result<Vec<serde_json::Value>, sqlx::Error> {
-        let rows = sqlx::query(
+    pub async fn get_codebases(&self) -> Result<Vec<CodebaseRow>, sqlx::Error> {
+        sqlx::query_as(
             "SELECT name, branch_url, url, branch, subpath, vcs_type::text AS vcs_type, web_url, vcs_last_revision, value FROM codebase"
         )
         .fetch_all(self.pool())
-        .await?;
-
-        let mut codebases = Vec::new();
-        for row in rows {
-            let codebase = serde_json::json!({
-                "name": row.get::<Option<String>, _>("name"),
-                "branch_url": row.get::<Option<String>, _>("branch_url"),
-                "url": row.get::<Option<String>, _>("url"),
-                "branch": row.get::<Option<String>, _>("branch"),
-                "subpath": row.get::<Option<String>, _>("subpath"),
-                "vcs_type": row.get::<Option<String>, _>("vcs_type"),
-                "web_url": row.get::<Option<String>, _>("web_url"),
-                "vcs_last_revision": row.get::<Option<String>, _>("vcs_last_revision"),
-                "value": row.get::<Option<i64>, _>("value")
-            });
-            codebases.push(codebase);
-        }
-
-        Ok(codebases)
+        .await
     }
 
     /// Upload/update codebases in the database.
-    pub async fn upload_codebases(
-        &self,
-        codebases: &[serde_json::Value],
-    ) -> Result<(), sqlx::Error> {
+    pub async fn upload_codebases(&self, codebases: &[CodebaseUpload]) -> Result<(), sqlx::Error> {
         let mut tx = self.pool().begin().await?;
 
         for codebase in codebases {
-            // Parse URL parameters if branch_url is provided
-            let (url, branch_url, branch) =
-                if let Some(branch_url_str) = codebase.get("branch_url").and_then(|v| v.as_str()) {
-                    // For now, simple handling - in the real implementation this would parse URL parameters
-                    (
-                        Some(branch_url_str.to_string()),
-                        Some(branch_url_str.to_string()),
-                        codebase
-                            .get("branch")
-                            .and_then(|v| v.as_str())
-                            .map(String::from),
-                    )
-                } else if let Some(url_str) = codebase.get("url").and_then(|v| v.as_str()) {
-                    let branch = codebase
-                        .get("branch")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    (Some(url_str.to_string()), Some(url_str.to_string()), branch)
-                } else {
-                    (None, None, None)
-                };
+            // TODO: split segment parameters out of branch_url (and join
+            // them into it when only url and branch are given).
+            let url = codebase.branch_url.as_ref().or(codebase.url.as_ref());
+            // A branch without a URL is meaningless; drop it.
+            let branch = url.and(codebase.branch.as_ref());
 
             sqlx::query(
                 r#"
@@ -1607,17 +1552,17 @@ INSERT INTO run (
                     web_url = EXCLUDED.web_url
                 "#
             )
-            .bind(codebase.get("name").and_then(|v| v.as_str()))
-            .bind(branch_url)
+            .bind(&codebase.name)
+            .bind(url)
             .bind(url)
             .bind(branch)
             // Store an empty subpath as "" rather than NULL when unset, so
             // downstream consumers get a string.
-            .bind(codebase.get("subpath").and_then(|v| v.as_str()).unwrap_or(""))
-            .bind(codebase.get("vcs_type").and_then(|v| v.as_str()))
-            .bind(codebase.get("vcs_last_revision").and_then(|v| v.as_str()))
-            .bind(codebase.get("value").and_then(|v| v.as_i64()))
-            .bind(codebase.get("web_url").and_then(|v| v.as_str()))
+            .bind(codebase.subpath.as_deref().unwrap_or(""))
+            .bind(&codebase.vcs_type)
+            .bind(&codebase.vcs_last_revision)
+            .bind(codebase.value)
+            .bind(&codebase.web_url)
             .execute(&mut *tx)
             .await?;
         }
@@ -1627,30 +1572,12 @@ INSERT INTO run (
     }
 
     /// Get all candidates from the database.
-    pub async fn get_candidates(&self) -> Result<Vec<serde_json::Value>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT id, codebase, suite, command, publish_policy, change_set, context, value, success_chance FROM candidate"
+    pub async fn get_candidates(&self) -> Result<Vec<CandidateRow>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT id, codebase, suite AS campaign, command, publish_policy, change_set, context, value, success_chance FROM candidate"
         )
         .fetch_all(self.pool())
-        .await?;
-
-        let mut candidates = Vec::new();
-        for row in rows {
-            let candidate = serde_json::json!({
-                "id": row.get::<i64, _>("id"),
-                "codebase": row.get::<String, _>("codebase"),
-                "campaign": row.get::<String, _>("suite"), // Note: "suite" maps to "campaign" in API
-                "command": row.get::<Option<String>, _>("command"),
-                "publish-policy": row.get::<Option<String>, _>("publish_policy"),
-                "change_set": row.get::<Option<String>, _>("change_set"),
-                "context": row.get::<Option<serde_json::Value>, _>("context"),
-                "value": row.get::<Option<i64>, _>("value"),
-                "success_chance": row.get::<Option<f64>, _>("success_chance")
-            });
-            candidates.push(candidate);
-        }
-
-        Ok(candidates)
+        .await
     }
 
     /// Upload/update candidates in the database.
@@ -1738,16 +1665,13 @@ INSERT INTO run (
             .execute(&mut *tx)
             .await?;
 
-        let candidate_info =
-            sqlx::query("DELETE FROM candidate WHERE id = $1 RETURNING suite, codebase")
+        let candidate_info: Option<(String, String)> =
+            sqlx::query_as("DELETE FROM candidate WHERE id = $1 RETURNING suite, codebase")
                 .bind(candidate_id)
                 .fetch_optional(&mut *tx)
                 .await?;
 
-        if let Some(row) = candidate_info {
-            let suite: String = row.get("suite");
-            let codebase: String = row.get("codebase");
-
+        if let Some((suite, codebase)) = candidate_info {
             sqlx::query("DELETE FROM queue WHERE suite = $1 AND codebase = $2")
                 .bind(&suite)
                 .bind(&codebase)
@@ -1770,7 +1694,7 @@ INSERT INTO run (
         campaign: &str,
     ) -> Result<Option<crate::ResultResume>, sqlx::Error> {
         // Look for a previous run on the same codebase and campaign that might be resumable
-        let resume_run = sqlx::query(
+        let resume_run_id: Option<String> = sqlx::query_scalar(
             r#"
             SELECT id FROM run 
             WHERE codebase = $1 AND suite = $2 AND id != $3
@@ -1786,14 +1710,7 @@ INSERT INTO run (
         .fetch_optional(self.pool())
         .await?;
 
-        if let Some(row) = resume_run {
-            let resume_run_id: String = row.get("id");
-            Ok(Some(crate::ResultResume {
-                run_id: resume_run_id,
-            }))
-        } else {
-            Ok(None)
-        }
+        Ok(resume_run_id.map(|run_id| crate::ResultResume { run_id }))
     }
 
     /// Get codebase configuration from database.
@@ -1801,9 +1718,9 @@ INSERT INTO run (
         &self,
         codebase_name: &str,
     ) -> Result<Option<CodebaseConfig>, sqlx::Error> {
-        // codebase.vcs_type is a postgres enum; cast to text so
-        // `row.get::<Option<String>, _>("vcs_type")` decodes cleanly.
-        let row = sqlx::query(
+        // codebase.vcs_type is a postgres enum; cast to text so it
+        // decodes into a String.
+        sqlx::query_as(
             r#"
             SELECT name, branch_url, vcs_type::text AS vcs_type, subpath
             FROM codebase
@@ -1812,18 +1729,7 @@ INSERT INTO run (
         )
         .bind(codebase_name)
         .fetch_optional(self.pool())
-        .await?;
-
-        if let Some(row) = row {
-            Ok(Some(CodebaseConfig {
-                name: row.get("name"),
-                branch_url: row.get("branch_url"),
-                vcs_type: row.get("vcs_type"),
-                subpath: row.get("subpath"),
-            }))
-        } else {
-            Ok(None)
-        }
+        .await
     }
 
     /// Get distribution configuration from database.
@@ -1838,126 +1744,125 @@ INSERT INTO run (
         Ok(None)
     }
 
-    /// Get remotes information for a run from the new_result_branch table.
-    pub async fn get_run_remotes(
+    /// Get the debian_build row for a run, if any.
+    pub async fn get_run_debian_build(
         &self,
         run_id: &str,
-    ) -> Result<
-        Option<
-            std::collections::HashMap<String, std::collections::HashMap<String, serde_json::Value>>,
-        >,
-        sqlx::Error,
-    > {
-        let rows = sqlx::query(
+    ) -> Result<Option<DebianBuildRow>, sqlx::Error> {
+        sqlx::query_as(
             r#"
-            SELECT DISTINCT remote_name, base_revision, revision
-            FROM new_result_branch
-            WHERE run_id = $1 AND remote_name IS NOT NULL
-            "#,
-        )
-        .bind(run_id)
-        .fetch_all(self.pool())
-        .await?;
-
-        if rows.is_empty() {
-            return Ok(None);
-        }
-
-        let mut remotes = std::collections::HashMap::new();
-        for row in rows {
-            let remote_name: String = row.get("remote_name");
-            let base_revision: Option<String> = row.get("base_revision");
-            let revision: Option<String> = row.get("revision");
-
-            let mut remote_data = std::collections::HashMap::new();
-            if let Some(base_rev) = base_revision {
-                remote_data.insert(
-                    "base_revision".to_string(),
-                    serde_json::Value::String(base_rev),
-                );
-            }
-            if let Some(rev) = revision {
-                remote_data.insert("revision".to_string(), serde_json::Value::String(rev));
-            }
-
-            remotes.insert(remote_name, remote_data);
-        }
-
-        Ok(Some(remotes))
-    }
-
-    /// Get target information for a run from the debian_build table.
-    pub async fn get_run_target(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<serde_json::Value>, sqlx::Error> {
-        let row = sqlx::query(
-            r#"
-            SELECT source, version, distribution, binary_packages, lintian_result
+            SELECT source, version::text AS version, distribution, binary_packages, lintian_result
             FROM debian_build
             WHERE run_id = $1
             "#,
         )
         .bind(run_id)
         .fetch_optional(self.pool())
-        .await?;
-
-        if let Some(row) = row {
-            let target_details = serde_json::json!({
-                "source": row.get::<String, _>("source"),
-                "version": row.get::<String, _>("version"),
-                "distribution": row.get::<String, _>("distribution"),
-                "binary_packages": row.get::<Option<Vec<String>>, _>("binary_packages"),
-                "lintian_result": row.get::<Option<serde_json::Value>, _>("lintian_result")
-            });
-
-            let target = serde_json::json!({
-                "name": "apt",
-                "details": target_details
-            });
-
-            Ok(Some(target))
-        } else {
-            Ok(None)
-        }
+        .await
     }
+}
 
-    /// Get builder result information for a run from the debian_build table.
-    pub async fn get_run_builder_result(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<serde_json::Value>, sqlx::Error> {
-        let row = sqlx::query(
-            r#"
-            SELECT source, version, distribution, binary_packages, lintian_result
-            FROM debian_build
-            WHERE run_id = $1
-            "#,
-        )
-        .bind(run_id)
-        .fetch_optional(self.pool())
-        .await?;
+/// Row of the codebase table as served by `GET /codebases`.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CodebaseRow {
+    /// Name of the codebase.
+    pub name: Option<String>,
+    /// URL of the branch, including any branch parameters.
+    pub branch_url: Option<String>,
+    /// URL of the repository.
+    pub url: Option<String>,
+    /// Name of the branch.
+    pub branch: Option<String>,
+    /// Subpath within the repository.
+    pub subpath: Option<String>,
+    /// Type of version control system.
+    pub vcs_type: Option<String>,
+    /// URL for browsing the codebase.
+    pub web_url: Option<String>,
+    /// Last known revision of the branch.
+    pub vcs_last_revision: Option<String>,
+    /// Value of the codebase.
+    pub value: Option<i32>,
+}
 
-        if let Some(row) = row {
-            let builder_result = serde_json::json!({
-                "kind": "apt",
-                "source": row.get::<String, _>("source"),
-                "build_version": row.get::<String, _>("version"),
-                "build_distribution": row.get::<String, _>("distribution"),
-                "binary_packages": row.get::<Option<Vec<String>>, _>("binary_packages"),
-                "lintian": row.get::<Option<serde_json::Value>, _>("lintian_result"),
-                "changes_filenames": null // Not stored in current schema
-            });
+/// Entry in a `POST /codebases` request body.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CodebaseUpload {
+    /// Name of the codebase.
+    pub name: Option<String>,
+    /// URL of the branch, including any branch parameters.
+    pub branch_url: Option<String>,
+    /// URL of the repository; used when `branch_url` is absent.
+    pub url: Option<String>,
+    /// Name of the branch.
+    pub branch: Option<String>,
+    /// Subpath within the repository.
+    pub subpath: Option<String>,
+    /// Type of version control system.
+    pub vcs_type: Option<String>,
+    /// URL for browsing the codebase.
+    pub web_url: Option<String>,
+    /// Last known revision of the branch.
+    pub vcs_last_revision: Option<String>,
+    /// Value of the codebase.
+    pub value: Option<i64>,
+}
 
-            Ok(Some(builder_result))
-        } else {
-            Ok(None)
+/// Row of the candidate table as served by `GET /candidates`.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CandidateRow {
+    /// Candidate id.
+    pub id: i32,
+    /// Name of the codebase.
+    pub codebase: String,
+    /// Campaign (stored as `suite`).
+    pub campaign: String,
+    /// Command to run.
+    pub command: String,
+    /// Name of the publish policy.
+    #[serde(rename = "publish-policy")]
+    pub publish_policy: Option<String>,
+    /// Change set the candidate belongs to.
+    pub change_set: Option<String>,
+    /// Free-form context.
+    pub context: Option<String>,
+    /// Value of the candidate.
+    pub value: Option<i32>,
+    /// Estimated chance of success.
+    pub success_chance: Option<f64>,
+}
+
+/// Row of the debian_build table.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct DebianBuildRow {
+    /// Source package name.
+    pub source: String,
+    /// Built version.
+    pub version: String,
+    /// Distribution built for.
+    pub distribution: String,
+    /// Binary packages produced.
+    pub binary_packages: Option<Vec<String>>,
+    /// Lintian result.
+    pub lintian_result: Option<serde_json::Value>,
+}
+
+impl From<DebianBuildRow> for BuilderResult {
+    fn from(row: DebianBuildRow) -> Self {
+        BuilderResult::Debian {
+            source: Some(row.source),
+            build_version: Some(row.version),
+            build_distribution: Some(row.distribution),
+            // TODO: changes_filenames are not stored in debian_build.
+            changes_filenames: None,
+            lintian_result: row.lintian_result,
+            binary_packages: row.binary_packages,
         }
     }
 }
 
 /// Configuration for a codebase from database.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct CodebaseConfig {
     /// Name of the codebase.
     pub name: String,
@@ -2044,13 +1949,11 @@ impl RunnerDatabase {
         let timeout = Duration::minutes(timeout_minutes);
         let now = Utc::now();
 
-        let all_workers = sqlx::query("SELECT name FROM worker")
+        let all_workers: Vec<String> = sqlx::query_scalar("SELECT name FROM worker")
             .fetch_all(self.pool())
             .await?;
 
-        for row in all_workers {
-            let worker_name: String = row.get("name");
-
+        for worker_name in all_workers {
             match last_seen.get(&worker_name) {
                 Some(last_seen_time) => {
                     if now.signed_duration_since(*last_seen_time) > timeout {

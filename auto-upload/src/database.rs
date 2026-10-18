@@ -3,7 +3,7 @@
 //! One `SELECT DISTINCT ON` over `debian_build`, optionally filtered by
 //! distribution.
 
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use tracing::{debug, info};
 
 use crate::error::Result;
@@ -14,7 +14,7 @@ pub struct DatabaseClient {
 }
 
 /// One row of the backfill query result.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct DebianBuild {
     /// Debian suite the build targeted.
     pub distribution: String,
@@ -52,7 +52,7 @@ impl DatabaseClient {
             debug!("filtering by distributions: {:?}", distributions);
         }
 
-        let rows = sqlx::query(
+        let builds: Vec<DebianBuild> = sqlx::query_as(
             "SELECT DISTINCT ON (distribution, source) distribution, source, run_id
              FROM debian_build
              WHERE $1::text[] IS NULL OR distribution = ANY($1::text[])
@@ -61,15 +61,6 @@ impl DatabaseClient {
         .bind(distributions)
         .fetch_all(self.pool())
         .await?;
-
-        let builds: Vec<DebianBuild> = rows
-            .into_iter()
-            .map(|row| DebianBuild {
-                distribution: row.get("distribution"),
-                source: row.get("source"),
-                run_id: row.get("run_id"),
-            })
-            .collect();
 
         info!("found {} builds for backfill", builds.len());
         Ok(builds)

@@ -8,13 +8,12 @@ use axum::{
 };
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use std::sync::Arc;
 
 use crate::database::RunnerDatabase;
 
 /// Worker authentication information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct WorkerAuth {
     /// Worker name/username.
     pub name: String,
@@ -102,22 +101,13 @@ impl WorkerAuthService {
         password: &str,
     ) -> Result<Option<WorkerAuth>, AuthError> {
         // Query the worker table with encrypted password verification
-        let row = sqlx::query(
+        Ok(sqlx::query_as(
             "SELECT name, link FROM worker WHERE name = $1 AND password = crypt($2, password)",
         )
         .bind(username)
         .bind(password)
         .fetch_optional(self.database.pool())
-        .await?;
-
-        if let Some(row) = row {
-            let name: String = row.get("name");
-            let link: Option<String> = row.get("link");
-
-            Ok(Some(WorkerAuth { name, link }))
-        } else {
-            Ok(None)
-        }
+        .await?)
     }
 
     /// Create a new worker account (for admin operations).
@@ -173,18 +163,11 @@ impl WorkerAuthService {
 
     /// List all worker accounts.
     pub async fn list_workers(&self) -> Result<Vec<WorkerAuth>, AuthError> {
-        let rows = sqlx::query("SELECT name, link FROM worker ORDER BY name")
-            .fetch_all(self.database.pool())
-            .await?;
-
-        let mut workers = Vec::new();
-        for row in rows {
-            let name: String = row.get("name");
-            let link: Option<String> = row.get("link");
-            workers.push(WorkerAuth { name, link });
-        }
-
-        Ok(workers)
+        Ok(
+            sqlx::query_as("SELECT name, link FROM worker ORDER BY name")
+                .fetch_all(self.database.pool())
+                .await?,
+        )
     }
 
     /// Check if a worker exists.

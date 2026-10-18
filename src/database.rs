@@ -1,6 +1,6 @@
 //! Shared database utilities and connection management
 
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use sqlx_postgres::PgPoolOptions;
 use std::time::Duration;
 
@@ -192,14 +192,11 @@ impl Database {
 
     /// Execute a health check query
     pub async fn health_check(&self) -> Result<bool, DatabaseError> {
-        match sqlx::query("SELECT 1 as health")
+        match sqlx::query_scalar::<_, i32>("SELECT 1 as health")
             .fetch_one(&self.pool)
             .await
         {
-            Ok(row) => {
-                let health: i32 = row.try_get("health")?;
-                Ok(health == 1)
-            }
+            Ok(health) => Ok(health == 1),
             Err(_) => Ok(false),
         }
     }

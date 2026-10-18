@@ -3,7 +3,6 @@ use breezyshim::branch::{Branch, GenericBranch};
 use breezyshim::error::Error as BrzError;
 use breezyshim::forge::get_forge;
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use std::error::Error;
 use std::fmt;
 
@@ -210,7 +209,15 @@ impl ResumeService {
         run_id: &str,
         potential_resume_id: &str,
     ) -> Result<bool, ResumeError> {
-        let row = sqlx::query(
+        #[derive(sqlx::FromRow)]
+        struct RunPair {
+            current_campaign: String,
+            current_codebase: String,
+            resume_campaign: String,
+            resume_codebase: String,
+            resume_result: String,
+        }
+        let row: Option<RunPair> = sqlx::query_as(
             r#"
             SELECT
                 r1.suite as current_campaign,
@@ -227,25 +234,17 @@ impl ResumeService {
         .fetch_optional(self.database.pool())
         .await?;
 
-        if let Some(row) = row {
-            let current_campaign: String = row.get("current_campaign");
-            let current_codebase: String = row.get("current_codebase");
-            let resume_campaign: String = row.get("resume_campaign");
-            let resume_codebase: String = row.get("resume_codebase");
-            let resume_result: String = row.get("resume_result");
-
-            // Can only resume if campaigns and codebases match and previous run was successful
-            Ok(current_campaign == resume_campaign
-                && current_codebase == resume_codebase
-                && (resume_result == "success" || resume_result == "nothing-new-to-do"))
-        } else {
-            Ok(false)
-        }
+        // Can only resume if campaigns and codebases match and previous run was successful
+        Ok(row.is_some_and(|row| {
+            row.current_campaign == row.resume_campaign
+                && row.current_codebase == row.resume_codebase
+                && (row.resume_result == "success" || row.resume_result == "nothing-new-to-do")
+        }))
     }
 
     /// Get all runs that resume from a specific run
     pub async fn get_resume_descendants(&self, run_id: &str) -> Result<Vec<String>, ResumeError> {
-        let rows = sqlx::query(
+        Ok(sqlx::query_scalar(
             r#"
             WITH RECURSIVE resume_tree AS (
                 SELECT id, resume_from, 1 as level
@@ -264,14 +263,12 @@ impl ResumeService {
         )
         .bind(run_id)
         .fetch_all(self.database.pool())
-        .await?;
-
-        Ok(rows.into_iter().map(|row| row.get("id")).collect())
+        .await?)
     }
 
     /// Get the resume chain for a run (all the runs it transitively resumes from)
     pub async fn get_resume_chain(&self, run_id: &str) -> Result<Vec<String>, ResumeError> {
-        let rows = sqlx::query(
+        Ok(sqlx::query_scalar(
             r#"
             WITH RECURSIVE resume_chain AS (
                 SELECT id, resume_from, 0 as level
@@ -290,14 +287,12 @@ impl ResumeService {
         )
         .bind(run_id)
         .fetch_all(self.database.pool())
-        .await?;
-
-        Ok(rows.into_iter().map(|row| row.get("id")).collect())
+        .await?)
     }
 
     /// Validate that resume relationships are consistent
     pub async fn validate_resume_consistency(&self) -> Result<Vec<String>, ResumeError> {
-        let rows = sqlx::query(
+        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
             r#"
             SELECT r1.id, r1.resume_from
             FROM run r1
@@ -311,9 +306,7 @@ impl ResumeService {
 
         Ok(rows
             .into_iter()
-            .map(|row| {
-                let id: String = row.get("id");
-                let resume_from: Option<String> = row.get("resume_from");
+            .map(|(id, resume_from)| {
                 format!("Run {} has invalid resume_from: {:?}", id, resume_from)
             })
             .collect())
