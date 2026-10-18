@@ -35,7 +35,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY . /code
 
 RUN pip3 install --upgrade "/code[gcp,site]" \
- && rm -rf /code
+ && rm -rf /code \
+ && find /opt/venv -name '*.so' -exec strip --strip-unneeded {} +
 
 FROM docker.io/debian:testing-slim
 MAINTAINER Jelmer Vernooij <jelmer@jelmer.uk>
