@@ -187,9 +187,11 @@ impl ArchiveWebService {
                 get(serve_suite_file),
             )
             // By-hash serving
+            // Either an index of a suite or a component file, like
+            // Contents-<arch>, of an on-demand repository.
             .route(
-                "/dists/{suite}/{component}/{binary_arch}/by-hash/{algo}/{hash}",
-                get(serve_suite_file),
+                "/dists/{a}/{b}/{c}/by-hash/{algo}/{hash}",
+                get(serve_by_hash_file),
             )
             .route(
                 "/dists/{suite}/{component}/source/by-hash/{algo}/{hash}",
@@ -203,6 +205,10 @@ impl ArchiveWebService {
             // Either the Release of an on-demand repository or a
             // component file of a suite, like Contents-<arch>.
             .route("/dists/{kind}/{id}/{file}", get(serve_dists_file))
+            .route(
+                "/dists/{kind}/{id}/{component}/{file}",
+                get(serve_on_demand_file),
+            )
             .route(
                 "/dists/{kind}/{id}/{component}/{binary_arch}/{file}",
                 get(serve_on_demand_file),
@@ -606,6 +612,22 @@ async fn serve_on_demand_file(
     let kind = params.get("kind").ok_or(StatusCode::BAD_REQUEST)?;
     let id = params.get("id").ok_or(StatusCode::BAD_REQUEST)?;
     serve_from_on_demand(&state, kind, id, request).await
+}
+
+/// Serve `/dists/{a}/{b}/{c}/by-hash/{algo}/{hash}`. Index directories
+/// are `source` or `binary-<arch>`, which no component is called, so
+/// for those `a` is a suite; otherwise `a/b` is an on-demand repository
+/// and `c` one of its components.
+async fn serve_by_hash_file(
+    Path((a, b, c, _algo, _hash)): Path<(String, String, String, String, String)>,
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Response, StatusCode> {
+    if c == "source" || c.starts_with("binary-") {
+        serve_from_suite(&state, &a, request).await
+    } else {
+        serve_from_on_demand(&state, &a, &b, request).await
+    }
 }
 
 async fn serve_from_on_demand(

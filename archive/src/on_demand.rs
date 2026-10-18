@@ -391,7 +391,7 @@ pub async fn refresh_on_demand_dists(
 
     let build_infos: Vec<BuildInfo> = builds.into_iter().map(Into::into).collect();
     let pkg_provider = PrecomputedPackageProvider::new(scanner.clone(), build_infos.clone());
-    let src_provider = PrecomputedSourceProvider::new(scanner, build_infos);
+    let src_provider = PrecomputedSourceProvider::new(scanner.clone(), build_infos.clone());
 
     let repository = on_demand_repository(
         origin,
@@ -406,6 +406,7 @@ pub async fn refresh_on_demand_dists(
         .generate_repository(&base_path, &pkg_provider, &src_provider)
         .await
         .map_err(|e| ArchiveError::RepositoryGeneration(e.to_string()))?;
+    crate::repository::generate_contents(&async_repo, &scanner, &base_path, &build_infos).await?;
 
     if let Some(gpg_cfg) = gpg {
         let release_bytes = tokio::fs::read(&release_path)

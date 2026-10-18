@@ -342,7 +342,13 @@ impl RepositoryGenerator {
         // signature covers the updated Release. Done in-process by
         // parsing each .deb's data.tar directly, avoiding a
         // dpkg-deb subprocess per package.
-        self.generate_contents(repo_config, &build_infos).await?;
+        generate_contents(
+            &async_repo,
+            &self.scanner,
+            &repo_config.base_path,
+            &build_infos,
+        )
+        .await?;
 
         // Sign Release so periodic and /publish flows produce
         // Release.gpg + InRelease alongside Release.
@@ -433,145 +439,6 @@ impl RepositoryGenerator {
         Ok(())
     }
 
-    /// Generate `Contents-<arch>` (and its `.gz`) for every
-    /// `(component, arch)` pair in the repo config, then append
-    /// their hashed-file entries to the on-disk `Release` file so
-    /// apt clients pick them up.
-    ///
-    /// Implementation notes:
-    ///
-    ///   * Contents lists arch-native *and* `all` packages --
-    ///     handled inside `scan_deb_contents_for_build`, not here.
-    ///   * We emit under `<base>/<component>/Contents-<arch>{,.gz}`,
-    ///     the layout apt actually reads (matches `dak`).
-    ///   * `.deb` file lists come from parsing `data.tar.*`
-    ///     in-process (`crate::deb`), avoiding one dpkg-deb
-    ///     subprocess per package (~thousands per suite).
-    ///   * Errors from a single .deb are logged and skipped -- a
-    ///     malformed package must not break Contents generation
-    ///     for the rest of the suite.
-    async fn generate_contents(
-        &self,
-        repo_config: &AptRepositoryConfig,
-        build_infos: &[crate::scanner::BuildInfo],
-    ) -> ArchiveResult<()> {
-        use crate::contents::{format_contents, ContentsEntry};
-        use apt_repository::{hash::hash_data, HashAlgorithm, HashedFile};
-        use std::io::Write;
-
-        // Map hash-algorithm config -> apt_repository enum. We
-        // hash Contents with the same set the Packages file uses
-        // so Release entries look consistent.
-        let hash_algos: Vec<HashAlgorithm> = self
-            .config
-            .hash_algorithms
-            .iter()
-            .map(|h| (*h).clone().into())
-            .collect();
-
-        let mut new_release_entries: Vec<(String, HashedFile)> = Vec::new();
-
-        for component in &repo_config.components {
-            for arch in &repo_config.architectures {
-                // `source` isn't a binary architecture -- no
-                // Contents file. Everything else is fair game;
-                // dak generates Contents-i386, Contents-amd64,
-                // Contents-udeb-*, etc.
-                if arch == "source" {
-                    continue;
-                }
-                info!(
-                    "Generating Contents-{} for {}/{}",
-                    arch, repo_config.name, component
-                );
-                let mut entries: Vec<ContentsEntry> = Vec::new();
-                for build in build_infos {
-                    match self.scanner.scan_deb_contents_for_build(build, arch).await {
-                        Ok(pkg_files) => {
-                            for (pkg_name, files) in pkg_files {
-                                if files.is_empty() {
-                                    continue;
-                                }
-                                entries.push(ContentsEntry {
-                                    // dak's Contents format uses
-                                    // `<component>/<package>`.
-                                    qualified_name: format!("{}/{}", component, pkg_name),
-                                    files,
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            warn!(
-                                "scan_deb_contents_for_build({}, {}) failed: {}",
-                                build.id, arch, e
-                            );
-                        }
-                    }
-                }
-
-                let body = format_contents(&entries);
-                let component_dir = repo_config.base_path.join(component);
-                fs::create_dir_all(&component_dir)
-                    .await
-                    .map_err(ArchiveError::Io)?;
-
-                // Uncompressed
-                let plain_name = format!("Contents-{}", arch);
-                let plain_path = component_dir.join(&plain_name);
-                fs::write(&plain_path, body.as_bytes())
-                    .await
-                    .map_err(ArchiveError::Io)?;
-                let (plain_size, plain_hashes) = hash_data(body.as_bytes(), &hash_algos);
-                let mut plain_hf =
-                    HashedFile::new(format!("{}/{}", component, plain_name), plain_size);
-                plain_hf.hashes = plain_hashes;
-                new_release_entries.push((format!("{}/{}", component, plain_name), plain_hf));
-
-                // Gzipped
-                let gz_bytes = gzip_bytes(body.as_bytes())?;
-                let gz_name = format!("Contents-{}.gz", arch);
-                let gz_path = component_dir.join(&gz_name);
-                fs::write(&gz_path, &gz_bytes)
-                    .await
-                    .map_err(ArchiveError::Io)?;
-                let (gz_size, gz_hashes) = hash_data(&gz_bytes, &hash_algos);
-                let mut gz_hf = HashedFile::new(format!("{}/{}", component, gz_name), gz_size);
-                gz_hf.hashes = gz_hashes;
-                new_release_entries.push((format!("{}/{}", component, gz_name), gz_hf));
-
-                // by-hash symlinks/copies so `Acquire-By-Hash:
-                // yes` clients can fetch stable hash URLs.
-                if self.config.by_hash {
-                    write_by_hash(&component_dir, body.as_bytes(), &hash_algos).await?;
-                    write_by_hash(&component_dir, &gz_bytes, &hash_algos).await?;
-                }
-            }
-        }
-
-        // Splice the new entries into Release. AsyncRepository
-        // already wrote Release; parse it, add the new files, and
-        // rewrite. Doing this in-place (rather than modifying the
-        // returned Release object) keeps the file on disk as the
-        // single source of truth so a signing failure doesn't
-        // leave the metadata inconsistent.
-        let release_path = repo_config.base_path.join("Release");
-        let release_bytes = fs::read(&release_path).await.map_err(ArchiveError::Io)?;
-        let release_str = String::from_utf8(release_bytes).map_err(|e| {
-            ArchiveError::RepositoryGeneration(format!("Release is not UTF-8: {}", e))
-        })?;
-        let mut release = apt_repository::Release::from_str(&release_str)
-            .map_err(|e| ArchiveError::RepositoryGeneration(e.to_string()))?;
-        for (_path, hf) in new_release_entries {
-            release.add_file(hf);
-        }
-        let mut writer = std::fs::File::create(&release_path).map_err(ArchiveError::Io)?;
-        writer
-            .write_all(release.to_string().as_bytes())
-            .map_err(ArchiveError::Io)?;
-
-        Ok(())
-    }
-
     /// Validate repository configuration.
     pub fn validate_config(&self, repo_config: &AptRepositoryConfig) -> ArchiveResult<()> {
         repo_config
@@ -592,6 +459,146 @@ impl RepositoryGenerator {
 
         Ok(())
     }
+}
+
+/// Generate `Contents-<arch>` (and its `.gz`) for every
+/// `(component, arch)` pair of `async_repo`, then append
+/// their hashed-file entries to the on-disk `Release` file so
+/// apt clients pick them up.
+///
+/// Implementation notes:
+///
+///   * Contents lists arch-native *and* `all` packages --
+///     handled inside `scan_deb_contents_for_build`, not here.
+///   * We emit under `<base>/<component>/Contents-<arch>{,.gz}`,
+///     the layout apt actually reads (matches `dak`).
+///   * `.deb` file lists come from parsing `data.tar.*`
+///     in-process (`crate::deb`), avoiding one dpkg-deb
+///     subprocess per package (~thousands per suite).
+///   * Shared by the configured suites and the on-demand
+///     repositories, so both list the same Contents.
+pub(crate) async fn generate_contents(
+    async_repo: &AsyncRepository,
+    scanner: &PackageScanner,
+    base_path: &std::path::Path,
+    build_infos: &[crate::scanner::BuildInfo],
+) -> ArchiveResult<()> {
+    use crate::contents::{format_contents, ContentsEntry};
+    use apt_repository::{hash::hash_data, HashedFile};
+    use std::io::Write;
+
+    // Map hash-algorithm config -> apt_repository enum. We
+    // hash Contents with the same set the Packages file uses
+    // so Release entries look consistent.
+    let repository = async_repo.inner();
+    let hash_algos = &repository.hash_algorithms;
+
+    let mut new_release_entries: Vec<(String, HashedFile)> = Vec::new();
+
+    for component in &repository.components {
+        for arch in &repository.architectures {
+            // `source` isn't a binary architecture -- no
+            // Contents file. Everything else is fair game;
+            // dak generates Contents-i386, Contents-amd64,
+            // Contents-udeb-*, etc.
+            if arch == "source" {
+                continue;
+            }
+            info!(
+                "Generating Contents-{} for {}/{}",
+                arch, repository.suite, component
+            );
+            let mut entries: Vec<ContentsEntry> = Vec::new();
+            for build in build_infos {
+                // Builds without artifacts are left out, as they
+                // are from Packages; any other error fails the
+                // publish rather than silently dropping packages.
+                let pkg_files = match scanner.scan_deb_contents_for_build(build, arch).await {
+                    Ok(pkg_files) => pkg_files,
+                    Err(e @ ArchiveError::ArtifactsMissing { .. }) => {
+                        warn!("Skipping contents of build {}: {}", build.id, e);
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                };
+                for (location, files) in pkg_files {
+                    if files.is_empty() {
+                        continue;
+                    }
+                    entries.push(ContentsEntry {
+                        qualified_name: location,
+                        files,
+                    });
+                }
+            }
+
+            let body = format_contents(&entries);
+            let component_dir = base_path.join(component);
+            fs::create_dir_all(&component_dir)
+                .await
+                .map_err(ArchiveError::Io)?;
+
+            // Uncompressed
+            let plain_name = format!("Contents-{}", arch);
+            let plain_path = component_dir.join(&plain_name);
+            fs::write(&plain_path, body.as_bytes())
+                .await
+                .map_err(ArchiveError::Io)?;
+            let (plain_size, plain_hashes) = hash_data(body.as_bytes(), hash_algos);
+            let mut plain_hf = HashedFile::new(format!("{}/{}", component, plain_name), plain_size);
+            plain_hf.hashes = plain_hashes;
+            new_release_entries.push((format!("{}/{}", component, plain_name), plain_hf));
+
+            // Gzipped
+            let gz_bytes = gzip_bytes(body.as_bytes())?;
+            let gz_name = format!("Contents-{}.gz", arch);
+            let gz_path = component_dir.join(&gz_name);
+            fs::write(&gz_path, &gz_bytes)
+                .await
+                .map_err(ArchiveError::Io)?;
+            let (gz_size, gz_hashes) = hash_data(&gz_bytes, hash_algos);
+            let mut gz_hf = HashedFile::new(format!("{}/{}", component, gz_name), gz_size);
+            gz_hf.hashes = gz_hashes;
+            new_release_entries.push((format!("{}/{}", component, gz_name), gz_hf));
+
+            // by-hash symlinks/copies so `Acquire-By-Hash:
+            // yes` clients can fetch stable hash URLs.
+            if repository.acquire_by_hash {
+                write_by_hash(&component_dir, body.as_bytes(), hash_algos).await?;
+                write_by_hash(&component_dir, &gz_bytes, hash_algos).await?;
+                // The component directory holds the Contents
+                // by-hash files; prune them like the index ones.
+                if let Some(keep) = repository.by_hash_keep {
+                    async_repo
+                        .cleanup_by_hash_files_async(&component_dir, keep)
+                        .await
+                        .map_err(|e| ArchiveError::RepositoryGeneration(e.to_string()))?;
+                }
+            }
+        }
+    }
+
+    // Splice the new entries into Release. AsyncRepository
+    // already wrote Release; parse it, add the new files, and
+    // rewrite. Doing this in-place (rather than modifying the
+    // returned Release object) keeps the file on disk as the
+    // single source of truth so a signing failure doesn't
+    // leave the metadata inconsistent.
+    let release_path = base_path.join("Release");
+    let release_bytes = fs::read(&release_path).await.map_err(ArchiveError::Io)?;
+    let release_str = String::from_utf8(release_bytes)
+        .map_err(|e| ArchiveError::RepositoryGeneration(format!("Release is not UTF-8: {}", e)))?;
+    let mut release = apt_repository::Release::from_str(&release_str)
+        .map_err(|e| ArchiveError::RepositoryGeneration(e.to_string()))?;
+    for (_path, hf) in new_release_entries {
+        release.add_file(hf);
+    }
+    let mut writer = std::fs::File::create(&release_path).map_err(ArchiveError::Io)?;
+    writer
+        .write_all(release.to_string().as_bytes())
+        .map_err(ArchiveError::Io)?;
+
+    Ok(())
 }
 
 #[cfg(test)]

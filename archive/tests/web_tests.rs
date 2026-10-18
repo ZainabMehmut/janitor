@@ -244,11 +244,12 @@ test_with_database! {
             "main/source/Sources.bz2",
         ];
         let contents = ["main/Contents-amd64", "main/Contents-amd64.gz"];
-        for (prefix, suite, files) in [
-            ("/dists/lintian-fixes", "lintian-fixes", [&indices[..], &contents[..]].concat()),
-            ("/dists/run/run-1", "run/run-1", indices.to_vec()),
-            ("/dists/cs/cs-1", "cs/cs-1", indices.to_vec()),
-            ("/dists/lintian-fixes/hello", "lintian-fixes/hello", indices.to_vec()),
+        let files = [&indices[..], &contents[..]].concat();
+        for (prefix, suite) in [
+            ("/dists/lintian-fixes", "lintian-fixes"),
+            ("/dists/run/run-1", "run/run-1"),
+            ("/dists/cs/cs-1", "cs/cs-1"),
+            ("/dists/lintian-fixes/hello", "lintian-fixes/hello"),
         ] {
             let (release, names) = check_release(&app, prefix).await;
             assert_eq!(release.get("Suite"), Some(suite), "{prefix}");
@@ -273,18 +274,17 @@ test_with_database! {
                 vec![vec!["hello", "lintian-fixes/pkg/hello/run-1"]],
                 "{prefix}"
             );
-        }
 
-        let (status, body) = get(&app, "/dists/lintian-fixes/main/Contents-amd64").await;
-        assert_eq!(status, StatusCode::OK);
-        let body = String::from_utf8(body).unwrap();
-        let hello: Vec<Vec<&str>> = body
-            .lines()
-            .map(|l| l.split_whitespace().collect())
-            .filter(|f: &Vec<&str>| f[0] == "usr/bin/hello")
-            .collect();
-        // TODO: Debian uses the package's section here (devel/hello).
-        assert_eq!(hello, vec![vec!["usr/bin/hello", "main/hello"]], "{body}");
+            let (status, body) = get(&app, &format!("{prefix}/main/Contents-amd64")).await;
+            assert_eq!(status, StatusCode::OK, "{prefix}");
+            let body = String::from_utf8(body).unwrap();
+            let hello: Vec<Vec<&str>> = body
+                .lines()
+                .map(|l| l.split_whitespace().collect())
+                .filter(|f: &Vec<&str>| f[0] == "usr/bin/hello")
+                .collect();
+            assert_eq!(hello, vec![vec!["usr/bin/hello", "devel/hello"]], "{prefix}");
+        }
     }
 }
 
