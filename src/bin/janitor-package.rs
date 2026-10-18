@@ -657,3 +657,98 @@ async fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn cli_parses_publish_trigger_with_multiword_mode() {
+        // clap's derived ValueEnum names are kebab-case, so the variant needs a hyphen.
+        let cli = Cli::try_parse_from([
+            "janitor-package",
+            "--url",
+            "https://example.com",
+            "publish",
+            "trigger",
+            "lintian-fixes",
+            "mypkg",
+            "--mode",
+            "attempt-push",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Publish {
+                cmd: PublishCmd::Trigger { mode, .. },
+            } => {
+                assert_eq!(mode.map(|m| m.as_str()), Some("attempt-push"));
+            }
+            _ => panic!("wrong subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_rejects_merge_proposals_list_with_both_codebase_and_campaign() {
+        let result = Cli::try_parse_from([
+            "janitor-package",
+            "--url",
+            "https://example.com",
+            "merge-proposals",
+            "list",
+            "--codebase",
+            "mypkg",
+            "--campaign",
+            "lintian-fixes",
+        ]);
+        assert_eq!(
+            result.err().map(|e| e.kind()),
+            Some(clap::error::ErrorKind::ArgumentConflict)
+        );
+    }
+
+    #[test]
+    fn as_str_matches_clap_value_names_for_every_variant() {
+        for v in PublishMode::value_variants() {
+            assert_eq!(v.as_str(), v.to_possible_value().unwrap().get_name());
+        }
+        for v in Verdict::value_variants() {
+            assert_eq!(v.as_str(), v.to_possible_value().unwrap().get_name());
+        }
+    }
+
+    async fn serve(app: axum::Router) -> ApiClient {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        ApiClient::new(format!("http://{}/", addr).parse().unwrap(), None, None).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_rejected_request_is_an_error() {
+        let client = serve(axum::Router::new().route(
+            "/api/runner/status",
+            axum::routing::get(|| async { (StatusCode::UNAUTHORIZED, "401: Unauthorized") }),
+        ))
+        .await;
+
+        assert_eq!(
+            cmd_status(&client).await,
+            Err("HTTP 401 Unauthorized: 401: Unauthorized".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rejected_publish_trigger_is_an_error() {
+        let client = serve(axum::Router::new().route(
+            "/api/lintian-fixes/c/mypkg/publish",
+            axum::routing::post(|| async { (StatusCode::UNAUTHORIZED, "401: Unauthorized") }),
+        ))
+        .await;
+
+        assert_eq!(
+            cmd_publish_trigger(&client, "lintian-fixes", "mypkg", None).await,
+            Err("HTTP 401 Unauthorized: 401: Unauthorized".to_string())
+        );
+    }
+}
