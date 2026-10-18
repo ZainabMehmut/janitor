@@ -164,3 +164,103 @@ fn main() -> std::process::ExitCode {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CONFIG: &str = r#"
+        distribution {
+            name: "unstable"
+            archive_mirror_uri: "http://deb.debian.org/debian"
+            chroot: "unstable-amd64-sbuild"
+            component: "main"
+            component: "contrib"
+            extra: "experimental"
+        }
+        distribution { name: "stable" }
+        campaign {
+            name: "lintian-fixes"
+            debian_build { base_distribution: "unstable" build_distribution: "lintian-fixes" }
+        }
+        campaign {
+            name: "stable-fixes"
+            debian_build { base_distribution: "stable" build_distribution: "stable-fixes" }
+        }
+        campaign {
+            name: "unchanged"
+            debian_build { base_distribution: "unstable" build_distribution: "unchanged" }
+        }
+        campaign { name: "generic" generic_build {} }
+    "#;
+
+    #[test]
+    fn test_build_distributions() {
+        let config = janitor::config::read_string(CONFIG).unwrap();
+        assert_eq!(
+            build_distributions(&config, "unstable"),
+            vec!["lintian-fixes".to_string(), "unchanged".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_mmdebstrap_command() {
+        let config = janitor::config::read_string(CONFIG).unwrap();
+        let distribution = config.get_distribution("unstable").unwrap();
+        assert_eq!(
+            mmdebstrap_command(
+                distribution,
+                Path::new("/c/unstable-amd64-sbuild.tar.xz"),
+                "amd64",
+                &["eatmydata".to_string(), "ccache".to_string()]
+            ),
+            vec![
+                "mmdebstrap",
+                "--variant=buildd",
+                "unstable",
+                "/c/unstable-amd64-sbuild.tar.xz",
+                "http://deb.debian.org/debian",
+                "--mode=unshare",
+                "--arch=amd64",
+                "--components=main,contrib",
+                "--include=eatmydata,ccache",
+                "--extra-repository=deb http://deb.debian.org/debian experimental main contrib",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_link_suites_replaces_links() {
+        let td = tempfile::tempdir().unwrap();
+        let tarball = td.path().join("unstable-amd64-sbuild.tar.xz");
+        std::fs::write(&tarball, "").unwrap();
+        let old = td.path().join("lintian-fixes-amd64-sbuild.tar.xz");
+        std::os::unix::fs::symlink("old.tar.xz", &old).unwrap();
+
+        let suites = vec!["lintian-fixes".to_string(), "unchanged".to_string()];
+        link_suites(&tarball, &suites, "amd64").unwrap();
+
+        let mut links: Vec<(String, PathBuf)> = std::fs::read_dir(td.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.is_symlink())
+            .map(|p| {
+                let name = p.file_name().unwrap().to_str().unwrap().to_string();
+                (name, std::fs::read_link(&p).unwrap())
+            })
+            .collect();
+        links.sort();
+        assert_eq!(
+            links,
+            vec![
+                (
+                    "lintian-fixes-amd64-sbuild.tar.xz".to_string(),
+                    PathBuf::from("unstable-amd64-sbuild.tar.xz")
+                ),
+                (
+                    "unchanged-amd64-sbuild.tar.xz".to_string(),
+                    PathBuf::from("unstable-amd64-sbuild.tar.xz")
+                ),
+            ]
+        );
+    }
+}
