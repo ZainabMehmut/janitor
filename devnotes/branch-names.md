@@ -1,5 +1,6 @@
-Goal
-====
+# Branch names
+
+## Goal
 
 For runs:
 * runs/$uuid/$function tags
@@ -20,12 +21,11 @@ Names for functions:
 * "upstream" for the upstream import branch for Debian packages
 * "pristine-tar" for the pristine-tar branch
 
-Roadmap
-=======
+## Roadmap
 
 * Update publisher to use new tag names
 
-* Send requests to publisher to mirror origin/upstream repositories
+* Send requests to publisher to mirror origin/upstream repositories.
   To start off with just:
    * name of remote ("origin", "upstream")
    * URL of remote
