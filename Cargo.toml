@@ -63,6 +63,10 @@ opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"], optional = true
 opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"], optional = true }
 tracing-opentelemetry = { version = "0.34", optional = true }
 
+[dev-dependencies]
+# Self-reference so `cargo test -p janitor` runs the `testing`-gated tests, as in runner/Cargo.toml.
+janitor = { path = ".", features = ["testing"] }
+
 [workspace.dependencies]
 rslock = { default-features = false, version = "0.7" }
 static_assertions = "1.1.0"
