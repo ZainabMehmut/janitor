@@ -132,3 +132,5 @@ gcs = ["dep:google-cloud-storage", "dep:google-cloud-auth", "dep:google-cloud-ga
 testing = ["sqlx/postgres", "sqlx/runtime-tokio", "sqlx/tls-rustls-aws-lc-rs"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 
+[profile.release]
+strip = true
