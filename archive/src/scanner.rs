@@ -525,7 +525,7 @@ mod tests {
     /// Apt clients follow the `Filename:` field verbatim, so the
     /// pool-filename layout must be exactly
     /// `<suite>/pkg/<package>/<run_id>/<basename>`. Any drift
-    /// breaks `/pool/...` fetches.
+    /// breaks package downloads.
     #[test]
     fn pool_filename_layout_is_stable() {
         let got = super::pool_filename("unstable", "hello", "abc-123", "hello_2.10-3_amd64.deb");
