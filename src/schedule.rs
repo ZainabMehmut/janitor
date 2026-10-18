@@ -39,6 +39,13 @@ pub struct ScheduleRequest {
     change_set: Option<String>,
 }
 
+#[derive(sqlx::FromRow)]
+struct ScheduleRequestRow {
+    #[sqlx(flatten)]
+    request: ScheduleRequest,
+    publish_modes: Option<Vec<String>>,
+}
+
 pub async fn iter_schedule_requests_from_candidates(
     conn: &PgPool,
     codebases: Option<Vec<&str>>,
@@ -54,7 +61,7 @@ SELECT
   codebase.branch_url AS branch_url,
   candidate.suite AS campaign,
   candidate.context AS context,
-  candidate.value AS value,
+  candidate.value::bigint AS value,
   candidate.success_chance AS success_chance,
   (
     SELECT array_agg(p.mode::text)
@@ -79,20 +86,14 @@ WHERE TRUE
         query.push_bind(campaign);
     }
 
-    let query = query.build();
-
-    let rows = query.fetch_all(conn).await?;
+    let rows: Vec<ScheduleRequestRow> = query.build_query_as().fetch_all(conn).await?;
 
     Ok(rows.into_iter().map(|row| {
-        use sqlx::FromRow;
-        use sqlx::Row;
-        let mut req = ScheduleRequest::from_row(&row).unwrap();
+        let mut req = row.request;
 
-        let pm = row
-            .get::<Option<Vec<String>>, _>("publish_modes")
-            .unwrap_or_default();
-
-        req.value += pm
+        req.value += row
+            .publish_modes
+            .unwrap_or_default()
             .iter()
             .map(|m| publish_mode_value(&m.parse().unwrap()))
             .sum::<usize>() as i64;
@@ -968,6 +969,41 @@ mod tests {
             .await
             .unwrap();
         Some(db)
+    }
+
+    #[cfg(feature = "testing")]
+    #[tokio::test]
+    async fn test_iter_schedule_requests_from_candidates() {
+        let Some(db) = setup_run_database("cb").await else {
+            return;
+        };
+        let pool = db.pool();
+        sqlx::raw_sql(
+            "INSERT INTO named_publish_policy (name, per_branch_policy) VALUES
+             ('default', ARRAY[ROW('main', 'propose', NULL)::branch_publish_policy]);
+             INSERT INTO candidate (suite, command, codebase, value, context, success_chance,
+                                    publish_policy)
+             VALUES ('lintian-fixes', 'lintian-brush', 'cb', 5, 'ctx', 0.5, 'default')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let requests: Vec<ScheduleRequest> =
+            iter_schedule_requests_from_candidates(pool, None, None)
+                .await
+                .unwrap()
+                .collect();
+        assert_eq!(requests.len(), 1);
+        let req = &requests[0];
+        assert_eq!(req.codebase, "cb");
+        assert_eq!(req.campaign, "lintian-fixes");
+        assert_eq!(req.context, "ctx");
+        assert_eq!(req.command, "lintian-brush");
+        assert_eq!(req.success_chance, 0.5);
+        assert_eq!(req.change_set, None);
+        // Candidate value plus the value of the "propose" publish mode.
+        assert_eq!(req.value, 405);
     }
 
     #[cfg(feature = "testing")]

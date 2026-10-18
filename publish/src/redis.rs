@@ -8,7 +8,6 @@ use std::sync::Arc;
 use janitor::redis::{PubSubMessage, RedisManager};
 use log::{debug, error, info};
 use redis::aio::ConnectionManager;
-use sqlx::Row;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 

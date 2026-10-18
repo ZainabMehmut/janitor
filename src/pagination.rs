@@ -4,7 +4,7 @@
 //! result sets that could consume excessive memory or cause performance issues.
 
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 /// Standard pagination parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,10 +127,9 @@ where
 
 /// Execute count query simplified
 async fn execute_count_query_simple(pool: &PgPool, query: &str) -> Result<u64, sqlx::Error> {
-    let row = sqlx::query(sqlx::AssertSqlSafe(query))
+    let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(pool)
         .await?;
-    let count: i64 = row.try_get(0)?;
     Ok(count as u64)
 }
 

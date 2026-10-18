@@ -47,8 +47,6 @@ use rate_limiter::RateLimiter;
 
 // Re-export from redis module to avoid import issues
 pub use crate::redis::RedisConnectionManager;
-// Import sqlx Row trait
-use sqlx::Row;
 // Import pyo3 for PyErr
 use pyo3::{exceptions::PyRuntimeError, PyErr};
 

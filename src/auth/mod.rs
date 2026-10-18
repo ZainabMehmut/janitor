@@ -20,7 +20,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use sqlx::{Pool, Postgres, Row};
+use sqlx::{Pool, Postgres};
 use std::sync::Arc;
 
 /// Unified authentication context for all services
@@ -245,10 +245,9 @@ impl AuthService for AuthManager {
     }
 
     async fn validate_api_key(&self, key: &str) -> Result<AuthContext, AuthError> {
-        // Query the api_keys table
-        let row = sqlx::query(
+        let key_expiry: Option<Option<chrono::DateTime<chrono::Utc>>> = sqlx::query_scalar(
             r#"
-            SELECT id, name, scopes, expires_at, is_active
+            SELECT expires_at
             FROM api_keys
             WHERE key_hash = crypt($1, key_hash) AND is_active = true
             "#,
@@ -257,21 +256,13 @@ impl AuthService for AuthManager {
         .fetch_optional(&self.database)
         .await?;
 
-        if let Some(row) = row {
-            let expires_at: Option<chrono::DateTime<chrono::Utc>> = row.get("expires_at");
-
-            // Check if key is expired
-            if let Some(exp) = expires_at {
-                if chrono::Utc::now() > exp {
-                    return Err(AuthError::SessionExpired);
-                }
-            }
-
-            // Return API key context
-            Ok(AuthContext::ApiKey(key.to_string()))
-        } else {
-            Err(AuthError::InvalidCredentials)
+        let Some(expires_at) = key_expiry else {
+            return Err(AuthError::InvalidCredentials);
+        };
+        if expires_at.is_some_and(|exp| chrono::Utc::now() > exp) {
+            return Err(AuthError::SessionExpired);
         }
+        Ok(AuthContext::ApiKey(key.to_string()))
     }
 }
 

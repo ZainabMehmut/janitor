@@ -2,8 +2,8 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
-use tracing::{debug, warn};
+use sqlx::PgPool;
+use tracing::debug;
 
 // Import shared database utilities
 use janitor::database::{Database as SharedDatabase, DatabaseError};
@@ -19,7 +19,7 @@ use crate::scanner::BuildInfo;
 /// because the underlying schema doesn't carry them. The scanner
 /// fills in the real values from the artifact manager at generation
 /// time; consumers must not use them as filters.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct BuildRecord {
     /// Synthetic `<run_id>/<source>` key -- unique across the table.
     pub id: String,
@@ -44,8 +44,10 @@ pub struct BuildRecord {
     /// `run.finish_time` cast to `TIMESTAMPTZ` for sqlx decode.
     pub finish_time: Option<DateTime<Utc>>,
     /// Empty (see struct-level note).
+    #[sqlx(json)]
     pub binary_files: Vec<String>,
     /// Empty (see struct-level note).
+    #[sqlx(json)]
     pub source_files: Vec<String>,
 }
 
@@ -127,13 +129,12 @@ impl ArchiveDatabase {
             ORDER BY debian_build.source, debian_build.version DESC
         "#;
 
-        let rows = sqlx::query(query)
+        let builds: Vec<BuildRecord> = sqlx::query_as(query)
             .bind(build_distribution)
             .fetch_all(self.pool())
             .await
             .map_err(ArchiveError::Database)?;
 
-        let builds = self.parse_build_records(rows).await?;
         debug!(
             "Found {} builds for build_distribution {}",
             builds.len(),
@@ -172,13 +173,13 @@ impl ArchiveDatabase {
             ORDER BY debian_build.source, debian_build.version DESC
         "#;
 
-        let rows = sqlx::query(query)
+        let builds: Vec<BuildRecord> = sqlx::query_as(query)
             .bind(changeset_id)
             .fetch_all(self.pool())
             .await
             .map_err(ArchiveError::Database)?;
 
-        self.parse_build_records(rows).await
+        Ok(builds)
     }
 
     /// Get builds for a specific run.
@@ -208,53 +209,11 @@ impl ArchiveDatabase {
             ORDER BY debian_build.source, debian_build.version DESC
         "#;
 
-        let rows = sqlx::query(query)
+        let builds: Vec<BuildRecord> = sqlx::query_as(query)
             .bind(run_id)
             .fetch_all(self.pool())
             .await
             .map_err(ArchiveError::Database)?;
-
-        self.parse_build_records(rows).await
-    }
-
-    async fn parse_build_records(
-        &self,
-        rows: Vec<sqlx::postgres::PgRow>,
-    ) -> ArchiveResult<Vec<BuildRecord>> {
-        let mut builds = Vec::new();
-
-        for row in rows {
-            let binary_files: serde_json::Value = row.get("binary_files");
-            let source_files: serde_json::Value = row.get("source_files");
-
-            let binary_files: Vec<String> =
-                serde_json::from_value(binary_files).unwrap_or_else(|e| {
-                    warn!("Failed to parse binary_files: {}", e);
-                    Vec::new()
-                });
-
-            let source_files: Vec<String> =
-                serde_json::from_value(source_files).unwrap_or_else(|e| {
-                    warn!("Failed to parse source_files: {}", e);
-                    Vec::new()
-                });
-
-            builds.push(BuildRecord {
-                id: row.get("id"),
-                run_id: row.get("run_id"),
-                codebase: row.get("codebase"),
-                suite: row.get("suite"),
-                package: row.get("package"),
-                source_package: row.get("source_package"),
-                architecture: row.get("architecture"),
-                component: row.get("component"),
-                version: row.get("version"),
-                status: row.get("status"),
-                finish_time: row.get("finish_time"),
-                binary_files,
-                source_files,
-            });
-        }
 
         Ok(builds)
     }

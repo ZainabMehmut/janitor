@@ -3,7 +3,7 @@ use breezyshim::RevisionId;
 use chrono::{DateTime, Utc};
 use janitor::publish::MergeProposalStatus;
 use redis::AsyncCommands;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 /// Information about a merge proposal stored in the database.
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -98,11 +98,10 @@ impl ProposalInfoManager {
         // `merge_proposal.status` is a Postgres ENUM
         // (`merge_proposal_status`). sqlx won't decode that into
         // `String` without either a typed Rust enum wrapper or an
-        // explicit `::text` cast in the SELECT - and `row.get::<String,
-        // _>("status")` will otherwise panic with a ColumnDecode
-        // mismatched-types error at runtime. Cast here; the callers
-        // just string-compare the status anyway.
-        let row = sqlx::query(
+        // explicit `::text` cast in the SELECT, failing with a
+        // ColumnDecode mismatched-types error at runtime otherwise.
+        // Cast here; the callers just string-compare the status anyway.
+        sqlx::query_as(
             r#"SELECT
                 merge_proposal.rate_limit_bucket,
                 merge_proposal.revision,
@@ -110,27 +109,13 @@ impl ProposalInfoManager {
                 merge_proposal.target_branch_url,
                 merge_proposal.codebase,
                 merge_proposal.can_be_merged,
-                merge_proposal.last_scanned
+                (merge_proposal.last_scanned AT TIME ZONE 'UTC') AS last_scanned
             FROM merge_proposal
             WHERE merge_proposal.url = $1"#,
         )
         .bind(url.to_string())
         .fetch_optional(&self.conn)
-        .await?;
-
-        if let Some(row) = row {
-            Ok(Some(ProposalInfo {
-                rate_limit_bucket: row.try_get("rate_limit_bucket").ok(),
-                revision: row.try_get("revision").ok(),
-                status: row.try_get("status")?,
-                target_branch_url: row.try_get("target_branch_url").ok(),
-                can_be_merged: row.try_get("can_be_merged").ok(),
-                codebase: row.try_get("codebase")?,
-                last_scanned: row.try_get("last_scanned").ok(),
-            }))
-        } else {
-            Ok(None)
-        }
+        .await
     }
 
     /// Delete a merge-proposal row by URL:
@@ -416,19 +401,13 @@ impl ProposalInfoManager {
     pub async fn get_proposal_statistics(
         &self,
     ) -> Result<std::collections::HashMap<String, i64>, sqlx::Error> {
-        let rows =
-            sqlx::query("SELECT status, COUNT(*) as count FROM merge_proposal GROUP BY status")
-                .fetch_all(&self.conn)
-                .await?;
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT status::text, COUNT(*) as count FROM merge_proposal GROUP BY status",
+        )
+        .fetch_all(&self.conn)
+        .await?;
 
-        let mut stats = std::collections::HashMap::new();
-        for row in rows {
-            let status: String = row.get("status");
-            let count: i64 = row.get("count");
-            stats.insert(status, count);
-        }
-
-        Ok(stats)
+        Ok(rows.into_iter().collect())
     }
 
     /// Clean up old closed proposals.
@@ -528,6 +507,34 @@ mod tests {
             info.codebase.is_none(),
             "expected codebase=None on a NULL row, got {:?}",
             info.codebase
+        );
+        assert!(info.last_scanned.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_proposal_statistics() {
+        use janitor::schema::setup_test_database;
+        use janitor::test_utils::TestDatabase;
+
+        let Ok(Some(db)) = TestDatabase::new_optional().await else {
+            eprintln!("Skipping: no Postgres available");
+            return;
+        };
+        setup_test_database(&db.pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO merge_proposal (url, status) VALUES \
+             ('https://example.com/1', 'open'), \
+             ('https://example.com/2', 'open'), \
+             ('https://example.com/3', 'merged')",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let mgr = ProposalInfoManager::new(db.pool.clone(), None).await;
+        assert_eq!(
+            mgr.get_proposal_statistics().await.unwrap(),
+            std::collections::HashMap::from([("open".to_string(), 2), ("merged".to_string(), 1)])
         );
     }
 }

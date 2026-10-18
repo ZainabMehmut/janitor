@@ -3,11 +3,45 @@
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{Pool, Postgres, Row};
+use sqlx::{Pool, Postgres};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use super::{AuthError, AuthSession, UserContext};
+
+#[derive(sqlx::FromRow)]
+struct SessionRow {
+    id: String,
+    user_id: String,
+    user_email: Option<String>,
+    user_name: Option<String>,
+    user_roles: String,
+    created_at: chrono::DateTime<Utc>,
+    last_accessed_at: chrono::DateTime<Utc>,
+    expires_at: chrono::DateTime<Utc>,
+}
+
+impl TryFrom<SessionRow> for AuthSession {
+    type Error = AuthError;
+
+    fn try_from(row: SessionRow) -> Result<Self, AuthError> {
+        let roles =
+            serde_json::from_str(&row.user_roles).map_err(|e| AuthError::Session(e.to_string()))?;
+        Ok(AuthSession {
+            id: row.id,
+            user: UserContext {
+                id: row.user_id,
+                email: row.user_email,
+                name: row.user_name,
+                roles,
+                expires_at: Some(row.expires_at),
+            },
+            created_at: row.created_at,
+            last_accessed_at: row.last_accessed_at,
+            expires_at: row.expires_at,
+        })
+    }
+}
 
 /// Session management trait
 #[async_trait]
@@ -98,7 +132,7 @@ impl SessionManager for DatabaseSessionManager {
     }
 
     async fn get_session(&self, token: &str) -> Result<Option<AuthSession>, AuthError> {
-        let row = sqlx::query(
+        let row: Option<SessionRow> = sqlx::query_as(
             r#"
             SELECT id, user_id, user_email, user_name, user_roles, created_at, last_accessed_at, expires_at
             FROM user_sessions 
@@ -109,31 +143,7 @@ impl SessionManager for DatabaseSessionManager {
         .fetch_optional(&self.database)
         .await?;
 
-        if let Some(row) = row {
-            let user_roles: Vec<super::UserRole> =
-                serde_json::from_str(&row.get::<String, _>("user_roles"))
-                    .map_err(|e| AuthError::Session(e.to_string()))?;
-
-            let user = UserContext {
-                id: row.get("user_id"),
-                email: row.get("user_email"),
-                name: row.get("user_name"),
-                roles: user_roles,
-                expires_at: Some(row.get("expires_at")),
-            };
-
-            let session = AuthSession {
-                id: row.get("id"),
-                user,
-                created_at: row.get("created_at"),
-                last_accessed_at: row.get("last_accessed_at"),
-                expires_at: row.get("expires_at"),
-            };
-
-            Ok(Some(session))
-        } else {
-            Ok(None)
-        }
+        row.map(AuthSession::try_from).transpose()
     }
 
     async fn touch_session(&self, token: &str) -> Result<(), AuthError> {
@@ -173,7 +183,7 @@ impl SessionManager for DatabaseSessionManager {
     }
 
     async fn list_user_sessions(&self, user_id: &str) -> Result<Vec<AuthSession>, AuthError> {
-        let rows = sqlx::query(
+        let rows: Vec<SessionRow> = sqlx::query_as(
             r#"
             SELECT id, user_id, user_email, user_name, user_roles, created_at, last_accessed_at, expires_at
             FROM user_sessions 
@@ -185,32 +195,7 @@ impl SessionManager for DatabaseSessionManager {
         .fetch_all(&self.database)
         .await?;
 
-        let mut sessions = Vec::new();
-        for row in rows {
-            let user_roles: Vec<super::UserRole> =
-                serde_json::from_str(&row.get::<String, _>("user_roles"))
-                    .map_err(|e| AuthError::Session(e.to_string()))?;
-
-            let user = UserContext {
-                id: row.get("user_id"),
-                email: row.get("user_email"),
-                name: row.get("user_name"),
-                roles: user_roles,
-                expires_at: Some(row.get("expires_at")),
-            };
-
-            let session = AuthSession {
-                id: row.get("id"),
-                user,
-                created_at: row.get("created_at"),
-                last_accessed_at: row.get("last_accessed_at"),
-                expires_at: row.get("expires_at"),
-            };
-
-            sessions.push(session);
-        }
-
-        Ok(sessions)
+        rows.into_iter().map(AuthSession::try_from).collect()
     }
 }
 

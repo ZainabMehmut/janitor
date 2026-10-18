@@ -502,11 +502,20 @@ async fn get_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // separators. Peak memory is now O(per-branch entries per name),
     // not O(table).
     use bytes::Bytes;
-    use sqlx::Row;
     use std::convert::Infallible;
+
+    #[derive(sqlx::FromRow)]
+    struct PolicyRow {
+        name: String,
+        rate_limit_bucket: Option<String>,
+        role: String,
+        mode: String,
+        frequency_days: Option<i32>,
+    }
+
     let pool = state.conn.clone();
     let stream = async_stream::try_stream! {
-        let mut rows = sqlx::query(
+        let mut rows = sqlx::query_as::<_, PolicyRow>(
             r#"
             SELECT npp.name, npp.rate_limit_bucket,
                    pp.role, pp.mode::text AS mode, pp.frequency_days
@@ -549,12 +558,13 @@ async fn get_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
         use futures::StreamExt;
         while let Some(row) = rows.next().await {
-            let row = row?;
-            let name: String = row.try_get("name")?;
-            let rate_limit_bucket: Option<String> = row.try_get("rate_limit_bucket")?;
-            let role: String = row.try_get("role")?;
-            let mode: String = row.try_get("mode")?;
-            let frequency_days: Option<i32> = row.try_get("frequency_days")?;
+            let PolicyRow {
+                name,
+                rate_limit_bucket,
+                role,
+                mode,
+                frequency_days,
+            } = row?;
 
             if current_name.as_deref() != Some(&name) {
                 if let (Some(prev_name), Some(prev_doc)) =

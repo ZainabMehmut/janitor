@@ -103,7 +103,7 @@ pub async fn lookup_builds(
             // decode into DateTime<Utc> (run.finish_time is stored
             // as TIMESTAMP without zone, same pattern as the
             // ChangeSet branch below).
-            let row = sqlx::query(
+            let row: Option<(String, Option<DateTime<Utc>>)> = sqlx::query_as(
                 "SELECT suite::text AS suite, \
                         (finish_time AT TIME ZONE 'UTC') AS finish_time \
                  FROM run WHERE id = $1",
@@ -112,14 +112,11 @@ pub async fn lookup_builds(
             .fetch_optional(db.pool())
             .await
             .map_err(ArchiveError::Database)?;
-            let Some(row) = row else {
+            let Some((campaign, max_finish_time)) = row else {
                 return Err(ArchiveError::NotFound(format!("no such run: {}", id)));
             };
-            use sqlx::Row;
-            let campaign: Option<String> = row.try_get("suite").ok();
-            let max_finish_time: Option<DateTime<Utc>> = row.try_get("finish_time").ok().flatten();
             let builds = db.get_builds_for_run(id).await?;
-            Ok((builds, max_finish_time, campaign))
+            Ok((builds, max_finish_time, Some(campaign)))
         }
         OnDemandKind::ChangeSet => {
             // Look up (campaign, max(finish_time)) by change_set,

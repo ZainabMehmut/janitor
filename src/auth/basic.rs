@@ -2,7 +2,7 @@
 
 use axum::http::HeaderMap;
 use base64::{engine::general_purpose, Engine};
-use sqlx::{Pool, Postgres, Row};
+use sqlx::{Pool, Postgres};
 use std::str;
 
 use super::{AuthError, WorkerAuth};
@@ -59,21 +59,13 @@ pub async fn authenticate_worker(
     password: &str,
 ) -> Result<Option<WorkerAuth>, AuthError> {
     // Query the worker table with encrypted password verification
-    let row = sqlx::query(
+    Ok(sqlx::query_as(
         "SELECT name, link FROM worker WHERE name = $1 AND password = crypt($2, password)",
     )
     .bind(username)
     .bind(password)
     .fetch_optional(db)
-    .await?;
-
-    if let Some(row) = row {
-        let name: String = row.get("name");
-        let link: Option<String> = row.get("link");
-        Ok(Some(WorkerAuth { name, link }))
-    } else {
-        Ok(None)
-    }
+    .await?)
 }
 
 /// Check if request has valid worker credentials
@@ -169,18 +161,11 @@ impl WorkerManager {
 
     /// List all worker accounts
     pub async fn list_workers(&self) -> Result<Vec<WorkerAuth>, AuthError> {
-        let rows = sqlx::query("SELECT name, link FROM worker ORDER BY name")
-            .fetch_all(&self.database)
-            .await?;
-
-        let mut workers = Vec::new();
-        for row in rows {
-            let name: String = row.get("name");
-            let link: Option<String> = row.get("link");
-            workers.push(WorkerAuth { name, link });
-        }
-
-        Ok(workers)
+        Ok(
+            sqlx::query_as("SELECT name, link FROM worker ORDER BY name")
+                .fetch_all(&self.database)
+                .await?,
+        )
     }
 
     /// Check if a worker exists
@@ -195,18 +180,12 @@ impl WorkerManager {
 
     /// Get worker by name
     pub async fn get_worker(&self, name: &str) -> Result<Option<WorkerAuth>, AuthError> {
-        let row = sqlx::query("SELECT name, link FROM worker WHERE name = $1")
-            .bind(name)
-            .fetch_optional(&self.database)
-            .await?;
-
-        if let Some(row) = row {
-            let name: String = row.get("name");
-            let link: Option<String> = row.get("link");
-            Ok(Some(WorkerAuth { name, link }))
-        } else {
-            Ok(None)
-        }
+        Ok(
+            sqlx::query_as("SELECT name, link FROM worker WHERE name = $1")
+                .bind(name)
+                .fetch_optional(&self.database)
+                .await?,
+        )
     }
 }
 
