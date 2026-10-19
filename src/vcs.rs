@@ -471,6 +471,7 @@ mod tests {
                     Ok(diff) => Ok(diff),
                     Err(DiffError::Status(status, body)) => Err(Some((status.as_u16(), body))),
                     Err(DiffError::Request(_)) => Err(None),
+                    Err(e) => panic!("{kind}: {case}: {e}"),
                 };
                 assert_eq!(result, expected, "{kind}: {case}");
             }
@@ -734,6 +735,8 @@ pub enum DiffError {
     Request(reqwest::Error),
     /// The VCS store answered with an error status and this body.
     Status(reqwest::StatusCode, String),
+    /// The revision id does not hold a git sha.
+    InvalidRevision(RevisionId),
 }
 
 impl std::fmt::Display for DiffError {
@@ -741,6 +744,7 @@ impl std::fmt::Display for DiffError {
         match self {
             Self::Request(e) => write!(f, "VCS store diff request failed: {}", e),
             Self::Status(status, body) => write!(f, "VCS store diff failed: {}: {}", status, body),
+            Self::InvalidRevision(revid) => write!(f, "not a git revision id: {}", revid),
         }
     }
 }
@@ -891,12 +895,20 @@ impl VcsManager for LocalGitVcsManager {
         } else {
             repo.lookup_bzr_revision_id(new_revid).unwrap().0
         };
+        let oid = |revid: &RevisionId, sha: &[u8]| {
+            std::str::from_utf8(sha)
+                .ok()
+                .and_then(|sha| git2::Oid::from_str(sha).ok())
+                .ok_or_else(|| DiffError::InvalidRevision(revid.clone()))
+        };
+        let old_sha = oid(old_revid, &old_sha)?;
+        let new_sha = oid(new_revid, &new_sha)?;
         let current_dir = repo.user_transport().local_abspath(Path::new(".")).unwrap();
         drop(repo); // Drop repo before await
         let output = tokio::process::Command::new("git")
             .arg("diff")
-            .arg(std::str::from_utf8(&old_sha).unwrap())
-            .arg(std::str::from_utf8(&new_sha).unwrap())
+            .arg(old_sha.to_string())
+            .arg(new_sha.to_string())
             .current_dir(current_dir)
             .output()
             .await
@@ -919,8 +931,8 @@ impl VcsManager for LocalGitVcsManager {
         let repo = self.get_repository(codebase).unwrap().unwrap();
         let old_sha = repo.lookup_bzr_revision_id(old_revid).unwrap().0;
         let new_sha = repo.lookup_bzr_revision_id(new_revid).unwrap().0;
-        let old_sha_str = std::str::from_utf8(&old_sha).unwrap();
-        let new_sha_str = std::str::from_utf8(&new_sha).unwrap();
+        let old_sha_str = git2::Oid::from_str(std::str::from_utf8(&old_sha).unwrap()).unwrap();
+        let new_sha_str = git2::Oid::from_str(std::str::from_utf8(&new_sha).unwrap()).unwrap();
         let repo_path = repo.user_transport().local_abspath(Path::new(".")).unwrap();
 
         // Use git log with a format that separates commit hash and message with a NUL byte
@@ -1053,7 +1065,7 @@ impl VcsManager for LocalBzrVcsManager {
         let output = tokio::process::Command::new("bzr")
             .arg("diff")
             .arg("-r")
-            .arg(format!("{}..{}", old_revid, new_revid))
+            .arg(format!("revid:{}..revid:{}", old_revid, new_revid))
             .current_dir(repo.user_transport().local_abspath(Path::new(".")).unwrap())
             .output()
             .await
