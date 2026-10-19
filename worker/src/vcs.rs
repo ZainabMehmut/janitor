@@ -592,4 +592,99 @@ mod tests {
         );
         std::mem::drop(td);
     }
+
+    fn retry(
+        retryable: fn(&BrzError) -> bool,
+        errors: Vec<BrzError>,
+    ) -> (Result<(), BrzError>, Vec<std::time::Duration>, u64) {
+        let mut errors = errors.into_iter();
+        let mut waits = vec![];
+        let retries = prometheus::IntCounter::new("retries", "retries").unwrap();
+        let waits_without_jitter = backoff::ExponentialBackoff {
+            randomization_factor: 0.0,
+            ..push_waits()
+        };
+        let ret = retry_push_with(
+            retryable,
+            || errors.next().map_or(Ok(()), Err),
+            waits_without_jitter,
+            |wait| waits.push(wait),
+            &retries,
+        );
+        (ret, waits, retries.get())
+    }
+
+    fn connection_error() -> BrzError {
+        BrzError::ConnectionError("while sending POST /codebase/git-receive-pack:".to_string())
+    }
+
+    #[test]
+    fn test_retry_push_repeats_a_retryable_error() {
+        let (ret, waits, retries) = retry(
+            import_retryable,
+            (0..3).map(|_| connection_error()).collect(),
+        );
+        assert!(ret.is_ok());
+        assert_eq!(
+            waits,
+            vec![
+                std::time::Duration::from_millis(500),
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(2),
+            ]
+        );
+        assert_eq!(retries, 3);
+    }
+
+    #[test]
+    fn test_retry_push_gives_up() {
+        let (ret, waits, retries) = retry(
+            push_retryable,
+            (0..20).map(|_| connection_error()).collect(),
+        );
+        assert!(matches!(ret, Err(BrzError::ConnectionError(_))));
+        assert_eq!((waits.len(), retries), (9, 9));
+
+        let (ret, waits, retries) = retry(push_retryable, vec![BrzError::DivergedBranches]);
+        assert!(matches!(ret, Err(BrzError::DivergedBranches)));
+        assert_eq!((waits.len(), retries), (0, 0));
+    }
+
+    #[test]
+    fn test_retryable_errors() {
+        let status = BrzError::UnexpectedHttpStatus {
+            url: Url::parse("http://example.com/codebase").unwrap(),
+            code: 403,
+            extra: None,
+            headers: HashMap::new(),
+        };
+        let errors = [
+            connection_error(),
+            BrzError::IncompleteRead(vec![], Some(10)),
+            BrzError::InvalidHttpResponse(
+                "http://example.com/codebase".to_string(),
+                "Bad status line received".to_string(),
+                None,
+                HashMap::new(),
+            ),
+            status,
+            BrzError::TransportError("No space left on device".to_string()),
+            BrzError::DivergedBranches,
+        ];
+        let kinds: Vec<_> = errors
+            .iter()
+            .map(|e| (push_retryable(e), import_retryable(e)))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (true, true),
+                (true, true),
+                (true, true),
+                (true, false),
+                (false, false),
+                (false, false),
+            ]
+        );
+    }
 }
