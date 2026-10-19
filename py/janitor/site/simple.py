@@ -740,7 +740,7 @@ async def main_async(argv=None):
         help="Show debug output (plus avoid minified JS)",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.gcp_logging:
         import google.cloud.logging
@@ -758,6 +758,8 @@ async def main_async(argv=None):
             config = read_config(f)
     except FileNotFoundError:
         parser.error(f"config path {args.config} does not exist")
+    if not config.redis_location:
+        sys.exit(f"{args.config} has no redis_location")
 
     private_app, public_app = await create_app(
         config,
