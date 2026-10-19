@@ -261,45 +261,20 @@ impl RedisSubscriber {
             return Ok(());
         }
 
-        // Look up the codebase's branch_url - used as the
-        // target_branch_url that publish_from_policy feeds into
-        // role_branch_url. If the codebase row is gone, log and bail
-        // instead of crashing.
-        let branch_url: Option<String> =
-            sqlx::query_scalar("SELECT branch_url FROM codebase WHERE name = $1")
-                .bind(&message.codebase)
-                .fetch_optional(&state.conn)
-                .await?;
-        let branch_url = match branch_url {
-            Some(u) => u,
-            None => {
-                log::warn!(
-                    "Codebase {} not in database when handling publish-status for run {}",
-                    message.codebase,
-                    message.run_id
-                );
-                return Ok(());
-            }
-        };
-        let target_branch_url: url::Url = match branch_url.parse() {
-            Ok(u) => u,
-            Err(e) => {
-                log::warn!(
-                    "Codebase {}: invalid branch_url {:?}: {}",
-                    message.codebase,
-                    branch_url,
-                    e
-                );
-                return Ok(());
-            }
-        };
-
         // Fetch the full run + result branches so publish_from_policy
         // can resolve role -> (remote_name, base_revision, revision).
         let run = match crate::state::get_run(&state.conn, &message.run_id).await? {
             Some(r) => r,
             None => {
                 log::warn!("Run {} not found for publish-status", message.run_id);
+                return Ok(());
+            }
+        };
+
+        let target_branch_url = match approved_run_target(&run) {
+            Ok(u) => u,
+            Err(e) => {
+                log::warn!("{}: invalid target branch URL: {}", run.id, e);
                 return Ok(());
             }
         };
@@ -380,6 +355,11 @@ impl RedisSubscriber {
     }
 }
 
+/// The URL an approved run is published to, chosen as in the publish loop.
+fn approved_run_target(run: &janitor::state::Run) -> Result<url::Url, url::ParseError> {
+    crate::resolve_target_branch_url(run.target_branch_url.as_deref(), &run.branch_url).parse()
+}
+
 /// Health check functionality for Redis connections.
 pub struct RedisHealthChecker {
     /// Redis manager.
@@ -409,6 +389,7 @@ impl RedisHealthChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use janitor::{schema::setup_test_database, test_with_database};
 
     #[test]
     fn test_publish_event_channel() {
@@ -439,5 +420,38 @@ mod tests {
         assert_eq!(message.publish_status, "approved");
         assert_eq!(message.codebase, "cb-1");
         assert_eq!(message.campaign, "lintian-fixes");
+    }
+
+    test_with_database! {
+        async fn test_approved_run_target_ignores_codebase_branch_url(test_db: TestDatabase) {
+            let pool = test_db.pool();
+            setup_test_database(pool).await.unwrap();
+            for query in [
+                "INSERT INTO codebase (name, branch_url, url, vcs_type)
+                 VALUES ('cb-1', 'https://example.invalid/moved', 'https://example.invalid/moved', 'git')",
+                "INSERT INTO change_set (id, campaign) VALUES ('cs-1', 'lintian-fixes')",
+                "INSERT INTO run (
+                    id, codebase, suite, command, start_time, finish_time, result_code,
+                    branch_url, target_branch_url, change_set, logfilenames, vcs_type
+                 ) VALUES
+                    ('run-target', 'cb-1', 'lintian-fixes', 'noop', NOW(), NOW(), 'success',
+                     'https://example.invalid/cb-1', 'https://example.invalid/target', 'cs-1',
+                     '{}', 'git'),
+                    ('run-plain', 'cb-1', 'lintian-fixes', 'noop', NOW(), NOW(), 'success',
+                     'https://example.invalid/cb-1', NULL, 'cs-1', '{}', 'git')",
+            ] {
+                sqlx::query(query).execute(pool).await.unwrap();
+            }
+
+            let mut targets = Vec::new();
+            for run_id in ["run-target", "run-plain"] {
+                let run = crate::state::get_run(pool, run_id).await.unwrap().unwrap();
+                targets.push(approved_run_target(&run).unwrap().to_string());
+            }
+            assert_eq!(
+                targets,
+                vec!["https://example.invalid/target", "https://example.invalid/cb-1"]
+            );
+        }
     }
 }
