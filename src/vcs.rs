@@ -539,6 +539,20 @@ mod tests {
             "https://vcs.example.com/bzr/mycodebase"
         );
     }
+
+    #[tokio::test]
+    async fn git_get_diff_refuses_option_as_sha() {
+        let base = tempfile::tempdir().unwrap();
+        git2::Repository::init(base.path().join("codebase")).unwrap();
+        let out = base.path().join("out");
+        let old = RevisionId::from(format!("git-v1:--output={}", out.display()).into_bytes());
+        let new = RevisionId::from(b"git-v1:4b825dc642cb6eb9a060e54bf8d69288fbee4904".to_vec());
+        let manager = LocalGitVcsManager::new(base.path().to_path_buf());
+        let codebase = CodebaseName::new("codebase").unwrap();
+        let result = manager.get_diff(&codebase, &old, &new).await;
+        assert!(matches!(result, Err(DiffError::InvalidRevision(ref r)) if *r == old));
+        assert!(!out.exists());
+    }
 }
 
 /// Add a `,branch=` segment parameter for a colocated git branch. The
