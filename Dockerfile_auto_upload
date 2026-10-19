@@ -42,7 +42,8 @@ RUN apt-get update --yes \
         ca-certificates \
         devscripts \
         dput \
-        gnupg \
+        gpg \
+        gpg-agent \
         libpython3.14 \
         libssl3 \
         openssh-client \
