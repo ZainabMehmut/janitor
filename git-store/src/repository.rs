@@ -113,6 +113,24 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn test_repo_path_refuses_paths() {
+        let manager = RepositoryManager::new(PathBuf::from("/srv/git"));
+        let names = ["foo", "foo-bar.1+2", "..", "../private.git", "a/b", ""];
+        let paths: Vec<_> = names.iter().map(|n| manager.repo_path(n).ok()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                Some(PathBuf::from("/srv/git/foo")),
+                Some(PathBuf::from("/srv/git/foo-bar.1+2")),
+                None,
+                None,
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
     fn test_validate_sha() {
         // Valid SHA
         assert!(
