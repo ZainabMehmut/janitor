@@ -21,10 +21,14 @@ janitor_branch: main
 janitor_home: "/home/{{ ansible_user }}/janitor"
 janitor_domain: CHANGEME        # e.g. janitor.example.com
 janitor_github_org: CHANGEME    # GitHub user or org the bot works as
-# http only for a test VM without a real domain; Caddy then serves plain HTTP.
+# http: Caddy serves everything over plain HTTP, worker logins included,
+# so only on a network nobody else can read.
 janitor_scheme: https
 # Workers reach the runner, git_store and bzr_store through Caddy here.
 janitor_external_url: "{{ janitor_scheme }}://{{ janitor_domain }}/"
+# The build chroots read the apt repository over plain HTTP: they have no
+# CA certificates. Caddy serves only the repository there, no login.
+janitor_apt_archive_url: "http://{{ janitor_domain }}/"
 
 # Address this worker listens on and that the runner reaches it on.
 janitor_worker_address: 127.0.0.1

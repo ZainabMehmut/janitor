@@ -16,6 +16,10 @@ Unmask=/proc/*
 Environment=WORKER_NAME={{ worker_name }}
 Environment=WORKER_PASSWORD={{ worker_password }}
 Volume={{ janitor_breezy_dir }}/worker:/root/.config/breezy:ro
+{% if caddy_self_signed | default(false) | bool %}
+# The host's CA bundle, which holds the control host's self-signed certificate.
+Volume=/etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
+{% endif %}
 # The build images survive a container restart.
 Volume={{ janitor_home }}/data/sbuild:/root/.cache/sbuild:rw
 Volume={{ janitor_home }}/data/ognibuild:/root/.cache/ognibuild:rw

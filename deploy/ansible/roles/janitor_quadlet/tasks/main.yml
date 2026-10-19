@@ -52,7 +52,7 @@
   changed_when: false
   loop: "{{ janitor_services }}"
 
-- name: Start the janitor services, restarting those with a new image, unit or janitor.conf
+- name: Start the janitor services, restarting those with a new image, unit, janitor.conf or CA bundle
   become: true
   become_user: "{{ ansible_user }}"
   environment:
@@ -65,7 +65,8 @@
     janitor_restart: >-
       {{ (janitor_units.results | selectattr('changed') | map(attribute='item') | list)
          + (janitor_stale.results | selectattr('stdout', 'search', 'STALE') | map(attribute='item') | list)
-         + (janitor_services | difference(['worker']) if janitor_conf is changed else []) }}
+         + (janitor_services | difference(['worker']) if janitor_conf is changed else [])
+         + (['worker'] if control_cert_trust is changed else []) }}
   loop: "{{ janitor_services }}"
 
 - name: Wait for each service's health route
