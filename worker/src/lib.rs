@@ -913,15 +913,17 @@ pub fn run_worker(
                     | e @ BrzError::UnexpectedHttpStatus { .. }
                     | e @ BrzError::TransportError(..)
                     | e @ BrzError::TransportNotPossible(..)
-                    | e @ BrzError::RemoteGitError(..),
+                    | e @ BrzError::RemoteGitError(..)
+                    | e @ BrzError::ConnectionError(..)
+                    | e @ BrzError::Socket(..),
                 ) => {
                     log::warn!("unable to push to cache URL {}: {}", cached_branch_url, e);
                 }
                 Err(e) => {
-                    panic!(
-                        "Unexpected error pushing to cache URL {}: {}",
-                        cached_branch_url, e
-                    );
+                    return Err(push_error_to_worker_failure(
+                        e,
+                        vec!["result-cache".to_owned()],
+                    ));
                 }
                 Ok(_) => {
                     log::info!("Pushed packaging branch cache to {}", cached_branch_url);
