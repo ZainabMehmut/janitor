@@ -20,15 +20,8 @@ COPY . /code
 
 RUN cargo build --release --manifest-path /code/mail-filter/Cargo.toml
 
-FROM docker.io/debian:testing-slim
-
-ARG DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update --yes \
- && apt-get install --yes --no-install-recommends \
-        ca-certificates \
- && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
+# https://github.com/GoogleContainerTools/distroless
+FROM gcr.io/distroless/cc-debian13
 
 COPY --from=build /code/target/release/janitor-mail-filter /usr/local/bin/janitor-mail-filter
 
