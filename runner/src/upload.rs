@@ -631,16 +631,20 @@ async fn stream_field_to_disk<'a>(
 /// Sanitize a filename for safe storage.
 fn sanitize_filename(filename: &str) -> String {
     // Replace potentially dangerous characters
-    filename
+    let name = filename
         .chars()
         .map(|c| match c {
             '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
             c if c.is_control() => '_',
             c => c,
         })
-        .collect::<String>()
-        .trim_matches('.')
-        .to_string()
+        .collect::<String>();
+    let name = name.trim_matches('.');
+    // debsign, and dput without a host, read a leading '-' as an option.
+    match name.strip_prefix('-') {
+        Some(rest) => format!("_{}", rest),
+        None => name.to_string(),
+    }
 }
 
 #[cfg(test)]
