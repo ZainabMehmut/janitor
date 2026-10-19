@@ -1316,6 +1316,90 @@ async fn end_to_end_assignment_lifecycle() {
     );
 }
 
+/// Upload names sent by the worker are recorded and stored as sanitized.
+#[tokio::test]
+async fn finish_keeps_uploads_under_stored_names() {
+    let store_dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let builder = test_utils::TestConfigBuilder::new()
+        .with_campaign("test-campaign", "true")
+        .with_artifact_manager(Arc::new(
+            janitor::artifacts::LocalArtifactManager::new(store_dir.path()).unwrap(),
+        ));
+    let Some((app, state)) =
+        test_utils::create_test_app_with_state_with_config_if_available(builder)
+            .await
+            .expect("test app setup")
+    else {
+        eprintln!("skipping: no test resources");
+        return;
+    };
+
+    let assignment = assign_one(app.clone(), &state, "finish-names-cb").await;
+    let run_id = assignment["id"].as_str().expect("id must be a string");
+
+    let abs_name = outside.path().join("abs.deb").display().to_string();
+    let boundary = "names-boundary";
+    let multipart_body = format!(
+        "--{boundary}\r\n\
+         Content-Disposition: form-data; name=\"metadata\"; filename=\"result.json\"\r\n\
+         Content-Type: application/json\r\n\r\n\
+         {{\"code\":\"success\",\"description\":\"names\"}}\r\n\
+         --{boundary}\r\n\
+         Content-Disposition: form-data; name=\"file\"; filename=\"../outside.log\"\r\n\
+         Content-Type: text/plain\r\n\r\n\
+         log line\r\n\
+         --{boundary}\r\n\
+         Content-Disposition: form-data; name=\"file\"; filename=\"../escaped.deb\"\r\n\
+         Content-Type: application/octet-stream\r\n\r\n\
+         deb a\r\n\
+         --{boundary}\r\n\
+         Content-Disposition: form-data; name=\"file\"; filename=\"{abs_name}\"\r\n\
+         Content-Type: application/octet-stream\r\n\r\n\
+         deb b\r\n\
+         --{boundary}--\r\n"
+    );
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/active-runs/{run_id}/finish"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(multipart_body))
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let (logfilenames,): (Vec<String>,) =
+        sqlx::query_as("SELECT logfilenames FROM run WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(state.database.pool())
+            .await
+            .expect("run row must exist after finish");
+    assert_eq!(logfilenames, vec!["_outside.log".to_string()]);
+
+    let abs_stored = abs_name.replace('/', "_");
+    let mut stored: Vec<(String, String)> = std::fs::read_dir(store_dir.path().join(run_id))
+        .expect("artifacts stored for the run")
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            (
+                path.file_name().unwrap().to_str().unwrap().to_string(),
+                std::fs::read_to_string(&path).unwrap(),
+            )
+        })
+        .collect();
+    stored.sort();
+    let mut expected = vec![
+        ("_escaped.deb".to_string(), "deb a".to_string()),
+        (abs_stored, "deb b".to_string()),
+    ];
+    expected.sort();
+    assert_eq!(stored, expected);
+    assert!(!outside.path().join("abs.deb").exists());
+}
+
 /// Seed a candidate ready to be assigned, then walk the setup that
 /// `end_to_end_assignment_lifecycle` uses, and return the parsed
 /// assignment body. Used by the tests below that assert on the wire
