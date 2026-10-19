@@ -15,6 +15,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
+import base64
 import sys
 import types
 from datetime import timedelta
@@ -39,6 +40,7 @@ from janitor.site.cupboard import create_app
 from janitor.site.cupboard.api import create_app as create_api_app
 from janitor.site.cupboard.api import select_runs_to_reprocess
 from janitor.site.cupboard.publish import iter_publish_history
+from janitor.site.openid import openid_middleware
 
 from .conftest import _insert_codebase, _insert_run
 
@@ -317,6 +319,24 @@ async def test_workers_list_requires_admin(aiohttp_client, db):
     client = await create_api_client(aiohttp_client, db, user=None)
     resp = await client.get("/workers")
     assert resp.status == 401
+
+
+@pytest.mark.parametrize(
+    "login,status",
+    [(b"janitor-admin:secret", 200), (b"janitor-admin:wrong", 401), (None, 401)],
+)
+async def test_workers_list_basic_auth(aiohttp_client, db, login, status):
+    config = read_config_string(
+        'admin_credentials { username: "janitor-admin" password: "secret" }\n'
+    )
+    app = create_api_app(config=config, publisher_url=None, runner_url=None, db=db)
+    app.middlewares.insert(0, openid_middleware)
+    client = await aiohttp_client(app)
+    headers = {}
+    if login:
+        headers["Authorization"] = "Basic " + base64.b64encode(login).decode()
+    resp = await client.get("/workers", headers=headers)
+    assert resp.status == status
 
 
 async def test_workers_list_empty(aiohttp_client, db):
