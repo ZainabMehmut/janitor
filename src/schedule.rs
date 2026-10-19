@@ -253,24 +253,21 @@ ORDER BY start_time DESC
             // tree) and is `!Send`; keeping it in scope across an
             // await would make this whole future non-`Send`, which
             // in turn prevents `tokio::spawn`ing callers.
-            let groups: Vec<Vec<RelationRef>> = {
-                let relations: Relations = run.failure_details.as_ref().unwrap()["relations"]
-                    .as_str()
-                    .unwrap()
-                    .parse()
-                    .unwrap();
-                relations
-                    .entries()
-                    .map(|dep| {
-                        dep.relations()
-                            .map(|r| RelationRef::from_relation(&r))
-                            .collect()
-                    })
-                    .collect()
-            };
-            if deps_satisfied(conn, campaign, groups).await? {
-                success += 1;
-                same_context = false;
+            match relation_groups(&run.failure_details.as_ref().unwrap()["relations"]) {
+                Ok(groups) => {
+                    if deps_satisfied(conn, campaign, groups).await? {
+                        success += 1;
+                        same_context = false;
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Ignoring bad relations in a {} run for {}: {}",
+                        campaign,
+                        codebase,
+                        e
+                    );
+                }
             }
         }
         if same_context {
@@ -568,12 +565,31 @@ struct RelationRef {
 }
 
 impl RelationRef {
-    fn from_relation(rel: &Relation) -> Self {
-        Self {
-            name: rel.try_name().expect("relation has no name"),
+    fn from_relation(rel: &Relation) -> Option<Self> {
+        Some(Self {
+            name: rel.try_name()?,
             constraint: rel.version(),
-        }
+        })
     }
+}
+
+/// Parse the `relations` failure detail of a run into groups of alternatives.
+fn relation_groups(relations: &serde_json::Value) -> Result<Vec<Vec<RelationRef>>, String> {
+    let text = relations
+        .as_str()
+        .ok_or_else(|| format!("not a string: {}", relations))?;
+    let relations: Relations = text.parse().map_err(|e: String| e.replace('\n', "; "))?;
+    relations
+        .entries()
+        .map(|dep| {
+            dep.relations()
+                .map(|r| {
+                    RelationRef::from_relation(&r)
+                        .ok_or_else(|| format!("no package name in {:?}", text))
+                })
+                .collect()
+        })
+        .collect()
 }
 
 async fn dep_available(conn: &PgPool, rel: &RelationRef) -> Result<bool, sqlx::Error> {

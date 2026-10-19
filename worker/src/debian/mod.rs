@@ -479,8 +479,11 @@ fn tree_set_changelog_version(
         true,
     )?;
     if let Some(mut entry) = editor.iter().next() {
-        let version: debversion::Version =
-            format!("{}~", entry.version().unwrap()).parse().unwrap();
+        let Some(version) = entry.version() else {
+            log::warn!("Not setting the changelog version: the top entry has no valid version");
+            return Ok(());
+        };
+        let version: debversion::Version = format!("{}~", version).parse().unwrap();
         if version > *build_version {
             return Ok(());
         }
