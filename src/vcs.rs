@@ -378,6 +378,38 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_location() {
+        let cwd = std::env::current_dir().unwrap();
+        let cases = [
+            ("/srv/git", Ok(Url::parse("file:///srv/git/").unwrap())),
+            (
+                "git",
+                Ok(Url::from_directory_path(cwd.join("git")).unwrap()),
+            ),
+            (
+                "file:///srv/git",
+                Ok(Url::parse("file:///srv/git").unwrap()),
+            ),
+            (
+                "https://git.example.com/",
+                Ok(Url::parse("https://git.example.com/").unwrap()),
+            ),
+            (
+                "http://[::1",
+                Err("Invalid VCS URL: invalid IPv6 address".to_string()),
+            ),
+        ];
+        for (location, expected) in cases {
+            assert_eq!(
+                parse_location(location).map_err(|e| e.to_string()),
+                expected,
+                "{}",
+                location
+            );
+        }
+    }
+
+    #[test]
     fn test_branch_open_failure_display() {
         let failure = BranchOpenFailure {
             code: "branch-missing".to_string(),
