@@ -38,8 +38,22 @@ impl S3LogFileManager {
         format!("logs/{}/{}/{}.gz", codebase, run_id, name)
     }
 
-    fn get_url(&self, codebase: &CodebaseName, run_id: &RunId, name: &str) -> String {
-        format!("{}{}", self.base_url, self.get_key(codebase, run_id, name))
+    fn get_url(
+        &self,
+        codebase: &CodebaseName,
+        run_id: &RunId,
+        name: &str,
+    ) -> Result<String, Error> {
+        // The URL parser resolves .. (also %2e%2e), reads \ as / and ends
+        // the path at ? or #.
+        if name.contains(['/', '\\', '?', '#']) {
+            return Err(Error::NotFound);
+        }
+        Ok(format!(
+            "{}{}",
+            self.base_url,
+            self.get_key(codebase, run_id, name)
+        ))
     }
 }
 
@@ -51,7 +65,10 @@ impl LogFileManager for S3LogFileManager {
         run_id: &RunId,
         name: &str,
     ) -> Result<bool, Error> {
-        let url = self.get_url(codebase, run_id, name);
+        let url = match self.get_url(codebase, run_id, name) {
+            Ok(url) => url,
+            Err(_) => return Ok(false),
+        };
 
         match self.client.head(&url).send().await {
             Ok(resp) => match resp.status() {
@@ -73,7 +90,7 @@ impl LogFileManager for S3LogFileManager {
         run_id: &RunId,
         name: &str,
     ) -> Result<Box<dyn Read + Send + Sync>, Error> {
-        let url = self.get_url(codebase, run_id, name);
+        let url = self.get_url(codebase, run_id, name)?;
 
         let resp = self
             .client
@@ -120,6 +137,12 @@ impl LogFileManager for S3LogFileManager {
                 .unwrap_or("unknown")
         });
 
+        if basename.contains(['/', '\\', '?', '#']) {
+            return Err(Error::Other(
+                "Basename cannot contain '/', '\\', '?' or '#' characters".to_string(),
+            ));
+        }
+
         let key = self.get_key(codebase, run_id, basename);
         let url = format!("{}{}", self.base_url, key);
 
@@ -149,7 +172,7 @@ impl LogFileManager for S3LogFileManager {
         run_id: &RunId,
         name: &str,
     ) -> Result<(), Error> {
-        let url = self.get_url(codebase, run_id, name);
+        let url = self.get_url(codebase, run_id, name)?;
 
         let resp = self
             .client
@@ -181,7 +204,7 @@ impl LogFileManager for S3LogFileManager {
         run_id: &RunId,
         name: &str,
     ) -> Result<DateTime<Utc>, Error> {
-        let url = self.get_url(codebase, run_id, name);
+        let url = self.get_url(codebase, run_id, name)?;
 
         // Use HEAD request to get object metadata including last-modified
         let response = self
