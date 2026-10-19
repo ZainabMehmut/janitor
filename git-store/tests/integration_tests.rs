@@ -1598,3 +1598,55 @@ db_test! {
         handle.abort();
     }
 }
+
+db_test! {
+    async fn test_public_klaus_raw_file_is_sandboxed(test_db: TestDatabase) {
+        if !klaus_available() {
+            eprintln!("skipping: klaus not importable");
+            return;
+        }
+        setup_test_database(test_db.pool()).await.unwrap();
+        seed_codebase(test_db.pool(), "klauzy").await;
+
+        let tmp = TempDir::new().unwrap();
+        let repo = git2::Repository::init_bare(tmp.path().join("klauzy")).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let blob = repo.blob(b"<script>alert(1)</script>\n").unwrap();
+        let tree_id = {
+            let mut tb = repo.treebuilder(None).unwrap();
+            tb.insert("page.html", blob, 0o100644).unwrap();
+            tb.write().unwrap()
+        };
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        let state = build_state(&tmp, &test_db, AppRole::Public).await;
+        let app = web::create_public_app(state, 0);
+        let (addr, handle) = spawn(app).await;
+
+        let mut got = Vec::new();
+        for path in ["raw", "/raw"] {
+            let resp = reqwest::Client::new()
+                .get(format!("http://{}/git/klauzy/{}/main/page.html", addr, path))
+                .header("User-Agent", "Mozilla/5.0 (test)")
+                .send()
+                .await
+                .unwrap();
+            let header = |name| {
+                resp.headers()
+                    .get(name)
+                    .map(|v: &reqwest::header::HeaderValue| v.to_str().unwrap().to_string())
+            };
+            got.push((
+                resp.status().as_u16(),
+                header("content-security-policy"),
+                header("x-content-type-options"),
+            ));
+        }
+        let sandboxed = (200, Some("sandbox".to_string()), Some("nosniff".to_string()));
+        assert_eq!(got, vec![sandboxed.clone(), sandboxed]);
+
+        handle.abort();
+    }
+}
