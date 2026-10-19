@@ -16,6 +16,8 @@ pub enum VcsConfigError {
     InvalidUrl(url::ParseError),
     /// File URL could not be converted to file path
     InvalidFilePath,
+    /// Plain path could not be made absolute
+    InvalidPath(std::io::Error),
 }
 
 impl std::fmt::Display for VcsConfigError {
@@ -25,6 +27,7 @@ impl std::fmt::Display for VcsConfigError {
             VcsConfigError::InvalidFilePath => {
                 write!(f, "VCS file URL cannot be converted to file path")
             }
+            VcsConfigError::InvalidPath(e) => write!(f, "Invalid VCS path: {}", e),
         }
     }
 }
@@ -1365,13 +1368,24 @@ pub fn get_vcs_managers(
     }
 }
 
+/// Parse a `git_location`/`bzr_location`; a plain path is a local directory.
+fn parse_location(location: &str) -> Result<Url, VcsConfigError> {
+    match Url::parse(location) {
+        Err(url::ParseError::RelativeUrlWithoutBase) => {
+            let path = std::path::absolute(location).map_err(VcsConfigError::InvalidPath)?;
+            Url::from_directory_path(path).map_err(|_| VcsConfigError::InvalidFilePath)
+        }
+        result => Ok(result?),
+    }
+}
+
 pub fn get_vcs_managers_from_config(
     config: &crate::config::Config,
 ) -> Result<HashMap<VcsType, Box<dyn VcsManager>>, VcsConfigError> {
     let mut ret: HashMap<VcsType, Box<dyn VcsManager>> = HashMap::new();
 
     if let Some(git_location) = config.git_location.as_ref() {
-        let url = Url::parse(git_location)?;
+        let url = parse_location(git_location)?;
         if url.scheme() == "file" {
             let file_path = url
                 .to_file_path()
@@ -1386,7 +1400,7 @@ pub fn get_vcs_managers_from_config(
     }
 
     if let Some(bzr_location) = config.bzr_location.as_ref() {
-        let url = Url::parse(bzr_location)?;
+        let url = parse_location(bzr_location)?;
         if url.scheme() == "file" {
             let file_path = url
                 .to_file_path()
