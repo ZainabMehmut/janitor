@@ -278,6 +278,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_artifact_outside_run_dir() {
+        let (td, mgr) = setup();
+        let source = create_source_dir(&[("file.txt", b"hello")]);
+        mgr.store_artifacts("run-1", source.path(), None)
+            .await
+            .unwrap();
+        let outside = td.path().join("outside.txt");
+        fs::write(&outside, b"outside").unwrap();
+
+        for name in ["../outside.txt", outside.to_str().unwrap()] {
+            let kind = match mgr.get_artifact("run-1", name).await {
+                Err(Error::IoError(e)) => Some(e.kind()),
+                _ => None,
+            };
+            assert_eq!(kind, Some(ErrorKind::NotFound), "{}", name);
+        }
+    }
+
+    #[tokio::test]
     async fn test_public_artifact_url() {
         let (_td, mgr) = setup();
         let url = mgr.public_artifact_url("run-1", "file.txt");
