@@ -1119,6 +1119,47 @@ mod tests {
         assert_eq!(duration, Duration::seconds(60));
         assert_eq!(probability, 0.5);
     }
+
+    #[cfg(feature = "testing")]
+    #[tokio::test]
+    async fn test_estimate_success_probability_with_bad_relations() {
+        let Some(db) = setup_run_database(&CodebaseName::new("foo").unwrap()).await else {
+            return;
+        };
+        let pool = db.pool();
+        sqlx::query(
+            r#"INSERT INTO run (id, codebase, suite, change_set, logfilenames, result_code,
+                                start_time, finish_time, failure_details) VALUES
+             ('r1', 'foo', 'lintian-fixes', 'cs', '{}', 'install-deps-unsatisfied-dependencies',
+              '2024-01-01 10:00:00', '2024-01-01 10:01:00',
+              '{"relations": "libbaz-dev (>= 1.0!x)"}'),
+             ('r2', 'foo', 'lintian-fixes', 'cs', '{}', 'install-deps-unsatisfied-dependencies',
+              '2024-01-02 10:00:00', '2024-01-02 10:01:00', '{"relations": ["foo"]}')"#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            estimate_success_probability_and_duration(
+                pool,
+                &CodebaseName::new("foo").unwrap(),
+                &Campaign::new("lintian-fixes").unwrap(),
+                None
+            )
+            .await
+            .unwrap(),
+            (1.0 / 21.0 * 0.5, Duration::seconds(60), 2)
+        );
+    }
+
+    #[test]
+    fn test_relation_groups_not_a_string() {
+        assert_eq!(
+            relation_groups(&serde_json::json!(["foo"])).unwrap_err(),
+            r#"not a string: ["foo"]"#
+        );
+    }
 }
 
 pub async fn do_schedule(

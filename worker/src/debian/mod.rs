@@ -869,4 +869,38 @@ mod tests {
         assert_eq!(failure.stage, vec!["build".to_string()]);
         assert_eq!(failure.transient, Some(false));
     }
+
+    #[test]
+    fn test_tree_set_changelog_version_invalid_version() {
+        for version in ["1_0", "99999999999:"] {
+            let td = tempfile::tempdir().unwrap();
+            let tree = empty_tree(&td);
+            let changelog = format!(
+                r#"foo ({}) unstable; urgency=low
+
+  * Initial release.
+
+ -- Joe Example <joe@example.com>  Mon, 01 Jan 2001 00:00:00 +0000
+"#,
+                version
+            );
+            tree.mkdir(std::path::Path::new("debian")).unwrap();
+            tree.put_file_bytes_non_atomic(
+                std::path::Path::new("debian/changelog"),
+                changelog.as_bytes(),
+            )
+            .unwrap();
+            tree.add(&[std::path::Path::new("debian/changelog")])
+                .unwrap();
+
+            tree_set_changelog_version(&tree, &"1.0-1".parse().unwrap(), std::path::Path::new(""))
+                .unwrap();
+
+            assert_eq!(
+                tree.get_file_text(std::path::Path::new("debian/changelog"))
+                    .unwrap(),
+                changelog.as_bytes()
+            );
+        }
+    }
 }
