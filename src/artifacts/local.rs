@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::fs;
 use std::fs::File;
 use std::io::{self, ErrorKind};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::artifacts::{ArtifactManager, Error};
 
@@ -56,6 +56,13 @@ impl ArtifactManager for LocalArtifactManager {
         run_id: &str,
         filename: &str,
     ) -> Result<Box<dyn std::io::Read + Send + Sync>, Error> {
+        let mut components = Path::new(filename).components();
+        if !matches!(
+            (components.next(), components.next()),
+            (Some(Component::Normal(_)), None)
+        ) {
+            return Err(io::Error::from(ErrorKind::NotFound).into());
+        }
         let path = self.path.join(run_id).join(filename);
         Ok(Box::new(File::open(path)?))
     }
