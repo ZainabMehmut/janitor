@@ -48,7 +48,7 @@ pub async fn git_diff(
         }
     };
 
-    let repo_path = state.repo_manager.repo_path(&codebase);
+    let repo_path = state.repo_manager.repo_path(&codebase)?;
 
     // Python order: missing repo dir before SHA validity.
     if !repo_path.is_dir() {
@@ -236,7 +236,7 @@ pub async fn revision_info(
         }
     };
 
-    let repo_path = state.repo_manager.repo_path(&codebase);
+    let repo_path = state.repo_manager.repo_path(&codebase)?;
     // Python order: check repo dir before SHA validity.
     if !repo_path.is_dir() {
         return Err(GitStoreError::LocalRepositoryUnavailable(codebase));
@@ -350,7 +350,7 @@ pub async fn git_log(
         }
     }
 
-    let repo_path = state.repo_manager.repo_path(&codebase);
+    let repo_path = state.repo_manager.repo_path(&codebase)?;
     if !repo_path.exists() {
         return Err(GitStoreError::LocalRepositoryUnavailable(codebase));
     }
@@ -725,7 +725,7 @@ pub async fn git_backend(
         return Err(GitStoreError::RepositoryNotFound(codebase.to_string()));
     }
 
-    let repo_path = state.repo_manager.repo_path(codebase);
+    let repo_path = state.repo_manager.repo_path(codebase)?;
     if !repo_path.exists() {
         info!("auto-creating repository for {}", codebase);
         state.repo_manager.open_or_create(codebase)?;

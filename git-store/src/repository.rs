@@ -16,14 +16,16 @@ impl RepositoryManager {
         Self { base_path }
     }
 
-    /// Get the path for a repository
-    pub fn repo_path(&self, codebase: &str) -> PathBuf {
-        self.base_path.join(codebase)
+    /// Path of `codebase`; `RepositoryNotFound` unless it is a plain file name.
+    pub fn repo_path(&self, codebase: &str) -> Result<PathBuf> {
+        janitor::security::validate_filename(codebase)
+            .map_err(|_| GitStoreError::RepositoryNotFound(codebase.to_string()))?;
+        Ok(self.base_path.join(codebase))
     }
 
     /// Open a repository, creating it if it doesn't exist
     pub fn open_or_create(&self, codebase: &str) -> Result<Repository> {
-        let repo_path = self.repo_path(codebase);
+        let repo_path = self.repo_path(codebase)?;
 
         match Repository::open(&repo_path) {
             Ok(repo) => Ok(repo),
@@ -50,8 +52,8 @@ impl RepositoryManager {
 
     /// Check if a repository exists
     pub fn exists(&self, codebase: &str) -> bool {
-        let repo_path = self.repo_path(codebase);
-        Repository::open(&repo_path).is_ok()
+        self.repo_path(codebase)
+            .is_ok_and(|repo_path| Repository::open(repo_path).is_ok())
     }
 
     /// Validate a SHA

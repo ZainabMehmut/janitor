@@ -54,7 +54,7 @@ pub async fn handle_klaus(
 ) -> Result<Response> {
     debug!("klaus request: {} {}", codebase, sub_path);
 
-    let repo_path = state.repo_manager.repo_path(&codebase);
+    let repo_path = state.repo_manager.repo_path(&codebase)?;
 
     // Mirror py::_git_open_repo: if the local clone is missing, auto-
     // create it when the codebase is registered, else 404.
