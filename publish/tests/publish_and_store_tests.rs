@@ -14,7 +14,7 @@ use sqlx::PgPool;
 fn make_run(role: &str, revision: Option<&str>) -> janitor::state::Run {
     janitor::state::Run {
         id: RunId::new("run-1").unwrap(),
-        command: "noop".to_string(),
+        command: Some("noop".to_string()),
         description: None,
         result_code: "success".to_string(),
         main_branch_revision: None,
@@ -23,13 +23,13 @@ fn make_run(role: &str, revision: Option<&str>) -> janitor::state::Run {
         result: None,
         suite: Campaign::new("lintian-fixes").unwrap(),
         instigated_context: None,
-        vcs_type: "git".to_string(),
-        branch_url: "https://example.invalid/cb-1".to_string(),
+        vcs_type: Some("git".to_string()),
+        branch_url: Some("https://example.invalid/cb-1".to_string()),
         logfilenames: None,
         worker_name: None,
         result_branches: Some(vec![(
             role.to_string(),
-            role.to_string(),
+            Some(role.to_string()),
             None,
             revision.map(|r| RevisionId::from(r.as_bytes().to_vec())),
         )]),
