@@ -93,6 +93,15 @@ pub async fn handle_klaus(
     for (k, v) in &response_headers {
         builder = builder.header(k, v);
     }
+    // klaus sends raw files with an empty Content-Type; keep any HTML in them inert.
+    let has_content_type = response_headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("content-type") && !v.trim().is_empty());
+    if !has_content_type {
+        builder = builder
+            .header(axum::http::header::CONTENT_SECURITY_POLICY, "sandbox")
+            .header(axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+    }
     builder
         .body(Body::from(body_out))
         .map_err(|e| GitStoreError::HttpError(format!("Failed to build response: {}", e)))
