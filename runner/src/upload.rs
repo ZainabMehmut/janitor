@@ -11,7 +11,7 @@ use tokio::io::AsyncWriteExt;
 /// File uploaded by a worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadedFile {
-    /// Original filename.
+    /// Filename as stored, after `sanitize_filename`.
     pub filename: String,
     /// Content type if provided.
     pub content_type: Option<String>,
@@ -242,7 +242,7 @@ impl UploadProcessor {
             file_path
         );
         Ok(UploadedFile {
-            filename,
+            filename: safe_filename,
             content_type,
             size: file_size,
             stored_path: file_path,
@@ -285,7 +285,7 @@ impl UploadProcessor {
         );
 
         Ok(UploadedFile {
-            filename,
+            filename: safe_filename,
             content_type,
             size: file_size,
             stored_path: file_path,
