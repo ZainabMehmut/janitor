@@ -473,4 +473,18 @@ mod tests {
             false
         );
     }
+
+    #[tokio::test]
+    async fn test_parent_codebase_rejected() {
+        let td = TempDir::new().unwrap();
+        std::fs::create_dir(td.path().join("logs")).unwrap();
+        let mgr = FileSystemLogFileManager::new(td.path().join("logs")).unwrap();
+        std::fs::create_dir(td.path().join("run-1")).unwrap();
+        std::fs::write(td.path().join("run-1").join("build.log"), "outside").unwrap();
+
+        assert_eq!(
+            mgr.has_log("..", "run-1", "build.log").await.unwrap(),
+            false
+        );
+    }
 }
