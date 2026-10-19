@@ -30,7 +30,7 @@ from bs4 import BeautifulSoup
 from fakeredis.aioredis import FakeRedis
 
 from janitor.config import read_string as read_config_string
-from janitor.site.simple import create_app
+from janitor.site.simple import create_app, main_async
 
 _SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schema"
 
@@ -61,6 +61,16 @@ artifact_location: "{tempfile.mkdtemp()}"
 
 async def test_create_app():
     await create_app(config=create_config(), redis=FakeRedis())
+
+
+async def test_main_without_artifact_location(tmp_path):
+    path = tmp_path / "janitor.conf"
+    path.write_text(
+        'campaign { name: "lintian-fixes" }\nredis_location: "redis://localhost"\n'
+    )
+    with pytest.raises(SystemExit) as e:
+        await main_async(["--config", str(path)])
+    assert e.value.code == f"{path} has no artifact_location"
 
 
 async def test_codebase_query_redirect(aiohttp_client, database_location):
