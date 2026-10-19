@@ -73,6 +73,30 @@ The Janitor was originally written in Python, but is now being converted to
 Rust. New code should be written in Rust, unless there is a good reason to
 write it in Python.
 
+### Error Handling
+
+Don't silently ignore errors. Patterns like `unwrap_or_default()`,
+`.ok()`, a `filter_map` that drops errors, or logging an error and then
+returning success all hide problems. Return an error to the caller instead;
+panicking is not a substitute either.
+
+Validate input where it is parsed, using types: deserialize into
+`url::Url` rather than `String`, use an unsigned integer for a limit that
+can't be negative, and so on. An empty string is not the same as a missing
+value; don't treat `""` as `None`.
+
+Decode PostgreSQL enums into Rust enums (deriving `sqlx::Type`) rather than
+casting them to text and comparing strings.
+
+Fix problems where they originate rather than working around them at each
+call site. For example, a check that every caller needs belongs in the one
+function they all go through, and an ordering problem between database
+triggers belongs in the schema.
+
+Don't log credentials, such as passwords embedded in URLs. Things that
+happen routinely, like a client disconnecting halfway through a request,
+should not be logged as warnings; consider a Prometheus metric instead.
+
 ### Code Coverage
 
 All new code should be covered by tests. The Janitor uses the
@@ -93,6 +117,15 @@ whether it would be better to add it there instead.
 
 Any code that purely deals with VCS interactions should probably
 be in silver-platter or Breezy.
+
+Interact with Breezy through breezyshim, rather than using PyO3 directly or
+running `brz` as a subprocess. If breezyshim lacks something, add it there.
+
+If you find a bug in one of the libraries the Janitor uses (Breezy,
+breezyshim, silver-platter, ognibuild, buildlog-consultant, ...), please fix
+or report it there rather than working around it in the Janitor. Likewise,
+prefer functionality that a dependency already provides over writing your
+own version of it.
 
 The site (except for the cupboard, which will be split out in the future)
 shipped with the janitor itself is meant to be an example
@@ -116,6 +149,12 @@ Integration tests should live in the `tests/` directory.
 
 Please share logic between tests where relevant. Don't add many separate
 integration test files with their own setup, teardown and helper code.
+Add tests to the existing test file for the code you are changing, and reuse
+the helpers that are already there, such as `TestDatabase` and
+`test_with_database!` for tests that need PostgreSQL.
+
+Compare complete values with `assert_eq!` (or `==` in Python) rather than
+checking parts of them with `contains()` or `in`.
 
 Other anti-patterns:
 
@@ -131,6 +170,14 @@ Other anti-patterns:
  * Be careful when checking HTML output; if you check for exact
    output that will break when e.g. new attributes are added.
    Use HTML parsers like soup to assert what's the case.
+ * Don't start the Janitor's own binaries (e.g. `janitor-publish`) from
+   tests; call the code directly.
+ * Don't test the behaviour of libraries you use, such as HTML escaping in
+   pygments.
+ * Avoid tests that depend on timing or memory use; they are slow and
+   flaky.
+ * Keep the size of tests in proportion to the change; a one-line fix
+   rarely needs a hundred lines of tests.
 
 ### Comments
 
@@ -140,6 +187,12 @@ understand with comments is code that's easy to understand.
 
 Comments are useful, but please don't overdo them. Justify why the
 code is what it is currently.
+
+### Documentation
+
+Documentation should describe how things are meant to work. If something
+doesn't work as described, fix it or file an issue, rather than documenting
+the bug.
 
 ### Keep Changes Small and Self-Contained
 
@@ -156,6 +209,10 @@ for reviewers.
 
 In general, changes should be preceded by a discussion in an issue.
 PRs or commits should reference the issue they are addressing.
+
+### Making larger changes
+
+For any feature enhancements or larger changes, please open an issue first to discuss the change.
 
 ## Developer Certificate of Origin
 
