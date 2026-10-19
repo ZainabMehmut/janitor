@@ -53,13 +53,21 @@ from .setup import setup_logfile_manager, setup_postgres
 routes = web.RouteTableDef()
 
 
+def _url_segment(request, name):
+    """Return a path value that stays one segment in a private URL."""
+    value = request.match_info[name]
+    if "/" in value or value in (".", ".."):
+        raise web.HTTPNotFound(text=f"invalid {name}")
+    return value
+
+
 @docs()
 @routes.post("/{campaign}/c/{codebase}/publish", name="codebase-publish")
 async def handle_publish(request):
     check_logged_in(request)
     publisher_url = request.app["publisher_url"]
-    codebase = request.match_info["codebase"]
-    campaign = request.match_info["campaign"]
+    codebase = _url_segment(request, "codebase")
+    campaign = _url_segment(request, "campaign")
     post = await request.post()
     mode = post.get("mode")
     if mode not in (None, "push-derived", "push", "propose", "attempt-push"):
@@ -199,7 +207,7 @@ class MergeProposalSchema(Schema):
 
 @routes.get("/{campaign}/merge-proposals", name="campaign-merge-proposals")
 async def handle_campaign_merge_proposal_list(request):
-    campaign = request.match_info["campaign"]
+    campaign = _url_segment(request, "campaign")
 
     url = URL(request.app["publisher_url"]) / campaign / "merge-proposals"
     async with request.app["http_client_session"].get(
@@ -210,7 +218,7 @@ async def handle_campaign_merge_proposal_list(request):
 
 @routes.get("/c/{codebase}/merge-proposals", name="codebase-merge-proposals")
 async def handle_codebase_merge_proposal_list(request):
-    codebase = request.match_info["codebase"]
+    codebase = _url_segment(request, "codebase")
     url = URL(request.app["publisher_url"]) / "c" / codebase / "merge-proposals"
     async with request.app["http_client_session"].get(
         url, raise_for_status=True
@@ -497,7 +505,7 @@ async def handle_runner_status(request):
 @docs()
 @routes.get("/active-runs/{run_id}/log/", name="run-log-list")
 async def handle_runner_log_index(request):
-    run_id = request.match_info["run_id"]
+    run_id = _url_segment(request, "run_id")
     url = URL(request.app["runner_url"]) / "log" / run_id
     span = aiozipkin.request_span(request)
     with span.new_child("runner:log-list"):
@@ -546,7 +554,7 @@ async def handle_runner_kill(request):
     span = aiozipkin.request_span(request)
     with span.new_child("check-admin"):
         check_admin(request)
-    run_id = request.match_info["run_id"]
+    run_id = _url_segment(request, "run_id")
     with span.new_child("runner:kill"):
         url = URL(request.app["runner_url"]) / "kill" / run_id
         try:
@@ -581,8 +589,8 @@ async def handle_runner_kill(request):
 @docs()
 @routes.get("/active-runs/{run_id}/log/{filename}", name="run-log")
 async def handle_runner_log(request):
-    run_id = request.match_info["run_id"]
-    filename = request.match_info["filename"]
+    run_id = _url_segment(request, "run_id")
+    filename = _url_segment(request, "filename")
     span = aiozipkin.request_span(request)
     with span.new_child("runner:log"):
         url = URL(request.app["runner_url"]) / "log" / run_id / filename
@@ -603,7 +611,7 @@ async def handle_runner_log(request):
 @docs()
 @routes.get("/publish/{publish_id}", name="publish-details")
 async def handle_publish_id(request):
-    publish_id = request.match_info["publish_id"]
+    publish_id = _url_segment(request, "publish_id")
     span = aiozipkin.request_span(request)
     with span.new_child("publisher:publish"):
         url = URL(request.app["publisher_url"]) / "publish" / publish_id
