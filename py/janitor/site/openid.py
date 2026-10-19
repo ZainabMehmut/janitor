@@ -18,14 +18,35 @@
 """OpenID support."""
 
 import asyncio
+import base64
+import hmac
 import logging
 import os
 import uuid
 from typing import Optional
 
 import aiohttp
-from aiohttp import web
+from aiohttp import hdrs, web
 from yarl import URL
+
+
+def basic_auth_admin(config, authorization: Optional[str]) -> Optional[str]:
+    """Return the user name if the Authorization header matches admin_credentials."""
+    scheme, _, encoded = (authorization or "").partition(" ")
+    if scheme.lower() != "basic":
+        return None
+    try:
+        login, _, password = base64.b64decode(encoded, validate=True).partition(b":")
+    except ValueError:
+        return None
+    for credentials in config.admin_credentials:
+        if not credentials.username or not credentials.password:
+            continue
+        username_ok = hmac.compare_digest(credentials.username.encode(), login)
+        password_ok = hmac.compare_digest(credentials.password.encode(), password)
+        if username_ok and password_ok:
+            return credentials.username
+    return None
 
 
 @web.middleware
@@ -38,6 +59,14 @@ async def openid_middleware(request, handler):
             )
     else:
         userinfo = None
+    request["basic_auth_admin"] = False
+    if userinfo is None:
+        username = basic_auth_admin(
+            request.app["config"], request.headers.get(hdrs.AUTHORIZATION)
+        )
+        if username is not None:
+            userinfo = {"name": username}
+            request["basic_auth_admin"] = True
     request["user"] = userinfo
     resp = await handler(request)
     return resp

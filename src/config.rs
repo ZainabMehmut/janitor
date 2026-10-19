@@ -5,8 +5,8 @@ use std::fs::File;
 use std::io::Read;
 
 pub use config::{
-    AptRepository, BugTracker, BugTrackerKind, Campaign, Config, DebianBuild, Distribution,
-    GenericBuild, MergeProposalConfig, OAuth2Provider, Select,
+    AdminCredentials, AptRepository, BugTracker, BugTrackerKind, Campaign, Config, DebianBuild,
+    Distribution, GenericBuild, MergeProposalConfig, OAuth2Provider, Select,
 };
 
 pub fn read_file(file_path: &std::path::Path) -> Result<Config, Box<dyn std::error::Error>> {

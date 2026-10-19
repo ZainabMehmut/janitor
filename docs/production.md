@@ -81,6 +81,24 @@ variables instead, which are used as a fallback if the config fields are empty.
 The provider needs a matching OAuth App/client registered with it first,
 with its callback URL set to `<external_url>/oauth/callback`.
 
+## Admin API logins
+
+Clients such as `janitor-admin` log in to the site's admin API with HTTP
+basic auth. Add an `admin_credentials` entry for each client to
+`janitor.conf`:
+
+```
+admin_credentials {
+  username: "janitor-admin"
+  password: "a long random password"
+}
+```
+
+A request with a matching login is treated as an admin and QA reviewer, e.g.
+`janitor-admin --user janitor-admin --password ... worker list`.
+Add the entry only after every service runs a build that knows
+`admin_credentials`; older builds refuse the config with `Unknown field`.
+
 ## Optional configuration
 
 A few `janitor.conf` fields are optional, each with a clean fallback if left

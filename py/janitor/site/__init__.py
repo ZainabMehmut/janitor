@@ -199,6 +199,8 @@ async def get_archive_diff(
 
 
 def is_admin(request: web.Request) -> bool:
+    if request.get("basic_auth_admin"):
+        return True
     if not request["user"]:
         return False
     admin_group = request.app["config"].oauth2_provider.admin_group
@@ -208,6 +210,8 @@ def is_admin(request: web.Request) -> bool:
 
 
 def is_qa_reviewer(request: web.Request) -> bool:
+    if request.get("basic_auth_admin"):
+        return True
     if not request["user"]:
         return False
     qa_reviewer_group = request.app["config"].oauth2_provider.qa_reviewer_group

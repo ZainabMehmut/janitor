@@ -68,6 +68,16 @@ message Config {
   repeated BugTracker bugtracker = 17;
 
   repeated AptRepository apt_repository = 19;
+
+  // HTTP basic auth logins that the site accepts as admin, e.g. one for
+  // janitor-admin and one for janitor-mail-filter.
+  repeated AdminCredentials admin_credentials = 20;
+}
+
+message AdminCredentials {
+  optional string username = 1;
+
+  optional string password = 2;
 }
 
 message MergeProposalConfig {

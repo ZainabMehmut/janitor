@@ -131,6 +131,31 @@ impl Config {
             .map(|a| AptRepository(a.clone()))
             .collect()
     }
+
+    #[getter]
+    pub fn admin_credentials(&self) -> Vec<AdminCredentials> {
+        self.0
+            .admin_credentials
+            .iter()
+            .map(|c| AdminCredentials(c.clone()))
+            .collect()
+    }
+}
+
+#[pyclass]
+pub struct AdminCredentials(pub(crate) janitor::config::AdminCredentials);
+
+#[pymethods]
+impl AdminCredentials {
+    #[getter]
+    pub fn username(&self) -> Option<&str> {
+        self.0.username.as_deref()
+    }
+
+    #[getter]
+    pub fn password(&self) -> Option<&str> {
+        self.0.password.as_deref()
+    }
 }
 
 #[pyclass]
@@ -487,6 +512,7 @@ pub(crate) fn init(_py: Python, module: &Bound<PyModule>) -> PyResult<()> {
     module.add_class::<Distribution>()?;
     module.add_class::<BugTracker>()?;
     module.add_class::<OAuth2Provider>()?;
+    module.add_class::<AdminCredentials>()?;
     module.add_class::<MergeProposalConfig>()?;
     module.add_class::<DebianBuild>()?;
     module.add_class::<GenericBuild>()?;
