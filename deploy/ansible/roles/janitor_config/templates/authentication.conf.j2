@@ -9,11 +9,18 @@ password = {{ breezy_github_token }}
 private_token = {{ breezy_github_token }}
 
 {% endif %}
+{% if breezy_service in ['runner', 'publish'] and enable_gitea | bool %}
+[gitea]
+forge = gitea
+url = https://{{ gitea_domain }}/
+private_token = {{ gitea_bot_token }}
+
+{% endif %}
 {% if breezy_service == 'worker' %}
 # git_store and bzr_store want Basic auth from a worker for pushes.
 [janitor-vcs]
 scheme = {{ janitor_scheme }}
 host = {{ janitor_domain }}
 user = {{ worker_name }}
-password = {{ worker_password }}
+password = {{ janitor_worker_password }}
 {% endif %}
