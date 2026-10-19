@@ -22,8 +22,11 @@ from pathlib import Path
 
 import aiohttp
 import asyncpg
+import pytest
 import pytest_asyncio
 import testing.postgresql
+from aiohttp import web
+from bs4 import BeautifulSoup
 from fakeredis.aioredis import FakeRedis
 
 from janitor.config import read_string as read_config_string
@@ -45,13 +48,14 @@ async def database_location():
         yield postgresql.url()
 
 
-def create_config(database_location=None):
+def create_config(database_location=None, extra=""):
     return read_config_string(f"""
 campaign {{
   name: "lintian-fixes"
 }}
 artifact_location: "{tempfile.mkdtemp()}"
 {f'database_location: "{database_location}"' if database_location else ""}
+{extra}
 """)
 
 
@@ -233,3 +237,63 @@ async def test_merge_proposal_without_url_returns_400(
     resp = await client.get("/lintian-fixes/merge-proposal")
     assert resp.status == 400
     assert await resp.text() == "no url specified"
+
+
+async def _start_provider(aiohttp_server, *, discovery=None):
+    """A local server standing in for the OpenID provider."""
+
+    async def handle_discovery(request):
+        if discovery is not None:
+            return web.json_response(discovery)
+        base = request.url.origin()
+        return web.json_response(
+            {
+                "authorization_endpoint": str(base / "authorize"),
+                "token_endpoint": str(base / "token"),
+                "userinfo_endpoint": str(base / "userinfo"),
+            }
+        )
+
+    provider_app = web.Application()
+    provider_app.router.add_get("/.well-known/openid-configuration", handle_discovery)
+    return await aiohttp_server(provider_app)
+
+
+async def _openid_site(aiohttp_client, database_location, provider=None):
+    base_url = f'base_url: "{provider.make_url("/")}"' if provider else ""
+    oauth2_provider = f"""oauth2_provider {{
+  client_id: "test-client"
+  client_secret: "test-secret"
+  {base_url}
+}}"""
+    _private_app, app = await create_app(
+        config=create_config(database_location, oauth2_provider),
+        external_url="https://example.com/",
+        redis=FakeRedis(),
+    )
+    return await aiohttp_client(app)
+
+
+def _login_links(html):
+    soup = BeautifulSoup(html, "html.parser")
+    return [a.get_text() for a in soup.select('a[href^="/login?"]')]
+
+
+@pytest.mark.parametrize(
+    "discovery, links",
+    [(None, ["Login"]), ({}, [])],
+)
+async def test_login_link_with_provider(
+    aiohttp_client, aiohttp_server, database_location, discovery, links
+):
+    provider = await _start_provider(aiohttp_server, discovery=discovery)
+    client = await _openid_site(aiohttp_client, database_location, provider)
+    resp = await client.get("/lintian-fixes/candidates")
+    assert (resp.status, _login_links(await resp.text())) == (200, links)
+
+
+async def test_login_link_hidden_without_provider(aiohttp_client, database_location):
+    # app["openid_config"] is always set, to None when login is disabled.
+    client = await _openid_site(aiohttp_client, database_location)
+    resp = await client.get("/lintian-fixes/candidates")
+    assert (resp.status, _login_links(await resp.text())) == (200, [])
