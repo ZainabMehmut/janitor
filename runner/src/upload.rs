@@ -658,5 +658,9 @@ mod tests {
         assert_eq!(sanitize_filename("with:colon.txt"), "with_colon.txt");
         assert_eq!(sanitize_filename("..dangerous"), "dangerous");
         assert_eq!(sanitize_filename("dangerous.."), "dangerous");
+        assert_eq!(
+            sanitize_filename("-x_1.0_source.changes"),
+            "_x_1.0_source.changes"
+        );
     }
 }
