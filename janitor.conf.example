@@ -125,6 +125,7 @@ campaign {
   # This codemod is not in the published worker image. Install it in a
   # worker image of your own, see "Custom worker tooling" in
   # docs/Dockerfiles_.md.
+  # brz-debian is already in it, so use apt-get install --reinstall brz-debian.
   command: "deb-new-upstream"
   debian_build {
     build_distribution: "fresh-releases"

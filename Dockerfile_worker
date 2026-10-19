@@ -32,6 +32,7 @@ MAINTAINER Jelmer Vernooij <jelmer@jelmer.uk>
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# brz-debian is needed for its breezy plugin; its codemod commands are dropped
 RUN apt-get update --yes \
  && apt-get install --yes --no-install-recommends \
         auto-apt-proxy \
@@ -51,6 +52,12 @@ RUN apt-get update --yes \
         mmdebstrap \
  && apt-get satisfy --yes --no-install-recommends \
         "libpython$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')" \
+ && rm -f \
+        /usr/bin/deb-auto-backport \
+        /usr/bin/deb-import-uncommitted \
+        /usr/bin/deb-merge \
+        /usr/bin/deb-move-orphaned \
+        /usr/bin/deb-new-upstream \
  && apt-get clean
 
 # unshare mode is the only sbuild chroot mode that works unprivileged in a rootless container
