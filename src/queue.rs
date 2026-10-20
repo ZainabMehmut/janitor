@@ -1,3 +1,4 @@
+use crate::{Campaign, Codebase};
 use chrono::TimeDelta;
 use sqlx::postgres::types::PgInterval;
 use sqlx::{Error, FromRow, PgPool};
@@ -11,11 +12,11 @@ pub struct QueueItem {
     pub command: Option<String>,
     // queue.estimated_duration is nullable (schema/state.sql).
     pub estimated_duration: Option<PgInterval>,
-    pub campaign: String,
+    pub campaign: Campaign,
     pub refresh: Option<bool>,
     pub requester: Option<String>,
     pub change_set: Option<String>,
-    pub codebase: String,
+    pub codebase: Codebase,
 }
 
 impl PartialEq for QueueItem {
@@ -66,7 +67,11 @@ impl<'a> Queue<'a> {
         Queue { pool }
     }
 
-    pub async fn get_position(&self, campaign: &str, codebase: &str) -> Result<Option<ETA>, Error> {
+    pub async fn get_position(
+        &self,
+        campaign: &Campaign,
+        codebase: &Codebase,
+    ) -> Result<Option<ETA>, Error> {
         let row: Option<ETA> = sqlx::query_as::<_, ETA>(
             "SELECT position, wait_time FROM queue_positions WHERE codebase = $1 AND suite = $2",
         )
@@ -103,8 +108,8 @@ impl<'a> Queue<'a> {
     /// * `assigned_queue_items` - A set of queue items that are already assigned
     pub async fn next_item(
         &self,
-        codebase: Option<&str>,
-        campaign: Option<&str>,
+        codebase: Option<&Codebase>,
+        campaign: Option<&Campaign>,
         exclude_hosts: Option<HashSet<String>>,
         assigned_queue_items: Option<HashSet<i32>>,
     ) -> Result<(Option<QueueItem>, Option<VcsInfo>), Error> {
@@ -178,9 +183,9 @@ impl<'a> Queue<'a> {
 
     pub async fn add(
         &self,
-        codebase: &str,
+        codebase: &Codebase,
         command: &str,
-        campaign: &str,
+        campaign: &Campaign,
         change_set: Option<&str>,
         offset: f64,
         bucket: &str,
@@ -240,7 +245,7 @@ impl<'a> Queue<'a> {
     pub async fn iter_queue(
         &self,
         limit: Option<i64>,
-        campaign: Option<&str>,
+        campaign: Option<&Campaign>,
     ) -> Result<Vec<QueueItem>, Error> {
         let query = if campaign.is_some() {
             r#"
@@ -308,9 +313,9 @@ mod tests {
 
         let (id, bucket) = queue
             .add(
-                "cb",
+                &Codebase::new("cb").unwrap(),
                 "cmd",
-                "lintian-fixes",
+                &Campaign::new("lintian-fixes").unwrap(),
                 None,
                 0.0,
                 "missing-deps",
@@ -327,9 +332,9 @@ mod tests {
         // entry alone and returns it.
         let (id2, bucket2) = queue
             .add(
-                "cb",
+                &Codebase::new("cb").unwrap(),
                 "cmd",
-                "lintian-fixes",
+                &Campaign::new("lintian-fixes").unwrap(),
                 None,
                 0.0,
                 "default",

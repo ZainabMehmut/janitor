@@ -12,6 +12,7 @@ use breezyshim::forge::{determine_title, Forge, MergeProposal};
 use breezyshim::repository::Repository;
 use breezyshim::transport::Transport;
 use breezyshim::RevisionId;
+use janitor::{Campaign, RunId};
 use minijinja::Environment;
 use silver_platter::publish::{publish_changes, DescriptionFormat, Error as SvpPublishError};
 use silver_platter::utils::merge_conflicts;
@@ -363,7 +364,7 @@ pub fn publish_one(
 
     let debdiff = match crate::get_debdiff(
         &request.differ_url,
-        request.unchanged_id.as_deref(),
+        request.unchanged_id.as_ref(),
         &request.log_id,
     ) {
         Ok(debdiff) => Some(debdiff),
@@ -459,7 +460,7 @@ pub fn publish_one(
 /// messages from the campaign templates.
 pub fn publish(
     template_env: Environment,
-    campaign: &str,
+    campaign: &Campaign,
     commit_message_template: Option<&str>,
     title_template: Option<&str>,
     codemod_result: &serde_json::Value,
@@ -470,7 +471,7 @@ pub fn publish(
     source_branch: GenericBranch,
     derived_branch_name: &str,
     resume_branch: Option<GenericBranch>,
-    log_id: &str,
+    log_id: &RunId,
     existing_proposal: Option<MergeProposal>,
     allow_create_proposal: bool,
     debdiff: Option<Vec<u8>>,

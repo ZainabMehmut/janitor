@@ -1,3 +1,4 @@
+use janitor::{Campaign, Codebase, RunId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -9,7 +10,7 @@ pub struct QueueSummary {
     /// Count of items by status
     pub by_status: HashMap<String, i64>,
     /// Count of items by campaign
-    pub by_campaign: HashMap<String, i64>,
+    pub by_campaign: HashMap<Campaign, i64>,
     /// Number of items currently processing
     pub processing: i64,
     /// Number of items pending
@@ -36,16 +37,16 @@ pub struct ProcessingRunResponse {
     /// Information about the run itself
     pub run: RunInfo,
     /// URL or identifier of the codebase being processed
-    pub codebase: Option<String>,
+    pub codebase: Option<Codebase>,
     /// Name of the campaign this run belongs to
-    pub campaign: Option<String>,
+    pub campaign: Option<Campaign>,
 }
 
 /// Basic information about a run
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunInfo {
     /// Unique identifier for this run
-    pub id: String,
+    pub id: RunId,
     /// Timestamp when the run started
     pub started_at: chrono::DateTime<chrono::Utc>,
 }
@@ -70,11 +71,11 @@ pub struct SimpleStatusResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerAssignment {
     /// Unique identifier for this run
-    pub run_id: String,
+    pub run_id: RunId,
     /// Name of the campaign to execute
-    pub campaign: String,
+    pub campaign: Campaign,
     /// URL or identifier of the codebase to work on
-    pub codebase: String,
+    pub codebase: Codebase,
     /// Command to execute for the codemod
     pub command: String,
     /// Version control system information (format depends on VCS type)
@@ -99,11 +100,11 @@ pub struct AssignmentResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResumeInfo {
     /// Identifier of the run to resume
-    pub run_id: String,
+    pub run_id: RunId,
     /// Name of the campaign being resumed
-    pub campaign: String,
+    pub campaign: Campaign,
     /// URL or identifier of the codebase
-    pub codebase: String,
+    pub codebase: Codebase,
     /// Command that was being executed
     pub command: String,
     /// Result from the previous codemod execution
@@ -124,7 +125,7 @@ pub struct WorkerStatusUpdate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CandidateUpdate {
     /// Campaign this candidate belongs to
-    pub campaign: String,
+    pub campaign: Campaign,
     /// Identifier for the set of changes this candidate belongs to
     pub change_set: Option<String>,
     /// Additional context or metadata for the candidate
@@ -152,7 +153,7 @@ pub struct RunStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CampaignStats {
     /// Name of the campaign
-    pub campaign: String,
+    pub campaign: Campaign,
     /// Total number of candidates in this campaign
     pub total_candidates: i64,
     /// Number of candidates that have been processed
@@ -171,7 +172,7 @@ pub struct WorkerHealthStatus {
     /// Timestamp of last communication from the worker
     pub last_seen: chrono::DateTime<chrono::Utc>,
     /// ID of the run currently being processed, if any
-    pub current_run: Option<String>,
+    pub current_run: Option<RunId>,
 }
 
 /// Detailed information about an item in the queue
@@ -180,9 +181,9 @@ pub struct QueueItemDetails {
     /// Unique identifier for this queue item
     pub id: String,
     /// URL or identifier of the codebase to process
-    pub codebase: String,
+    pub codebase: Codebase,
     /// Campaign this item belongs to
-    pub campaign: String,
+    pub campaign: Campaign,
     /// Priority level (higher values processed first)
     pub priority: i32,
     /// Current status of the queue item (e.g., "pending", "processing", "completed")

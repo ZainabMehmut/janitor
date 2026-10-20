@@ -1,3 +1,4 @@
+use crate::{Codebase, RunId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::fs;
@@ -19,7 +20,7 @@ impl FileSystemLogFileManager {
         Ok(Self { log_directory })
     }
 
-    fn get_paths(&self, codebase: &str, run_id: &str, name: &str) -> Vec<PathBuf> {
+    fn get_paths(&self, codebase: &Codebase, run_id: &RunId, name: &str) -> Vec<PathBuf> {
         if codebase.contains('/') || run_id.contains('/') || name.contains('/') {
             return vec![];
         }
@@ -35,7 +36,12 @@ impl FileSystemLogFileManager {
 
 #[async_trait]
 impl LogFileManager for FileSystemLogFileManager {
-    async fn has_log(&self, codebase: &str, run_id: &str, name: &str) -> Result<bool, Error> {
+    async fn has_log(
+        &self,
+        codebase: &Codebase,
+        run_id: &RunId,
+        name: &str,
+    ) -> Result<bool, Error> {
         Ok(self
             .get_paths(codebase, run_id, name)
             .iter()
@@ -44,8 +50,8 @@ impl LogFileManager for FileSystemLogFileManager {
 
     async fn get_log(
         &self,
-        codebase: &str,
-        run_id: &str,
+        codebase: &Codebase,
+        run_id: &RunId,
         name: &str,
     ) -> Result<Box<dyn Read + Send + Sync>, Error> {
         for path in self.get_paths(codebase, run_id, name) {
@@ -65,8 +71,8 @@ impl LogFileManager for FileSystemLogFileManager {
 
     async fn import_log(
         &self,
-        codebase: &str,
-        run_id: &str,
+        codebase: &Codebase,
+        run_id: &RunId,
         orig_path: &str,
         mtime: Option<DateTime<Utc>>,
         basename: Option<&str>,
@@ -184,8 +190,8 @@ impl LogFileManager for FileSystemLogFileManager {
 
     async fn get_ctime(
         &self,
-        codebase: &str,
-        run_id: &str,
+        codebase: &Codebase,
+        run_id: &RunId,
         name: &str,
     ) -> Result<DateTime<Utc>, Error> {
         for path in self.get_paths(codebase, run_id, name) {
@@ -198,7 +204,12 @@ impl LogFileManager for FileSystemLogFileManager {
         Err(Error::NotFound)
     }
 
-    async fn delete_log(&self, codebase: &str, run_id: &str, name: &str) -> Result<(), Error> {
+    async fn delete_log(
+        &self,
+        codebase: &Codebase,
+        run_id: &RunId,
+        name: &str,
+    ) -> Result<(), Error> {
         for path in self.get_paths(codebase, run_id, name) {
             match async_fs::remove_file(&path).await {
                 Ok(()) => return Ok(()),
@@ -255,7 +266,13 @@ mod tests {
     async fn test_has_log_not_found() {
         let (_td, mgr) = setup();
         assert_eq!(
-            mgr.has_log("codebase", "run-1", "build.log").await.unwrap(),
+            mgr.has_log(
+                &Codebase::new("codebase").unwrap(),
+                &RunId::new("run-1").unwrap(),
+                "build.log"
+            )
+            .await
+            .unwrap(),
             false
         );
     }
@@ -263,7 +280,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_log_not_found() {
         let (_td, mgr) = setup();
-        let result = mgr.get_log("codebase", "run-1", "build.log").await;
+        let result = mgr
+            .get_log(
+                &Codebase::new("codebase").unwrap(),
+                &RunId::new("run-1").unwrap(),
+                "build.log",
+            )
+            .await;
         assert!(matches!(result, Err(Error::NotFound)));
     }
 
@@ -277,8 +300,8 @@ mod tests {
         std::fs::write(&source_path, "some log content\n").unwrap();
 
         mgr.import_log(
-            "codebase",
-            "run-1",
+            &Codebase::new("codebase").unwrap(),
+            &RunId::new("run-1").unwrap(),
             source_path.to_str().unwrap(),
             None,
             None,
@@ -287,7 +310,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            mgr.has_log("codebase", "run-1", "build.log").await.unwrap(),
+            mgr.has_log(
+                &Codebase::new("codebase").unwrap(),
+                &RunId::new("run-1").unwrap(),
+                "build.log"
+            )
+            .await
+            .unwrap(),
             true
         );
     }
@@ -301,8 +330,8 @@ mod tests {
         std::fs::write(&source_path, "log line 1\nlog line 2\n").unwrap();
 
         mgr.import_log(
-            "codebase",
-            "run-1",
+            &Codebase::new("codebase").unwrap(),
+            &RunId::new("run-1").unwrap(),
             source_path.to_str().unwrap(),
             None,
             None,
@@ -310,7 +339,14 @@ mod tests {
         .await
         .unwrap();
 
-        let mut reader = mgr.get_log("codebase", "run-1", "build.log").await.unwrap();
+        let mut reader = mgr
+            .get_log(
+                &Codebase::new("codebase").unwrap(),
+                &RunId::new("run-1").unwrap(),
+                "build.log",
+            )
+            .await
+            .unwrap();
         let mut content = String::new();
         reader.read_to_string(&mut content).unwrap();
         assert_eq!(content, "log line 1\nlog line 2\n");
@@ -325,8 +361,8 @@ mod tests {
         std::fs::write(&source_path, "content").unwrap();
 
         mgr.import_log(
-            "codebase",
-            "run-1",
+            &Codebase::new("codebase").unwrap(),
+            &RunId::new("run-1").unwrap(),
             source_path.to_str().unwrap(),
             None,
             Some("renamed.log"),
@@ -335,15 +371,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            mgr.has_log("codebase", "run-1", "renamed.log")
-                .await
-                .unwrap(),
+            mgr.has_log(
+                &Codebase::new("codebase").unwrap(),
+                &RunId::new("run-1").unwrap(),
+                "renamed.log"
+            )
+            .await
+            .unwrap(),
             true
         );
         assert_eq!(
-            mgr.has_log("codebase", "run-1", "original.log")
-                .await
-                .unwrap(),
+            mgr.has_log(
+                &Codebase::new("codebase").unwrap(),
+                &RunId::new("run-1").unwrap(),
+                "original.log"
+            )
+            .await
+            .unwrap(),
             false
         );
     }
@@ -358,8 +402,8 @@ mod tests {
 
         let mtime = chrono::DateTime::from_timestamp(1700000000, 0).unwrap();
         mgr.import_log(
-            "codebase",
-            "run-1",
+            &Codebase::new("codebase").unwrap(),
+            &RunId::new("run-1").unwrap(),
             source_path.to_str().unwrap(),
             Some(mtime),
             None,
@@ -368,7 +412,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            mgr.has_log("codebase", "run-1", "build.log").await.unwrap(),
+            mgr.has_log(
+                &Codebase::new("codebase").unwrap(),
+                &RunId::new("run-1").unwrap(),
+                "build.log"
+            )
+            .await
+            .unwrap(),
             true
         );
     }
@@ -382,8 +432,8 @@ mod tests {
         std::fs::write(&source_path, "content").unwrap();
 
         mgr.import_log(
-            "codebase",
-            "run-1",
+            &Codebase::new("codebase").unwrap(),
+            &RunId::new("run-1").unwrap(),
             source_path.to_str().unwrap(),
             None,
             None,
@@ -392,7 +442,11 @@ mod tests {
         .unwrap();
 
         let ctime = mgr
-            .get_ctime("codebase", "run-1", "build.log")
+            .get_ctime(
+                &Codebase::new("codebase").unwrap(),
+                &RunId::new("run-1").unwrap(),
+                "build.log",
+            )
             .await
             .unwrap();
         // ctime should be recent (within the last minute)
@@ -405,7 +459,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_ctime_not_found() {
         let (_td, mgr) = setup();
-        let result = mgr.get_ctime("codebase", "run-1", "build.log").await;
+        let result = mgr
+            .get_ctime(
+                &Codebase::new("codebase").unwrap(),
+                &RunId::new("run-1").unwrap(),
+                "build.log",
+            )
+            .await;
         assert!(matches!(result, Err(Error::NotFound)));
     }
 
@@ -419,15 +479,33 @@ mod tests {
         let source2 = source_dir.path().join("worker.log");
         std::fs::write(&source2, "content2").unwrap();
 
-        mgr.import_log("codebase-a", "run-1", source1.to_str().unwrap(), None, None)
-            .await
-            .unwrap();
-        mgr.import_log("codebase-a", "run-1", source2.to_str().unwrap(), None, None)
-            .await
-            .unwrap();
-        mgr.import_log("codebase-b", "run-2", source1.to_str().unwrap(), None, None)
-            .await
-            .unwrap();
+        mgr.import_log(
+            &Codebase::new("codebase-a").unwrap(),
+            &RunId::new("run-1").unwrap(),
+            source1.to_str().unwrap(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.import_log(
+            &Codebase::new("codebase-a").unwrap(),
+            &RunId::new("run-1").unwrap(),
+            source2.to_str().unwrap(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.import_log(
+            &Codebase::new("codebase-b").unwrap(),
+            &RunId::new("run-2").unwrap(),
+            source1.to_str().unwrap(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         let mut logs: Vec<(String, String, Vec<String>)> = mgr.iter_logs().await.collect();
         logs.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
@@ -454,19 +532,18 @@ mod tests {
     #[tokio::test]
     async fn test_path_traversal_rejected() {
         let (_td, mgr) = setup();
-        // Paths containing '/' should return empty paths list
+        // Codebase and run id can't contain '/' at all; the log name is
+        // checked by the manager.
+        assert!(Codebase::new("code/base").is_err());
+        assert!(RunId::new("run/1").is_err());
         assert_eq!(
-            mgr.has_log("code/base", "run-1", "build.log")
-                .await
-                .unwrap(),
-            false
-        );
-        assert_eq!(
-            mgr.has_log("codebase", "run/1", "build.log").await.unwrap(),
-            false
-        );
-        assert_eq!(
-            mgr.has_log("codebase", "run-1", "build/log").await.unwrap(),
+            mgr.has_log(
+                &Codebase::new("codebase").unwrap(),
+                &RunId::new("run-1").unwrap(),
+                "build/log"
+            )
+            .await
+            .unwrap(),
             false
         );
     }

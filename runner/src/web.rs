@@ -12,6 +12,7 @@ use axum::{
     Extension, Json, Router,
 };
 use chrono::Utc;
+use janitor::{Campaign, Codebase, RunId};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -36,9 +37,9 @@ struct AssignRequest {
     /// Backchannel configuration.
     backchannel: Option<serde_json::Value>,
     /// Specific codebase to work on.
-    codebase: Option<String>,
+    codebase: Option<Codebase>,
     /// Specific campaign to work on.
-    campaign: Option<String>,
+    campaign: Option<Campaign>,
     /// Hosts the worker is temporarily rate-limited on; the queue
     /// filter unions these with the runner-wide `avoid_hosts` and the
     /// Redis `rate-limit-hosts` set so the worker doesn't get handed
@@ -58,7 +59,7 @@ struct UpdateRunRequest {
 #[derive(Debug, Deserialize)]
 struct ResumeInfoRequest {
     /// Campaign name (stored as `run.suite` in the schema).
-    campaign: String,
+    campaign: Campaign,
     /// Revision id of the resume branch's tip. Used together with
     /// `campaign` to form the `(suite, revision)` resume lookup key.
     resume_revision: String,
@@ -70,9 +71,9 @@ struct ResumeInfoRequest {
 /// knobs.
 #[derive(Debug, Deserialize)]
 struct ScheduleRequest {
-    run_id: Option<String>,
-    campaign: Option<String>,
-    codebase: Option<String>,
+    run_id: Option<RunId>,
+    campaign: Option<Campaign>,
+    codebase: Option<Codebase>,
     refresh: Option<bool>,
     change_set: Option<String>,
     requester: Option<String>,
@@ -85,8 +86,8 @@ struct ScheduleRequest {
 /// JSON body for `POST /schedule-control`.
 #[derive(Debug, Deserialize)]
 struct ScheduleControlRequest {
-    run_id: Option<String>,
-    codebase: Option<String>,
+    run_id: Option<RunId>,
+    codebase: Option<Codebase>,
     main_branch_revision: Option<String>,
     change_set: Option<String>,
     offset: Option<f64>,
@@ -101,7 +102,7 @@ struct ScheduleControlRequest {
 #[derive(Debug, Serialize)]
 struct FinishResponse {
     /// Run ID.
-    id: String,
+    id: RunId,
     /// Uploaded filenames.
     filenames: Vec<String>,
     /// Log filenames.
@@ -135,7 +136,7 @@ fn create_campaign_config(
     let campaign_config = app_config
         .campaign
         .iter()
-        .find(|c| c.name() == queue_item.campaign);
+        .find(|c| queue_item.campaign == c.name());
 
     if let Some(config) = campaign_config {
         // Extract build configuration from the campaign. Mirrors
@@ -208,8 +209,8 @@ fn create_campaign_config(
 /// (`?codebase=...&campaign=...`).
 #[derive(serde::Deserialize)]
 struct QueuePositionQuery {
-    codebase: String,
-    campaign: String,
+    codebase: Codebase,
+    campaign: Campaign,
 }
 
 /// `GET /queue/position?codebase=...&campaign=...` -- return the
@@ -267,8 +268,8 @@ async fn schedule_control(
 ) -> impl IntoResponse {
     let pool = state.database.pool();
 
-    let (codebase, main_branch_revision) = if let Some(run_id) = request.run_id.as_deref() {
-        let row: Option<(Option<String>, String)> =
+    let (codebase, main_branch_revision) = if let Some(run_id) = request.run_id.as_ref() {
+        let row: Option<(Option<String>, Codebase)> =
             match sqlx::query_as("SELECT main_branch_revision, codebase FROM run WHERE id = $1")
                 .bind(run_id)
                 .fetch_optional(pool)
@@ -376,8 +377,8 @@ async fn schedule(
 ) -> impl IntoResponse {
     let pool = state.database.pool();
 
-    let (campaign, codebase, run_command) = if let Some(run_id) = request.run_id.as_deref() {
-        let row: Option<(String, String, Option<String>)> = match sqlx::query_as(
+    let (campaign, codebase, run_command) = if let Some(run_id) = request.run_id.as_ref() {
+        let row: Option<(Campaign, Codebase, Option<String>)> = match sqlx::query_as(
             "SELECT suite AS campaign, codebase, command FROM run WHERE id = $1",
         )
         .bind(run_id)
@@ -570,10 +571,7 @@ async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 /// this run currently has. Looks up the active run, calls
 /// `backchannel.list_log_files()`, and returns the bare list.
 /// 404s if the run isn't active.
-async fn log_index(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn log_index(State(state): State<Arc<AppState>>, Path(id): Path<RunId>) -> impl IntoResponse {
     let active_run = match state.active_runs.get(&id).await {
         Some(run) => run,
         None => {
@@ -606,7 +604,7 @@ async fn log_index(
 /// `{"current_stage": "build"}` or `{"current_stage": null}`.
 async fn current_stage(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(id): Path<RunId>,
 ) -> impl IntoResponse {
     let active_run = match state.active_runs.get(&id).await {
         Some(run) => run,
@@ -635,7 +633,7 @@ async fn current_stage(
 /// doesn't exist on the worker.
 async fn log(
     State(state): State<Arc<AppState>>,
-    Path((id, filename)): Path<(String, String)>,
+    Path((id, filename)): Path<(RunId, String)>,
 ) -> impl IntoResponse {
     if filename.contains('/') {
         return (
@@ -676,7 +674,7 @@ async fn log(
 /// backchannel. On success, returns the active run's JSON snapshot;
 /// 404 when the run isn't active; 501 when the worker doesn't
 /// support kill.
-async fn kill(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> impl IntoResponse {
+async fn kill(State(state): State<Arc<AppState>>, Path(id): Path<RunId>) -> impl IntoResponse {
     let active_run = match state.active_runs.get(&id).await {
         Some(run) => run,
         None => {
@@ -910,7 +908,7 @@ fn cache_branch_name(
 fn worker_vcs_urls(
     managers: &HashMap<janitor::vcs::VcsType, Box<dyn janitor::vcs::VcsManager>>,
     vcs_type: Option<&str>,
-    codebase: &str,
+    codebase: &Codebase,
     cache_branch_name: Option<&str>,
 ) -> (Option<String>, Option<String>) {
     let Some(manager) = vcs_type
@@ -958,18 +956,18 @@ pub(crate) enum CandidatePreflight {
     /// Candidate passed the pure-logic checks. Callers still need
     /// to perform the DB insert and follow-up scheduling.
     Ok {
-        codebase: String,
-        campaign: String,
+        codebase: Codebase,
+        campaign: Campaign,
         command: String,
         value: Option<i64>,
     },
     /// Request is malformed: `codebase` or `campaign` field missing
-    /// or empty. Python raises HTTPBadRequest; the handler returns
+    /// or not a valid name. Python raises HTTPBadRequest; the handler returns
     /// 400 with the given message.
     BadRequest(String),
     /// Candidate references a campaign not in the runner config.
     /// Python adds to `unknown_campaigns` and continues.
-    UnknownCampaign(String),
+    UnknownCampaign(Campaign),
     /// Neither the candidate nor the campaign config supplies a
     /// command. Python adds to `invalid_command` and continues.
     InvalidCommand,
@@ -990,7 +988,10 @@ pub(crate) fn candidate_preflight(
     campaign_default_command: impl Fn(&str) -> Option<String>,
 ) -> CandidatePreflight {
     let codebase = match candidate.get("codebase").and_then(|v| v.as_str()) {
-        Some(s) if !s.is_empty() => s.to_string(),
+        Some(s) if !s.is_empty() => match Codebase::new(s) {
+            Ok(c) => c,
+            Err(e) => return CandidatePreflight::BadRequest(e.to_string()),
+        },
         _ => {
             return CandidatePreflight::BadRequest(format!(
                 "no codebase field for candidate {}",
@@ -999,7 +1000,10 @@ pub(crate) fn candidate_preflight(
         }
     };
     let campaign = match candidate.get("campaign").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
+        Some(s) => match Campaign::new(s) {
+            Ok(c) => c,
+            Err(e) => return CandidatePreflight::BadRequest(e.to_string()),
+        },
         None => {
             return CandidatePreflight::BadRequest(format!(
                 "no campaign field for candidate {}",
@@ -1008,7 +1012,7 @@ pub(crate) fn candidate_preflight(
         }
     };
 
-    if !known_campaigns.contains(&campaign) {
+    if !known_campaigns.contains(campaign.as_str()) {
         return CandidatePreflight::UnknownCampaign(campaign);
     }
 
@@ -1043,8 +1047,8 @@ async fn upload_candidates(
     let pool = state.database.pool();
 
     let mut success = Vec::<serde_json::Value>::new();
-    let mut unknown_codebases = std::collections::BTreeSet::<String>::new();
-    let mut unknown_campaigns = std::collections::BTreeSet::<String>::new();
+    let mut unknown_codebases = std::collections::BTreeSet::<Codebase>::new();
+    let mut unknown_campaigns = std::collections::BTreeSet::<Campaign>::new();
     let mut invalid_command = std::collections::BTreeSet::<String>::new();
     let mut invalid_value = std::collections::BTreeSet::<i64>::new();
     let mut unknown_publish_policies = std::collections::BTreeSet::<String>::new();
@@ -1353,8 +1357,8 @@ async fn upload_candidates(
 /// `GET /runs/{run_id}` -- return a run's `{codebase, campaign,
 /// publish_status}` triple. Only those three fields are returned,
 /// not the entire run row.
-async fn get_run(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> impl IntoResponse {
-    let row: Result<Option<(String, String, String)>, _> =
+async fn get_run(State(state): State<Arc<AppState>>, Path(id): Path<RunId>) -> impl IntoResponse {
+    let row: Result<Option<(Codebase, Campaign, String)>, _> =
         sqlx::query_as("SELECT codebase, suite, publish_status::text FROM run WHERE id = $1")
             .bind(&id)
             .fetch_optional(state.database.pool())
@@ -1388,7 +1392,7 @@ async fn get_run(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
 /// other services can react.
 async fn update_run(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(id): Path<RunId>,
     Json(request): Json<UpdateRunRequest>,
 ) -> impl IntoResponse {
     match state
@@ -1439,7 +1443,7 @@ async fn get_active_runs(State(state): State<Arc<AppState>>) -> impl IntoRespons
 /// snapshot. 404s when the run isn't currently active.
 async fn get_active_run(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(id): Path<RunId>,
 ) -> impl IntoResponse {
     match state.active_runs.get(&id).await {
         Some(active_run) => (StatusCode::OK, Json(active_run.to_json())),
@@ -1818,7 +1822,7 @@ async fn admin_security_stats(State(state): State<Arc<AppState>>) -> impl IntoRe
 struct CleanupRunsQuery {
     result_code: String,
     #[serde(default)]
-    campaign: Option<String>,
+    campaign: Option<Campaign>,
     #[serde(default)]
     description_like: Option<String>,
     #[serde(default)]
@@ -1914,7 +1918,7 @@ async fn admin_cleanup_runs(
     sql.push_str(&format!(" ORDER BY finish_time ASC LIMIT ${}", next_param));
 
     let mut query =
-        sqlx::query_as::<_, (String, String, String, String)>(sqlx::AssertSqlSafe(&*sql))
+        sqlx::query_as::<_, (RunId, Codebase, Campaign, String)>(sqlx::AssertSqlSafe(&*sql))
             .bind(&q.result_code);
     if let Some(ref c) = q.campaign {
         query = query.bind(c);
@@ -1930,7 +1934,7 @@ async fn admin_cleanup_runs(
     }
     query = query.bind(max);
 
-    let rows: Vec<(String, String, String, String)> =
+    let rows: Vec<(RunId, Codebase, Campaign, String)> =
         match query.fetch_all(state.database.pool()).await {
             Ok(r) => r,
             Err(e) => {
@@ -1955,7 +1959,7 @@ async fn admin_cleanup_runs(
         );
     }
 
-    let run_ids: Vec<String> = rows.iter().map(|(id, ..)| id.clone()).collect();
+    let run_ids: Vec<RunId> = rows.iter().map(|(id, ..)| id.clone()).collect();
 
     if dry_run {
         return (
@@ -2162,7 +2166,7 @@ async fn check_resume_info(
 /// Get the resume chain for a specific run.
 async fn get_resume_chain(
     State(state): State<Arc<AppState>>,
-    Path(run_id): Path<String>,
+    Path(run_id): Path<RunId>,
 ) -> impl IntoResponse {
     match state.resume_service.get_resume_chain(&run_id).await {
         Ok(chain) => Json(json!({
@@ -2181,7 +2185,7 @@ async fn get_resume_chain(
 /// Get all runs that resume from a specific run.
 async fn get_resume_descendants(
     State(state): State<Arc<AppState>>,
-    Path(run_id): Path<String>,
+    Path(run_id): Path<RunId>,
 ) -> impl IntoResponse {
     match state.resume_service.get_resume_descendants(&run_id).await {
         Ok(descendants) => Json(json!({
@@ -2227,7 +2231,7 @@ async fn validate_resume_consistency(State(state): State<Arc<AppState>>) -> impl
 /// `{id, result, reason}` and public handler returns `{id, reason}`;
 /// worker/tooling clients pattern-match on these fields.
 fn finish_conflict_body(
-    run_id: &str,
+    run_id: &RunId,
     janitor_result: &crate::JanitorResult,
     public: bool,
 ) -> serde_json::Value {
@@ -2246,7 +2250,7 @@ fn finish_conflict_body(
 
 async fn finish_active_run_multipart(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(id): Path<RunId>,
     multipart: Multipart,
 ) -> impl IntoResponse {
     finish_run_multipart_internal(state, id, multipart, false).await
@@ -2263,7 +2267,7 @@ async fn finish_active_run_multipart(
 /// scheduling failure.
 async fn publish_finish_events(
     state: &Arc<AppState>,
-    run_id: &str,
+    run_id: &RunId,
     janitor_result: &crate::JanitorResult,
     queue_id: i64,
 ) {
@@ -2327,7 +2331,7 @@ async fn publish_finish_events(
         .context
         .as_ref()
         .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let log_id_owned = run_id.to_string();
+    let log_id_owned = run_id.clone();
     // Also pair a control run. A control (campaign="control",
     // bucket="control") rebuilds the codebase at the same main
     // branch revision with no codemod applied, which is what the
@@ -2424,7 +2428,7 @@ async fn publish_finish_events(
 /// manager if the main one fails.
 async fn store_run_artifacts(
     state: &AppState,
-    run_id: &str,
+    run_id: &RunId,
     files: &[&crate::upload::UploadedFile],
 ) -> Result<(), janitor::artifacts::Error> {
     // The ArtifactManager expects a directory containing all artifacts,
@@ -2445,7 +2449,7 @@ async fn store_run_artifacts(
 
 async fn finish_run_multipart_internal(
     state: Arc<AppState>,
-    run_id: String,
+    run_id: RunId,
     multipart: Multipart,
     public: bool,
 ) -> (StatusCode, Json<serde_json::Value>) {
@@ -2801,6 +2805,11 @@ async fn private_assign(
     assign_work_internal(state, worker_name, request, "/active-runs").await
 }
 
+/// Generate a fresh run id.
+fn new_run_id() -> RunId {
+    RunId::new(Uuid::new_v4().to_string()).expect("a UUID is a valid run id")
+}
+
 /// Abort a queue assignment by recording a failed run with the given
 /// result code. Used by the validation retry loop: when a pulled
 /// queue item has an unknown campaign or no branch_url for a
@@ -2819,7 +2828,7 @@ async fn abort_assignment(
     description: &str,
 ) {
     let now = Utc::now();
-    let log_id = Uuid::new_v4().to_string();
+    let log_id = new_run_id();
     let mut result = crate::JanitorResult {
         log_id,
         branch_url: assignment.vcs_info.branch_url.clone().unwrap_or_default(),
@@ -2886,7 +2895,7 @@ struct ResumeOutcome {
 /// field: `{run_id, result, branch_url, branches}`.
 #[derive(Debug, Clone, Serialize)]
 struct ResumeAssignment {
-    run_id: String,
+    run_id: RunId,
     /// Previous run's `result` JSON blob.
     result: Option<serde_json::Value>,
     /// URL of the resume branch as opened via the forge or the VCS
@@ -2937,10 +2946,10 @@ async fn compute_resume_from(
         .config
         .campaign
         .iter()
-        .find(|c| c.name() == campaign_name)
+        .find(|c| campaign_name == c.name())
         .map(|c| c.branch_name().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| campaign_name.clone());
+        .unwrap_or_else(|| campaign_name.to_string());
 
     // Blocking forge work: open main branch + find_existing_proposed.
     // Use silver_platter::vcs::open_branch (not breezyshim's
@@ -3200,8 +3209,8 @@ async fn assign_work_internal(
         let assignment = match state
             .database
             .next_queue_item_with_rate_limiting(
-                request.codebase.as_deref(),
-                request.campaign.as_deref(),
+                request.codebase.as_ref(),
+                request.campaign.as_ref(),
                 &excluded_hosts,
             )
             .await
@@ -3272,7 +3281,7 @@ async fn assign_work_internal(
         // to a worker. If another worker claimed it first (race between
         // `next_queue_item_with_rate_limiting` and this HSET NX),
         // discard this item and loop.
-        let candidate_log_id = Uuid::new_v4().to_string();
+        let candidate_log_id = new_run_id();
         match state
             .database
             .assign_queue_item(assignment.queue_item.id, &worker_name, &candidate_log_id)
@@ -3395,7 +3404,7 @@ async fn assign_work_internal(
     if let Some(main_branch_url) = resume_outcome.main_branch_url {
         vcs_info.branch_url = Some(main_branch_url);
     }
-    let resume_from: Option<String> = resume_assignment.as_ref().map(|r| r.run_id.clone());
+    let resume_from: Option<RunId> = resume_assignment.as_ref().map(|r| r.run_id.clone());
 
     let active_run = ActiveRun {
         worker_name: worker_name.clone(),
@@ -3538,7 +3547,7 @@ async fn assign_work_internal(
             build_distribution: dcfg
                 .build_distribution
                 .clone()
-                .unwrap_or_else(|| assignment.queue_item.campaign.clone()),
+                .unwrap_or_else(|| assignment.queue_item.campaign.to_string()),
             build_suffix: dcfg.build_suffix.clone().unwrap_or_default(),
             build_command: dcfg
                 .build_command
@@ -3636,7 +3645,7 @@ async fn assign_work_internal(
 async fn public_finish(
     State(state): State<Arc<AppState>>,
     Extension(worker_name): Extension<String>,
-    Path(id): Path<String>,
+    Path(id): Path<RunId>,
     multipart: Multipart,
 ) -> impl IntoResponse {
     // Worker credentials are verified by authentication middleware
@@ -3673,7 +3682,7 @@ async fn public_finish(
 async fn public_finish_multipart(
     State(state): State<Arc<AppState>>,
     Extension(worker_name): Extension<String>,
-    Path(id): Path<String>,
+    Path(id): Path<RunId>,
     multipart: Multipart,
 ) -> impl IntoResponse {
     // Worker credentials are verified by authentication middleware
@@ -3711,7 +3720,7 @@ async fn public_finish_multipart(
 
 async fn public_get_active_run(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(id): Path<RunId>,
 ) -> impl IntoResponse {
     // Returns the full ActiveRun.json() shape (same as the private
     // endpoint) and 404s on missing -- there's no "public view"
@@ -3953,6 +3962,7 @@ mod tests {
         CandidatePreflight,
     };
     use crate::CampaignConfig;
+    use janitor::{Campaign, Codebase};
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -4010,15 +4020,16 @@ mod tests {
     #[test]
     fn test_worker_vcs_urls_inserts_vcs_segment() {
         let managers = janitor::vcs::get_vcs_managers("https://janitor.example.com/").unwrap();
+        let foo = Codebase::new("foo").unwrap();
         assert_eq!(
-            super::worker_vcs_urls(&managers, Some("git"), "foo", Some("debian/latest")),
+            super::worker_vcs_urls(&managers, Some("git"), &foo, Some("debian/latest")),
             (
                 Some("https://janitor.example.com/git/foo,branch=debian/latest".to_string()),
                 Some("https://janitor.example.com/git/foo".to_string()),
             )
         );
         assert_eq!(
-            super::worker_vcs_urls(&managers, Some("bzr"), "foo", None),
+            super::worker_vcs_urls(&managers, Some("bzr"), &foo, None),
             (
                 None,
                 Some("https://janitor.example.com/bzr/foo".to_string())
@@ -4029,12 +4040,13 @@ mod tests {
     #[test]
     fn test_worker_vcs_urls_unsupported_vcs() {
         let managers = janitor::vcs::get_vcs_managers("git=https://git.example.com/").unwrap();
+        let foo = Codebase::new("foo").unwrap();
         assert_eq!(
-            super::worker_vcs_urls(&managers, Some("bzr"), "foo", Some("main")),
+            super::worker_vcs_urls(&managers, Some("bzr"), &foo, Some("main")),
             (None, None)
         );
         assert_eq!(
-            super::worker_vcs_urls(&managers, None, "foo", Some("main")),
+            super::worker_vcs_urls(&managers, None, &foo, Some("main")),
             (None, None)
         );
     }
@@ -4110,7 +4122,26 @@ distribution {
     fn test_candidate_preflight_unknown_campaign_is_bucketed() {
         let c = json!({"codebase": "pkg", "campaign": "nope", "command": "true"});
         let result = candidate_preflight(&c, &known(&["lintian-fixes"]), no_default);
-        assert_eq!(result, CandidatePreflight::UnknownCampaign("nope".into()));
+        assert_eq!(
+            result,
+            CandidatePreflight::UnknownCampaign(Campaign::new("nope").unwrap())
+        );
+    }
+
+    #[test]
+    fn test_candidate_preflight_invalid_names_are_bad_request() {
+        let c = json!({"codebase": "../pkg", "campaign": "lintian-fixes"});
+        let result = candidate_preflight(&c, &known(&["lintian-fixes"]), no_default);
+        assert_eq!(
+            result,
+            CandidatePreflight::BadRequest("invalid codebase name: \"../pkg\"".to_string())
+        );
+        let c = json!({"codebase": "pkg", "campaign": "Lintian_Fixes"});
+        let result = candidate_preflight(&c, &known(&["lintian-fixes"]), no_default);
+        assert_eq!(
+            result,
+            CandidatePreflight::BadRequest("invalid campaign name: \"Lintian_Fixes\"".to_string())
+        );
     }
 
     #[test]
@@ -4772,6 +4803,93 @@ distribution {
         assert_eq!(
             main_branch_name(Some("https://example.com/foo?branch=")),
             "main"
+        );
+    }
+
+    async fn offline_request(
+        method: axum::http::Method,
+        uri: &str,
+        body: Option<serde_json::Value>,
+    ) -> axum::http::StatusCode {
+        use tower::ServiceExt;
+        let app = super::app(crate::test_utils::create_offline_test_app_state());
+        let mut req = axum::http::Request::builder().method(method).uri(uri);
+        let body = match body {
+            Some(v) => {
+                req = req.header("content-type", "application/json");
+                axum::body::Body::from(v.to_string())
+            }
+            None => axum::body::Body::empty(),
+        };
+        app.oneshot(req.body(body).unwrap()).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn test_invalid_run_id_in_path_is_rejected() {
+        use axum::http::{Method, StatusCode};
+        for uri in [
+            "/active-runs/..%2Fetc",
+            "/active-runs/a.b/current-stage",
+            "/log/..%2F..%2Fetc/worker.log",
+            "/runs/a%20b",
+            "/resume/chain/.hidden",
+        ] {
+            assert_eq!(
+                offline_request(Method::GET, uri, None).await,
+                StatusCode::BAD_REQUEST,
+                "{}",
+                uri
+            );
+        }
+        assert_eq!(
+            offline_request(Method::POST, "/kill/a;b", None).await,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalid_names_in_query_are_rejected() {
+        use axum::http::{Method, StatusCode};
+        assert_eq!(
+            offline_request(
+                Method::GET,
+                "/queue/position?codebase=..%2Ffoo&campaign=lintian-fixes",
+                None
+            )
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            offline_request(
+                Method::GET,
+                "/queue/position?codebase=foo&campaign=Lintian_Fixes",
+                None
+            )
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalid_names_in_json_body_are_rejected() {
+        use axum::http::{Method, StatusCode};
+        assert_eq!(
+            offline_request(
+                Method::POST,
+                "/schedule",
+                Some(json!({"campaign": "lintian-fixes", "codebase": "../foo"}))
+            )
+            .await,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            offline_request(
+                Method::POST,
+                "/schedule-control",
+                Some(json!({"run_id": "a/b", "main_branch_revision": "x"}))
+            )
+            .await,
+            StatusCode::UNPROCESSABLE_ENTITY
         );
     }
 }

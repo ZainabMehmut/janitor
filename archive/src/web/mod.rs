@@ -13,6 +13,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use janitor::{Campaign, InvalidIdentifier};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tower::ServiceExt;
@@ -24,6 +25,7 @@ use crate::config::ArchiveConfig;
 use crate::database::BuildManager;
 use crate::error::{ArchiveError, ArchiveResult};
 use crate::manager::GeneratorManager;
+use crate::on_demand::OnDemandTarget;
 use crate::repository::RepositoryGenerator;
 use crate::scanner::PackageScanner;
 
@@ -67,7 +69,7 @@ pub struct AppState {
 pub struct PublishRequest {
     /// Optional campaign filter. When set, only apt_repositories that
     /// select this campaign are triggered.
-    pub campaign: Option<String>,
+    pub campaign: Option<Campaign>,
 }
 
 /// Response payload for `POST /publish`. Returns `{}` on success.
@@ -339,16 +341,17 @@ async fn serve_from_dir(
 /// env-only deployments still have something to iterate over.
 pub(crate) fn publish_campaign_candidates(
     runtime_config: Option<&janitor::config::Config>,
-    fallback_campaigns: impl IntoIterator<Item = String>,
-) -> Vec<String> {
+    fallback_campaigns: impl IntoIterator<Item = Campaign>,
+) -> Result<Vec<Campaign>, InvalidIdentifier> {
     if let Some(rt) = runtime_config {
         rt.campaign
             .iter()
             .filter(|c| c.has_debian_build())
-            .filter_map(|c| c.name.clone())
+            .filter_map(|c| c.name.as_deref())
+            .map(Campaign::new)
             .collect()
     } else {
-        fallback_campaigns.into_iter().collect()
+        Ok(fallback_campaigns.into_iter().collect())
     }
 }
 
@@ -357,12 +360,11 @@ pub(crate) fn publish_campaign_candidates(
 /// Absent filter -> pass through; present filter keeps only the
 /// candidate whose name matches exactly.
 pub(crate) fn publish_apply_filter<'a>(
-    candidates: &'a [String],
-    filter: Option<&str>,
-) -> Vec<&'a str> {
+    candidates: &'a [Campaign],
+    filter: Option<&Campaign>,
+) -> Vec<&'a Campaign> {
     candidates
         .iter()
-        .map(String::as_str)
         .filter(|name| match filter {
             Some(f) => f == *name,
             None => true,
@@ -381,14 +383,18 @@ async fn publish_repository(
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     };
 
-    let fallback: Vec<String> = if state.config.runtime_config.is_some() {
+    let fallback: Vec<Campaign> = if state.config.runtime_config.is_some() {
         Vec::new()
     } else {
         manager.get_campaign_mapping().await.into_keys().collect()
     };
-    let candidates = publish_campaign_candidates(state.config.runtime_config.as_deref(), fallback);
+    let candidates = publish_campaign_candidates(state.config.runtime_config.as_deref(), fallback)
+        .map_err(|e| {
+            warn!("Invalid campaign in configuration: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-    for campaign_name in publish_apply_filter(&candidates, request.campaign.as_deref()) {
+    for campaign_name in publish_apply_filter(&candidates, request.campaign.as_ref()) {
         if let Err(e) = manager.trigger_campaign(campaign_name).await {
             warn!(
                 "trigger_campaign({}) failed during /publish: {}",
@@ -544,6 +550,10 @@ async fn prepare_on_demand(
         debug!("Rejecting on-demand kind {}: not a known campaign", kind);
         return Ok(None);
     }
+    let target = OnDemandTarget::parse(kind, id).map_err(|e| {
+        debug!("Rejecting on-demand request: {}", e);
+        StatusCode::BAD_REQUEST
+    })?;
 
     // Prefer the repository config whose `suite` matches the
     // caller's `kind` (campaign name); honour the per-repository
@@ -580,8 +590,7 @@ async fn prepare_on_demand(
         &origin,
         &components,
         &arches,
-        kind,
-        id,
+        &target,
         state.config.gpg.as_ref(),
         state.config.runtime_config.as_deref(),
     )
@@ -799,7 +808,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let mut got = publish_campaign_candidates(Some(&cfg), std::iter::empty());
+        let mut got = publish_campaign_candidates(Some(&cfg), std::iter::empty()).unwrap();
         got.sort();
         assert_eq!(got, vec!["fresh-releases", "lintian-fixes"]);
     }
@@ -809,8 +818,8 @@ mod tests {
     /// keys). This is the env-only deployment path.
     #[test]
     fn publish_campaign_candidates_uses_fallback_when_no_runtime() {
-        let fallback = vec!["lintian-fixes".to_string(), "unstable".to_string()];
-        let got = publish_campaign_candidates(None, fallback);
+        let fallback = campaigns(&["lintian-fixes", "unstable"]);
+        let got = publish_campaign_candidates(None, fallback).unwrap();
         // Order preserved from the fallback iterator.
         assert_eq!(got, vec!["lintian-fixes", "unstable"]);
     }
@@ -819,12 +828,9 @@ mod tests {
     /// -- only the exact-match candidate survives.
     #[test]
     fn publish_apply_filter_selects_named_campaign() {
-        let candidates = vec![
-            "lintian-fixes".to_string(),
-            "fresh-releases".to_string(),
-            "unchanged".to_string(),
-        ];
-        let filtered = publish_apply_filter(&candidates, Some("fresh-releases"));
+        let candidates = campaigns(&["lintian-fixes", "fresh-releases", "unchanged"]);
+        let filter = Campaign::new("fresh-releases").unwrap();
+        let filtered = publish_apply_filter(&candidates, Some(&filter));
         assert_eq!(filtered, vec!["fresh-releases"]);
     }
 
@@ -832,8 +838,9 @@ mod tests {
     /// yield an empty list -- no trigger fires.
     #[test]
     fn publish_apply_filter_no_match_returns_empty() {
-        let candidates = vec!["lintian-fixes".to_string()];
-        let filtered = publish_apply_filter(&candidates, Some("unknown"));
+        let candidates = campaigns(&["lintian-fixes"]);
+        let filter = Campaign::new("unknown").unwrap();
+        let filtered = publish_apply_filter(&candidates, Some(&filter));
         assert!(filtered.is_empty());
     }
 
@@ -841,9 +848,27 @@ mod tests {
     /// default when the form body has no `campaign` field.
     #[test]
     fn publish_apply_filter_none_returns_all() {
-        let candidates = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let candidates = campaigns(&["aa", "bb", "cc"]);
         let filtered = publish_apply_filter(&candidates, None);
-        assert_eq!(filtered, vec!["a", "b", "c"]);
+        assert_eq!(filtered, vec!["aa", "bb", "cc"]);
+    }
+
+    fn campaigns(names: &[&str]) -> Vec<Campaign> {
+        names.iter().map(|n| Campaign::new(*n).unwrap()).collect()
+    }
+
+    #[test]
+    fn publish_campaign_candidates_rejects_invalid_name() {
+        let cfg = janitor::config::read_string(
+            r#"
+                campaign {
+                    name: "Lintian_Fixes"
+                    debian_build { base_distribution: "unstable" }
+                }
+            "#,
+        )
+        .unwrap();
+        assert!(publish_campaign_candidates(Some(&cfg), std::iter::empty()).is_err());
     }
 
     /// Without a runtime config we fall back to the repository

@@ -195,8 +195,8 @@ async fn test_log_manager() {
     let manager = create_log_manager(Some(temp_path)).await.unwrap();
 
     // Test data
-    let codebase = "test-package";
-    let run_id = "test-run-123";
+    let codebase = &janitor::Codebase::new("test-package").unwrap();
+    let run_id = &janitor::RunId::new("test-run-123").unwrap();
     let log_name = "test.log";
     let test_content = b"Test log content\nLine 2\n";
 

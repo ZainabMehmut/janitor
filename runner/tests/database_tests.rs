@@ -92,7 +92,10 @@ async fn test_get_run_debian_build() {
     let runner_db = RunnerDatabase::new(db.pool.clone());
 
     assert_eq!(
-        runner_db.get_run_debian_build("run-1").await.unwrap(),
+        runner_db
+            .get_run_debian_build(&janitor::RunId::new("run-1").unwrap())
+            .await
+            .unwrap(),
         Some(DebianBuildRow {
             source: "foo".to_string(),
             version: "1.0-1".to_string(),
@@ -101,10 +104,16 @@ async fn test_get_run_debian_build() {
             lintian_result: None,
         })
     );
-    assert_eq!(runner_db.get_run_debian_build("run-2").await.unwrap(), None);
+    assert_eq!(
+        runner_db
+            .get_run_debian_build(&janitor::RunId::new("run-2").unwrap())
+            .await
+            .unwrap(),
+        None
+    );
 
     let run = runner_db
-        .get_run("run-1")
+        .get_run(&janitor::RunId::new("run-1").unwrap())
         .await
         .unwrap()
         .expect("run was just inserted");

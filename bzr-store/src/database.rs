@@ -7,6 +7,7 @@
 //! `py/janitor/worker_creds.py::is_worker`.
 
 use janitor::database::{Database as SharedDatabase, DatabaseConfig};
+use janitor::Codebase;
 use sqlx::PgPool;
 use tracing::{debug, info};
 
@@ -58,7 +59,7 @@ impl DatabaseManager {
     }
 
     /// Validate that a codebase exists in the database
-    pub async fn validate_codebase(&self, codebase: &str) -> Result<bool> {
+    pub async fn validate_codebase(&self, codebase: &Codebase) -> Result<bool> {
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM codebase WHERE name = $1)")
                 .bind(codebase)

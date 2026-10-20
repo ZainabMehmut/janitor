@@ -520,3 +520,42 @@ test_with_database! {
         handle.abort();
     }
 }
+
+test_with_database! {
+    async fn test_admin_invalid_identifiers_400(test_db: TestDatabase) {
+        setup_test_database(test_db.pool()).await.unwrap();
+        let tmp = TempDir::new().unwrap();
+        let cfg = build_config(tmp.path(), test_db_url(&test_db));
+        let (admin, _public) = create_applications(cfg, janitor_config_with_campaign())
+            .await
+            .unwrap();
+        let (addr, handle) = spawn(admin).await;
+
+        let client = reqwest::Client::new();
+        for path in ["/Upper/info", "/under_score/diff?old=a&new=b", "/x/remotes"] {
+            let resp = client
+                .get(format!("http://{}{}", addr, path))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 400, "{}", path);
+        }
+        for path in [
+            "/repositories/..%2Fescape",
+            "/Upper/.bzr/smart",
+            "/foo/Bad_Campaign/.bzr/smart",
+            "/foo/Bad_Campaign/main/.bzr/smart",
+        ] {
+            let resp = client
+                .post(format!("http://{}{}", addr, path))
+                .body(b"hello".to_vec())
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 400, "{}", path);
+        }
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+
+        handle.abort();
+    }
+}

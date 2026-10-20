@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use async_trait::async_trait;
+use janitor::Codebase;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::process::Command;
@@ -31,7 +32,7 @@ use crate::pyo3_bridge::BreezyOperations;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryPath {
     /// Codebase identifier — the on-disk shared repo directory name.
-    pub codebase: String,
+    pub codebase: Codebase,
     /// Optional campaign name (transport sub-path).
     pub campaign: Option<String>,
     /// Optional role name (transport sub-path below campaign).
@@ -41,7 +42,7 @@ pub struct RepositoryPath {
 impl RepositoryPath {
     /// Create a new repository path for a codebase, with optional
     /// campaign/role.
-    pub fn new(codebase: String, campaign: Option<String>, role: Option<String>) -> Self {
+    pub fn new(codebase: Codebase, campaign: Option<String>, role: Option<String>) -> Self {
         Self {
             codebase,
             campaign,
@@ -50,7 +51,7 @@ impl RepositoryPath {
     }
 
     /// Create a repository path that refers only to the codebase repo.
-    pub fn codebase_only(codebase: String) -> Self {
+    pub fn codebase_only(codebase: Codebase) -> Self {
         Self {
             codebase,
             campaign: None,
@@ -60,7 +61,7 @@ impl RepositoryPath {
 
     /// Human-readable relative path, e.g. `codebase/campaign/role`.
     pub fn relative_path(&self) -> String {
-        let mut s = self.codebase.clone();
+        let mut s = self.codebase.to_string();
         if let Some(c) = &self.campaign {
             s.push('/');
             s.push_str(c);
@@ -169,7 +170,7 @@ impl PyO3RepositoryManager {
 
     /// Create `<base>/<codebase>` and initialize it as a shared bzr
     /// repository if it doesn't already exist.
-    async fn ensure_codebase_structure(&self, codebase: &str) -> Result<()> {
+    async fn ensure_codebase_structure(&self, codebase: &Codebase) -> Result<()> {
         let codebase_path = self.base_path.join(codebase);
         if codebase_path.join(".bzr").exists() {
             return Ok(());
@@ -249,7 +250,14 @@ impl RepositoryManager for PyO3RepositoryManager {
                 continue;
             }
             let name = e.file_name().to_string_lossy().to_string();
-            let repo_path = RepositoryPath::codebase_only(name);
+            let codebase = match Codebase::new(name) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("skipping repository directory: {}", e);
+                    continue;
+                }
+            };
+            let repo_path = RepositoryPath::codebase_only(codebase);
             let info = self.get_repository_info(&repo_path).await?;
             out.push(info);
         }
@@ -446,19 +454,23 @@ mod tests {
 
     #[test]
     fn relative_path_codebase_only() {
-        let p = RepositoryPath::codebase_only("foo".into());
+        let p = RepositoryPath::codebase_only(Codebase::new("foo").unwrap());
         assert_eq!(p.relative_path(), "foo");
     }
 
     #[test]
     fn relative_path_codebase_campaign() {
-        let p = RepositoryPath::new("foo".into(), Some("c".into()), None);
+        let p = RepositoryPath::new(Codebase::new("foo").unwrap(), Some("c".into()), None);
         assert_eq!(p.relative_path(), "foo/c");
     }
 
     #[test]
     fn relative_path_full() {
-        let p = RepositoryPath::new("foo".into(), Some("c".into()), Some("r".into()));
+        let p = RepositoryPath::new(
+            Codebase::new("foo").unwrap(),
+            Some("c".into()),
+            Some("r".into()),
+        );
         assert_eq!(p.relative_path(), "foo/c/r");
     }
 

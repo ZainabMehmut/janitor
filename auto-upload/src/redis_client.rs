@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use janitor::redis::{PubSubMessage, RedisConfig, RedisManager};
+use janitor::RunId;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use tracing::{error, info};
@@ -23,7 +24,7 @@ pub struct RedisClient {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BuildResultMessage {
     /// Unique identifier for the build run.
-    pub log_id: String,
+    pub log_id: RunId,
     /// Runner result code (e.g. `"success"`, `"nothing-to-do"`,
     /// `"codemod-error"`). Non-success runs also publish to this channel
     /// but emit `target: {}`, so we filter them out before touching
@@ -129,7 +130,7 @@ mod tests {
     #[test]
     fn roundtrips_through_serde() {
         let message = BuildResultMessage {
-            log_id: "test-123".to_string(),
+            log_id: RunId::new("test-123").unwrap(),
             code: Some("success".to_string()),
             target: BuildTarget {
                 name: Some("debian".to_string()),
@@ -155,6 +156,12 @@ mod tests {
         assert_eq!(msg.log_id, "abc");
         assert!(msg.target.name.is_none());
         assert!(msg.target.details.is_none());
+    }
+
+    #[test]
+    fn rejects_invalid_log_id() {
+        let payload = r#"{"log_id": "../etc", "target": {}}"#;
+        assert!(serde_json::from_str::<BuildResultMessage>(payload).is_err());
     }
 
     #[test]

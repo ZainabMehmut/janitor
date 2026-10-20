@@ -1,3 +1,4 @@
+use crate::{Codebase, RunId};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -58,14 +59,19 @@ impl GCSLogFileManager {
         format!("projects/_/buckets/{}", self.bucket_name)
     }
 
-    fn get_object_name(&self, codebase: &str, run_id: &str, name: &str) -> String {
+    fn get_object_name(&self, codebase: &Codebase, run_id: &RunId, name: &str) -> String {
         format!("{}/{}/{}.gz", codebase, run_id, name)
     }
 }
 
 #[async_trait]
 impl LogFileManager for GCSLogFileManager {
-    async fn has_log(&self, codebase: &str, run_id: &str, name: &str) -> Result<bool, Error> {
+    async fn has_log(
+        &self,
+        codebase: &Codebase,
+        run_id: &RunId,
+        name: &str,
+    ) -> Result<bool, Error> {
         let bucket = self.bucket_path();
         let object_name = self.get_object_name(codebase, run_id, name);
 
@@ -90,8 +96,8 @@ impl LogFileManager for GCSLogFileManager {
 
     async fn get_log(
         &self,
-        codebase: &str,
-        run_id: &str,
+        codebase: &Codebase,
+        run_id: &RunId,
         name: &str,
     ) -> Result<Box<dyn Read + Send + Sync>, Error> {
         let bucket = self.bucket_path();
@@ -123,8 +129,8 @@ impl LogFileManager for GCSLogFileManager {
 
     async fn import_log(
         &self,
-        codebase: &str,
-        run_id: &str,
+        codebase: &Codebase,
+        run_id: &RunId,
         orig_path: &str,
         _mtime: Option<DateTime<Utc>>,
         basename: Option<&str>,
@@ -190,8 +196,8 @@ impl LogFileManager for GCSLogFileManager {
 
     async fn get_ctime(
         &self,
-        codebase: &str,
-        run_id: &str,
+        codebase: &Codebase,
+        run_id: &RunId,
         name: &str,
     ) -> Result<DateTime<Utc>, Error> {
         let bucket = self.bucket_path();
@@ -232,7 +238,12 @@ impl LogFileManager for GCSLogFileManager {
         }
     }
 
-    async fn delete_log(&self, codebase: &str, run_id: &str, name: &str) -> Result<(), Error> {
+    async fn delete_log(
+        &self,
+        codebase: &Codebase,
+        run_id: &RunId,
+        name: &str,
+    ) -> Result<(), Error> {
         let bucket = self.bucket_path();
         let object_name = self.get_object_name(codebase, run_id, name);
 
@@ -309,6 +320,7 @@ impl GCSLogFileManager {
 
 #[cfg(test)]
 mod tests {
+    use crate::{Codebase, RunId};
 
     /// A simplified test for get_object_name that doesn't require actual GCS connections
     #[test]
@@ -317,7 +329,7 @@ mod tests {
         struct TestGCSLogFileManager;
 
         impl TestGCSLogFileManager {
-            fn get_object_name(&self, codebase: &str, run_id: &str, name: &str) -> String {
+            fn get_object_name(&self, codebase: &Codebase, run_id: &RunId, name: &str) -> String {
                 format!("{}/{}/{}.gz", codebase, run_id, name)
             }
         }
@@ -325,7 +337,11 @@ mod tests {
         let manager = TestGCSLogFileManager {};
 
         assert_eq!(
-            manager.get_object_name("my-codebase", "run123", "build.log"),
+            manager.get_object_name(
+                &Codebase::new("my-codebase").unwrap(),
+                &RunId::new("run123").unwrap(),
+                "build.log"
+            ),
             "my-codebase/run123/build.log.gz"
         );
     }

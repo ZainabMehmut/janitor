@@ -50,7 +50,9 @@ async fn polling_backchannel_ping_times_out_promptly() {
     let backchannel = PollingBackchannel::new(base_url);
 
     let start = std::time::Instant::now();
-    let result = backchannel.ping("run-1").await;
+    let result = backchannel
+        .ping(&janitor::RunId::new("run-1").unwrap())
+        .await;
     let elapsed = start.elapsed();
 
     assert!(result.is_err(), "ping to non-routable host should error");

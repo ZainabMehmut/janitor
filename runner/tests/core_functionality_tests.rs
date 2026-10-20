@@ -55,13 +55,13 @@ fn test_committer_env_compatibility() {
 #[test]
 fn test_janitor_result_serialization() {
     let result = JanitorResult {
-        log_id: "test-log-123".to_string(),
+        log_id: janitor::RunId::new("test-log-123").unwrap(),
         branch_url: "https://github.com/test/repo".to_string(),
         subpath: Some("subdir".to_string()),
         code: "success".to_string(),
         transient: Some(false),
-        codebase: "test-codebase".to_string(),
-        campaign: "test-campaign".to_string(),
+        codebase: janitor::Codebase::new("test-codebase").unwrap(),
+        campaign: janitor::Campaign::new("test-campaign").unwrap(),
         description: Some("Test successful".to_string()),
         codemod: None,
         value: None,
@@ -138,7 +138,7 @@ fn test_worker_result_compatibility() {
         vcs_type: Some("git".to_string()),
         subpath: None,
         transient: Some(false),
-        codebase: Some("test/repo".to_string()),
+        codebase: Some(janitor::Codebase::new("test-repo").unwrap()),
     };
 
     // Test all fields are preserved in serialization
@@ -160,14 +160,14 @@ fn test_active_run_structure() {
         worker_name: "test-worker".to_string(),
         worker_link: Some("http://worker:8080".to_string()),
         queue_id: 789,
-        log_id: "run-log-456".to_string(),
+        log_id: janitor::RunId::new("run-log-456").unwrap(),
         start_time: Utc::now(),
         finish_time: None,
         estimated_duration: Some(std::time::Duration::from_secs(300)),
-        campaign: "test-campaign".to_string(),
+        campaign: janitor::Campaign::new("test-campaign").unwrap(),
         change_set: Some("changeset-123".to_string()),
         command: "test-command".to_string(),
-        codebase: "test-codebase".to_string(),
+        codebase: janitor::Codebase::new("test-codebase").unwrap(),
         backchannel: janitor_runner::Backchannel::Polling {
             my_url: "http://worker:8080".to_string(),
         },
@@ -202,13 +202,17 @@ async fn test_backchannel_implementations() {
     let polling = PollingBackchannel::new("http://worker:8080".parse().unwrap());
 
     // Test ping functionality (will fail in test but should not panic)
-    let health = polling.ping("test-log-id").await;
+    let health = polling
+        .ping(&janitor::RunId::new("test-log-id").unwrap())
+        .await;
     assert!(health.is_err()); // Expected to fail without real server
 
     // Test Jenkins backchannel
     let jenkins = JenkinsBackchannel::new("http://jenkins:8080".parse().unwrap());
 
-    let health = jenkins.ping("test-log-id").await;
+    let health = jenkins
+        .ping(&janitor::RunId::new("test-log-id").unwrap())
+        .await;
     assert!(health.is_err()); // Expected to fail without real server
 }
 

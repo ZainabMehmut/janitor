@@ -460,7 +460,7 @@ where
 pub async fn trace_vcs_operation<F, T>(
     operation: &str,
     vcs_type: &str,
-    codebase: &str,
+    codebase: &janitor::Codebase,
     future: F,
 ) -> T
 where
@@ -470,7 +470,7 @@ where
         "vcs_operation",
         operation = operation,
         vcs_type = vcs_type,
-        codebase = codebase,
+        codebase = codebase.as_str(),
     );
     let start = std::time::Instant::now();
 
@@ -480,7 +480,7 @@ where
     tracing::debug!(
         operation = operation,
         vcs_type = vcs_type,
-        codebase = codebase,
+        codebase = codebase.as_str(),
         duration_ms = duration.as_millis(),
         "VCS operation completed"
     );
@@ -489,7 +489,7 @@ where
         tracing::warn!(
             operation = operation,
             vcs_type = vcs_type,
-            codebase = codebase,
+            codebase = codebase.as_str(),
             duration_ms = duration.as_millis(),
             "Slow VCS operation detected"
         );

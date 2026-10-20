@@ -23,6 +23,7 @@ use axum::{
 };
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use janitor::Codebase;
 use std::sync::Arc;
 use tera::Tera;
 
@@ -238,16 +239,25 @@ enum ContentType {
 }
 
 /// Dispatch between the git smart-protocol backend and klaus.
+///
+/// The codebase segment is taken raw because git clients may append a
+/// `,branch=<role>` parameter that `git_backend` strips before
+/// validating; klaus requests are validated here.
 async fn klaus_or_git_backend(
     State(state): State<AppState>,
-    path: Path<(String, String)>,
+    Path((codebase, sub_path)): Path<(String, String)>,
     req: axum::extract::Request,
 ) -> Result<Response> {
     if crate::klaus::is_git_client_request(&req) {
         crate::git_http::git_backend(State(state), req).await
     } else {
-        crate::klaus::handle_klaus(State(state), path, req).await
+        let codebase = parse_codebase(codebase)?;
+        crate::klaus::handle_klaus(State(state), Path((codebase, sub_path)), req).await
     }
+}
+
+pub(crate) fn parse_codebase(codebase: String) -> Result<Codebase> {
+    Codebase::new(codebase).map_err(|e| GitStoreError::BadRequest(e.to_string()))
 }
 
 /// Bare-codebase variant of [`klaus_or_git_backend`] with an empty
@@ -260,6 +270,7 @@ async fn klaus_or_git_backend_root(
     if crate::klaus::is_git_client_request(&req) {
         crate::git_http::git_backend(State(state), req).await
     } else {
+        let codebase = parse_codebase(codebase)?;
         crate::klaus::handle_klaus(State(state), Path((codebase, String::new())), req).await
     }
 }
@@ -303,7 +314,7 @@ async fn list_repositories(
 /// auto-created bare repo. The `url` field is required.
 async fn set_remote(
     State(state): State<AppState>,
-    Path((codebase, name)): Path<(String, String)>,
+    Path((codebase, name)): Path<(Codebase, String)>,
     body: String,
 ) -> Result<StatusCode> {
     if !state.db_manager.codebase_exists(&codebase).await? {

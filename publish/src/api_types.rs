@@ -1,3 +1,4 @@
+use janitor::{Campaign, Codebase, RunId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -27,7 +28,7 @@ pub struct BucketRateLimit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AbsorbedRun {
     /// Unique identifier of the absorbed run
-    pub run_id: String,
+    pub run_id: RunId,
     /// URL of the branch that was absorbed
     pub branch_url: String,
     /// VCS revision identifier of the absorbed change
@@ -131,7 +132,7 @@ pub struct ForgeStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunPublishStatus {
     /// Unique identifier of the run
-    pub run_id: String,
+    pub run_id: RunId,
     /// Current publish status of the run
     pub status: String,
     /// URL of the merge proposal if one was created
@@ -160,7 +161,7 @@ pub struct MessageResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CampaignBlockers {
     /// Name of the campaign
-    pub campaign: String,
+    pub campaign: Campaign,
     /// List of blockers affecting this campaign
     pub blockers: Vec<String>,
     /// Total number of runs blocked for this campaign
@@ -173,11 +174,11 @@ pub struct PublishQueueEntry {
     /// Unique identifier of the queue entry
     pub id: i64,
     /// Run identifier this queue entry is for
-    pub run_id: String,
+    pub run_id: RunId,
     /// Campaign name associated with the run
-    pub campaign: String,
+    pub campaign: Campaign,
     /// Codebase where the change will be published
-    pub codebase: String,
+    pub codebase: Codebase,
     /// Priority of this entry in the queue
     pub priority: i32,
     /// Timestamp when this entry was added to the queue
@@ -221,13 +222,13 @@ pub struct NotFoundResponse {
     pub bucket: Option<String>,
     /// Run ID if relevant to the not found error
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
+    pub run_id: Option<RunId>,
     /// Campaign name if relevant to the not found error
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub campaign: Option<String>,
+    pub campaign: Option<Campaign>,
     /// Codebase name if relevant to the not found error
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub codebase: Option<String>,
+    pub codebase: Option<Codebase>,
 }
 
 /// Conflict response
@@ -240,7 +241,7 @@ pub struct ConflictResponse {
     pub name: Option<String>,
     /// Run ID involved in the conflict
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
+    pub run_id: Option<RunId>,
     /// Whether the operation can be forced to override the conflict
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force_required: Option<bool>,
@@ -252,11 +253,11 @@ pub struct PublishDryRunResponse {
     /// Status of the dry run operation
     pub status: String,
     /// Run ID that was tested
-    pub run_id: String,
+    pub run_id: RunId,
     /// Campaign associated with the run
-    pub campaign: String,
+    pub campaign: Campaign,
     /// Codebase where the change would be published
-    pub codebase: String,
+    pub codebase: Codebase,
     /// Whether this run would be published if not a dry run
     pub would_publish: bool,
     /// Publishing mode that would be used
@@ -269,11 +270,11 @@ pub struct PublishResponse {
     /// Status of the publish operation
     pub status: String,
     /// Run ID that was published
-    pub run_id: String,
+    pub run_id: RunId,
     /// Campaign associated with the run
-    pub campaign: String,
+    pub campaign: Campaign,
     /// Codebase where the change was published
-    pub codebase: String,
+    pub codebase: Codebase,
     /// Results of each publish action, keyed by branch name
     pub results: HashMap<String, Option<String>>,
     /// Number of branches that were not published
@@ -286,7 +287,7 @@ pub struct PublishErrorResponse {
     /// Error message describing what went wrong
     pub error: String,
     /// Run ID that failed to publish
-    pub run_id: String,
+    pub run_id: RunId,
 }
 
 /// Autopublish response

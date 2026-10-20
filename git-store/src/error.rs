@@ -1,5 +1,6 @@
 //! Error type and axum response mapping.
 
+use janitor::Codebase;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -24,7 +25,7 @@ pub enum GitStoreError {
     /// The codebase isn't registered. Response body matches Python's
     /// `_git_open_repo` exactly: `no such codebase: {name}`.
     #[error("no such codebase: {0}")]
-    RepositoryNotFound(String),
+    RepositoryNotFound(Codebase),
 
     /// The URL subpath isn't one of the git-http verbs we accept
     /// (dumb-HTTP metadata, info/refs, git-upload-pack,
@@ -37,11 +38,14 @@ pub enum GitStoreError {
     /// Distinct from [`Self::RepositoryNotFound`] so callers can
     /// render "diff unavailable" instead of a service outage.
     #[error("Revision not found in {codebase}: {revision}")]
-    RevisionNotFound { codebase: String, revision: String },
+    RevisionNotFound {
+        codebase: Codebase,
+        revision: String,
+    },
 
     /// Codebase is known but the on-disk clone is missing.
     #[error("Local VCS repository for {0} temporarily inaccessible")]
-    LocalRepositoryUnavailable(String),
+    LocalRepositoryUnavailable(Codebase),
 
     #[error("Invalid SHA: {0}")]
     InvalidSha(String),
@@ -183,7 +187,7 @@ mod tests {
     #[test]
     fn revision_not_found_is_404_with_label() {
         let resp = GitStoreError::RevisionNotFound {
-            codebase: "foo".to_string(),
+            codebase: Codebase::new("foo").unwrap(),
             revision: "abc".to_string(),
         }
         .into_response();
@@ -196,7 +200,8 @@ mod tests {
 
     #[test]
     fn local_repository_unavailable_is_503_with_distinct_label() {
-        let resp = GitStoreError::LocalRepositoryUnavailable("foo".to_string()).into_response();
+        let resp = GitStoreError::LocalRepositoryUnavailable(Codebase::new("foo").unwrap())
+            .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             resp.headers().get(ERROR_CLASS_HEADER).unwrap(),
@@ -231,7 +236,7 @@ mod tests {
 
     #[test]
     fn repository_not_found_distinct_from_local_unavailable() {
-        let resp = GitStoreError::RepositoryNotFound("foo".to_string()).into_response();
+        let resp = GitStoreError::RepositoryNotFound(Codebase::new("foo").unwrap()).into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
         assert_eq!(
             resp.headers().get(ERROR_CLASS_HEADER).unwrap(),

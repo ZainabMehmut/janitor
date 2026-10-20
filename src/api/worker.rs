@@ -1,6 +1,7 @@
 //! API for the worker to communicate with the runner.
 
 use crate::vcs::VcsType;
+use crate::{Campaign, Codebase, RunId};
 use breezyshim::RevisionId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,7 +15,7 @@ pub struct Metadata {
     pub queue_id: Option<u64>,
     /// Campaign name.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub campaign: Option<String>,
+    pub campaign: Option<Campaign>,
     /// Error code, if any. None for success.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
@@ -33,7 +34,7 @@ pub struct Metadata {
     pub command: Option<Vec<String>>,
 
     /// Name of the codebase.
-    pub codebase: Option<String>,
+    pub codebase: Option<Codebase>,
 
     /// VCS Type
     pub vcs_type: Option<VcsType>,
@@ -195,10 +196,10 @@ pub struct ResumeBranch {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Assignment {
-    pub id: String,
+    pub id: RunId,
     pub queue_id: u64,
-    pub campaign: String,
-    pub codebase: String,
+    pub campaign: Campaign,
+    pub codebase: Codebase,
     #[serde(rename = "force-build")]
     pub force_build: bool,
     pub branch: Branch,
@@ -320,14 +321,17 @@ mod tests {
     #[test]
     fn test_metadata_serde_roundtrip() {
         let mut m = Metadata::default();
-        m.campaign = Some("lintian-fixes".to_string());
+        m.campaign = Some(Campaign::new("lintian-fixes").unwrap());
         m.code = Some("success".to_string());
         m.vcs_type = Some(VcsType::Git);
         m.branch_url = Some(Url::parse("https://salsa.debian.org/foo/bar").unwrap());
 
         let json = serde_json::to_string(&m).unwrap();
         let roundtripped: Metadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(roundtripped.campaign, Some("lintian-fixes".to_string()));
+        assert_eq!(
+            roundtripped.campaign,
+            Some(Campaign::new("lintian-fixes").unwrap())
+        );
         assert_eq!(roundtripped.code, Some("success".to_string()));
         assert_eq!(roundtripped.vcs_type, Some(VcsType::Git));
     }

@@ -18,6 +18,7 @@
 //! converge to the same end state.
 
 use crate::ActiveRun;
+use janitor::RunId;
 use redis::AsyncCommands;
 use std::collections::HashMap;
 
@@ -74,7 +75,8 @@ impl ActiveRunStore {
         let Some(mut conn) = self.conn().await else {
             return;
         };
-        let res: redis::RedisResult<()> = conn.hset(&self.key, &active_run.log_id, json).await;
+        let res: redis::RedisResult<()> =
+            conn.hset(&self.key, active_run.log_id.as_str(), json).await;
         if let Err(e) = res {
             log::error!(
                 "active_runs.store: HSET failed for {}: {}",
@@ -85,9 +87,9 @@ impl ActiveRunStore {
     }
 
     /// Fetch a single active run by id.
-    pub async fn get(&self, run_id: &str) -> Option<ActiveRun> {
+    pub async fn get(&self, run_id: &RunId) -> Option<ActiveRun> {
         let mut conn = self.conn().await?;
-        let json: Option<String> = match conn.hget(&self.key, run_id).await {
+        let json: Option<String> = match conn.hget(&self.key, run_id.as_str()).await {
             Ok(v) => v,
             Err(e) => {
                 log::warn!("active_runs.get HGET {}: {}", run_id, e);
@@ -135,11 +137,11 @@ impl ActiveRunStore {
 
     /// Drop an active run from the store. Returns `true` if a row was
     /// actually removed.
-    pub async fn remove(&self, run_id: &str) -> bool {
+    pub async fn remove(&self, run_id: &RunId) -> bool {
         let Some(mut conn) = self.conn().await else {
             return false;
         };
-        match conn.hdel::<_, _, u32>(&self.key, run_id).await {
+        match conn.hdel::<_, _, u32>(&self.key, run_id.as_str()).await {
             Ok(n) => n > 0,
             Err(e) => {
                 log::warn!("active_runs.remove HDEL {}: {}", run_id, e);
@@ -202,7 +204,7 @@ impl ActiveRunStore {
             return Vec::new();
         };
         for run in &stale {
-            let res: redis::RedisResult<u32> = conn.hdel(&self.key, &run.log_id).await;
+            let res: redis::RedisResult<u32> = conn.hdel(&self.key, run.log_id.as_str()).await;
             if let Err(e) = res {
                 log::warn!("active_runs.drain HDEL {}: {}", run.log_id, e);
             }
@@ -217,21 +219,25 @@ mod tests {
     use crate::{ActiveRun, Backchannel, VcsInfo};
     use chrono::Utc;
 
+    fn rid(s: &str) -> RunId {
+        RunId::new(s).unwrap()
+    }
+
     fn make_run(log_id: &str, worker: &str) -> ActiveRun {
         ActiveRun {
             worker_name: worker.to_string(),
             worker_link: None,
             queue_id: 0,
-            log_id: log_id.to_string(),
+            log_id: rid(log_id),
             start_time: Utc::now(),
             finish_time: None,
             estimated_duration: None,
-            campaign: "test".to_string(),
+            campaign: janitor::Campaign::new("test").unwrap(),
             change_set: None,
             command: "echo test".to_string(),
             backchannel: Backchannel::default(),
             vcs_info: VcsInfo::default(),
-            codebase: "test-codebase".to_string(),
+            codebase: janitor::Codebase::new("test-codebase").unwrap(),
             instigated_context: None,
             resume_from: None,
         }
@@ -273,7 +279,7 @@ mod tests {
             return;
         };
         store.store(make_run("run-1", "worker-a")).await;
-        let got = store.get("run-1").await.unwrap();
+        let got = store.get(&rid("run-1")).await.unwrap();
         assert_eq!(got.log_id, "run-1");
         assert_eq!(got.worker_name, "worker-a");
         cleanup(&store).await;
@@ -285,7 +291,7 @@ mod tests {
             eprintln!("skipping: Redis unavailable");
             return;
         };
-        assert!(store.get("absent").await.is_none());
+        assert!(store.get(&rid("absent")).await.is_none());
         cleanup(&store).await;
     }
 
@@ -304,8 +310,8 @@ mod tests {
         store.store(r2).await;
         store.store(r3).await;
         store.store(r1).await;
-        let ids: Vec<String> = store.list().await.into_iter().map(|r| r.log_id).collect();
-        assert_eq!(ids, vec!["a".to_string(), "c".to_string(), "b".to_string()]);
+        let ids: Vec<RunId> = store.list().await.into_iter().map(|r| r.log_id).collect();
+        assert_eq!(ids, vec![rid("a"), rid("c"), rid("b")]);
         cleanup(&store).await;
     }
 
@@ -316,8 +322,8 @@ mod tests {
             return;
         };
         store.store(make_run("run-1", "w")).await;
-        assert!(store.remove("run-1").await);
-        assert!(!store.remove("run-1").await);
+        assert!(store.remove(&rid("run-1")).await);
+        assert!(!store.remove(&rid("run-1")).await);
         cleanup(&store).await;
     }
 
@@ -363,8 +369,8 @@ mod tests {
         let drained = store.drain_older_than(chrono::Duration::hours(1)).await;
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].log_id, "old");
-        assert!(store.get("fresh").await.is_some());
-        assert!(store.get("old").await.is_none());
+        assert!(store.get(&rid("fresh")).await.is_some());
+        assert!(store.get(&rid("old")).await.is_none());
         cleanup(&store).await;
     }
 
@@ -383,7 +389,7 @@ mod tests {
         // -- equivalent to what happens when the runner restarts and
         // reconstructs `ActiveRunStore::new(redis)` from scratch.
         let reconstructed = ActiveRunStore::with_key(store.redis.clone(), store.key.clone());
-        let got = reconstructed.get("persisted").await.unwrap();
+        let got = reconstructed.get(&rid("persisted")).await.unwrap();
         assert_eq!(got.worker_name, "worker-a");
         cleanup(&store).await;
     }

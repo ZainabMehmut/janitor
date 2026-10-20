@@ -240,12 +240,12 @@ impl MetricsCollector {
     }
 
     /// Record run completion
-    pub fn record_run_completion(campaign: &str, result_code: &str, duration: f64) {
+    pub fn record_run_completion(campaign: &janitor::Campaign, result_code: &str, duration: f64) {
         RUN_RESULT_COUNT
-            .with_label_values(&[campaign, result_code])
+            .with_label_values(&[campaign.as_str(), result_code])
             .inc();
         BUILD_DURATION
-            .with_label_values(&[campaign])
+            .with_label_values(&[campaign.as_str()])
             .observe(duration);
     }
 
@@ -266,8 +266,10 @@ impl MetricsCollector {
     }
 
     /// Update queue size
-    pub fn set_queue_size(campaign: &str, bucket: &str, size: i64) {
-        QUEUE_SIZE.with_label_values(&[campaign, bucket]).set(size);
+    pub fn set_queue_size(campaign: &janitor::Campaign, bucket: &str, size: i64) {
+        QUEUE_SIZE
+            .with_label_values(&[campaign.as_str(), bucket])
+            .set(size);
     }
 
     /// Record worker health check

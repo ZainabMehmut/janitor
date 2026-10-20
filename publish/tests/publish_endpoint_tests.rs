@@ -127,3 +127,28 @@ test_with_database! {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
+
+test_with_database! {
+    async fn invalid_identifiers_in_path_are_rejected(test_db: TestDatabase) {
+        setup_test_database(test_db.pool()).await.unwrap();
+
+        let app = build_app(test_db.pool().clone()).await;
+        for (method, uri) in [
+            ("POST", "/lintian-fixes/Foo/publish"),
+            ("POST", "/lintian_fixes/cb-1/publish"),
+            ("GET", "/-foo/merge-proposals"),
+            ("GET", "/c/foo%2Fbar/merge-proposals"),
+            ("POST", "/consider/a.b"),
+            ("GET", "/blockers/a%2Fb"),
+        ] {
+            let req = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(""))
+                .unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{} {}", method, uri);
+        }
+    }
+}

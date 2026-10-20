@@ -1,5 +1,6 @@
 use crate::io::Readable;
 use chrono::{DateTime, Utc};
+use janitor::{Codebase, RunId};
 use pyo3::create_exception;
 use pyo3::exceptions::{
     PyFileNotFoundError, PyOSError, PyPermissionError, PyRuntimeError, PyStopAsyncIteration,
@@ -60,8 +61,8 @@ impl LogFileManager {
     fn has_log<'a>(
         &self,
         py: Python<'a>,
-        codebase: String,
-        run_id: String,
+        codebase: Codebase,
+        run_id: RunId,
         name: String,
         timeout: Option<Duration>,
     ) -> PyResult<Bound<'a, PyAny>> {
@@ -75,8 +76,8 @@ impl LogFileManager {
     fn get_log<'a>(
         &self,
         py: Python<'a>,
-        codebase: String,
-        run_id: String,
+        codebase: Codebase,
+        run_id: RunId,
         name: String,
         timeout: Option<Duration>,
     ) -> PyResult<Bound<'a, PyAny>> {
@@ -92,8 +93,8 @@ impl LogFileManager {
     fn import_log<'a>(
         &self,
         py: Python<'a>,
-        codebase: String,
-        run_id: String,
+        codebase: Codebase,
+        run_id: RunId,
         orig_path: String,
         timeout: Option<Duration>,
         mtime: Option<DateTime<Utc>>,
@@ -113,8 +114,8 @@ impl LogFileManager {
     fn delete_log<'a>(
         &self,
         py: Python<'a>,
-        codebase: String,
-        run_id: String,
+        codebase: Codebase,
+        run_id: RunId,
         name: String,
     ) -> PyResult<Bound<'a, PyAny>> {
         let z = self.0.clone();
@@ -129,8 +130,8 @@ impl LogFileManager {
     fn get_ctime<'a>(
         &self,
         py: Python<'a>,
-        codebase: String,
-        run_id: String,
+        codebase: Codebase,
+        run_id: RunId,
         name: String,
     ) -> PyResult<Bound<'a, PyAny>> {
         let z = self.0.clone();

@@ -4,6 +4,7 @@ use breezyshim::repository::Repository;
 use breezyshim::transport::Transport;
 use breezyshim::RevisionId;
 use janitor::vcs::VcsType;
+use janitor::{Campaign, RunId};
 use std::collections::HashMap;
 use url::Url;
 
@@ -83,8 +84,8 @@ pub fn push_branch(
 fn import_branches_bzr(
     repo_url: &Url,
     local_branch: &dyn breezyshim::branch::PyBranch,
-    campaign: &str,
-    log_id: &str,
+    campaign: &Campaign,
+    log_id: &RunId,
     branches: &Vec<(String, String, Option<RevisionId>, Option<RevisionId>)>,
     tags: Vec<(String, Option<RevisionId>)>,
     update_current: bool,
@@ -192,8 +193,8 @@ pub trait Vcs {
         &self,
         repo_url: &Url,
         local_branch: &dyn breezyshim::branch::PyBranch,
-        campaign: &str,
-        log_id: &str,
+        campaign: &Campaign,
+        log_id: &RunId,
         branches: &Vec<(String, String, Option<RevisionId>, Option<RevisionId>)>,
         tags: Vec<(String, Option<RevisionId>)>,
         update_current: bool,
@@ -207,8 +208,8 @@ impl Vcs for BzrVcs {
         &self,
         repo_url: &Url,
         local_branch: &dyn breezyshim::branch::PyBranch,
-        campaign: &str,
-        log_id: &str,
+        campaign: &Campaign,
+        log_id: &RunId,
         branches: &Vec<(String, String, Option<RevisionId>, Option<RevisionId>)>,
         tags: Vec<(String, Option<RevisionId>)>,
         update_current: bool,
@@ -228,8 +229,8 @@ impl Vcs for BzrVcs {
 fn import_branches_git(
     repo_url: &Url,
     local_branch: &dyn breezyshim::branch::PyBranch,
-    campaign: &str,
-    log_id: &str,
+    campaign: &Campaign,
+    log_id: &RunId,
     branches: &Vec<(String, String, Option<RevisionId>, Option<RevisionId>)>,
     tags: Vec<(String, Option<RevisionId>)>,
     update_current: bool,
@@ -265,8 +266,8 @@ fn import_branches_git(
     let source_repo = local_branch.repository();
 
     // Clone for the sake of the closure
-    let log_id_ = log_id.to_string();
-    let campaign_ = campaign.to_string();
+    let log_id_ = log_id.clone();
+    let campaign_ = campaign.clone();
     let source_repo_for_closure = source_repo.clone();
     let branches = branches.clone();
 
@@ -327,8 +328,8 @@ impl Vcs for GitVcs {
         &self,
         repo_url: &Url,
         local_branch: &dyn breezyshim::branch::PyBranch,
-        campaign: &str,
-        log_id: &str,
+        campaign: &Campaign,
+        log_id: &RunId,
         branches: &Vec<(String, String, Option<RevisionId>, Option<RevisionId>)>,
         tags: Vec<(String, Option<RevisionId>)>,
         update_current: bool,
@@ -417,8 +418,8 @@ mod tests {
             .import_branches(
                 &target_url,
                 &source_tree.branch(),
-                "campaign",
-                "log_id",
+                &Campaign::new("campaign").unwrap(),
+                &RunId::new("log_id").unwrap(),
                 &vec![(
                     "main".to_string(),
                     "foo".to_string(),
@@ -474,8 +475,8 @@ mod tests {
             .import_branches(
                 &target_url,
                 &source_tree.branch(),
-                "campaign",
-                "log_id",
+                &Campaign::new("campaign").unwrap(),
+                &RunId::new("log_id").unwrap(),
                 &vec![(
                     "main".to_string(),
                     "foo".to_string(),

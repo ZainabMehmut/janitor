@@ -21,7 +21,10 @@ pub enum ArchiveError {
     ArtifactRetrieval(String),
 
     #[error("Missing artifacts for build {build_id}: {message}")]
-    ArtifactsMissing { build_id: String, message: String },
+    ArtifactsMissing {
+        build_id: janitor::RunId,
+        message: String,
+    },
 
     #[error("Failed to create temporary directory: {0}")]
     TempDir(#[from] tempfile::PersistError),

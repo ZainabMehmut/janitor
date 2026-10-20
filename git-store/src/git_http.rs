@@ -9,6 +9,7 @@ use axum::{
     response::Response,
 };
 use futures_util::StreamExt;
+use janitor::Codebase;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -36,7 +37,7 @@ pub struct DiffQuery {
 
 pub async fn git_diff(
     State(state): State<crate::web::AppState>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<Codebase>,
     Query(params): Query<DiffQuery>,
 ) -> Result<Response> {
     let (old, new) = match (params.old, params.new) {
@@ -182,7 +183,7 @@ fn is_valid_hexsha(s: &str) -> bool {
 /// `git cat-file -e <rev>`: exits 0 if the object is reachable.
 async fn ensure_revision_present(
     repo_path: &std::path::Path,
-    codebase: &str,
+    codebase: &Codebase,
     revision: &str,
     timeout_secs: u64,
 ) -> Result<()> {
@@ -201,7 +202,7 @@ async fn ensure_revision_present(
         Ok(())
     } else {
         Err(GitStoreError::RevisionNotFound {
-            codebase: codebase.to_string(),
+            codebase: codebase.clone(),
             revision: revision.to_string(),
         })
     }
@@ -224,7 +225,7 @@ const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
 /// `py/janitor/site/cupboard/review.py::get_revision_info` expects.
 pub async fn revision_info(
     State(state): State<crate::web::AppState>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<Codebase>,
     Query(params): Query<RevisionInfoQuery>,
 ) -> Result<Response> {
     let (old, new) = match (params.old, params.new) {
@@ -340,7 +341,7 @@ pub struct LogQuery {
 /// oldest first, with author info and message.
 pub async fn git_log(
     State(state): State<crate::web::AppState>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<Codebase>,
     Query(params): Query<LogQuery>,
 ) -> Result<Response> {
     crate::repository::RepositoryManager::validate_sha(&params.new)?;
@@ -702,7 +703,7 @@ pub async fn git_backend(
         ));
     }
 
-    let codebase = strip_branch_segment(path_segments[0]);
+    let codebase = crate::web::parse_codebase(strip_branch_segment(path_segments[0]).to_string())?;
     let subpath = if path_segments.len() > 1 {
         path_segments[1..].join("/")
     } else {
@@ -720,15 +721,15 @@ pub async fn git_backend(
 
     let auth_context = extract_auth_context(&headers, &state).await?;
 
-    if !state.db_manager.codebase_exists(codebase).await? {
+    if !state.db_manager.codebase_exists(&codebase).await? {
         warn!("codebase {} not found in database", codebase);
-        return Err(GitStoreError::RepositoryNotFound(codebase.to_string()));
+        return Err(GitStoreError::RepositoryNotFound(codebase));
     }
 
-    let repo_path = state.repo_manager.repo_path(codebase);
+    let repo_path = state.repo_manager.repo_path(&codebase);
     if !repo_path.exists() {
         info!("auto-creating repository for {}", codebase);
-        state.repo_manager.open_or_create(codebase)?;
+        state.repo_manager.open_or_create(&codebase)?;
     }
 
     // Extract request information

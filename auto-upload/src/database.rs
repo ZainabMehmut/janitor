@@ -3,6 +3,7 @@
 //! One `SELECT DISTINCT ON` over `debian_build`, optionally filtered by
 //! distribution.
 
+use janitor::RunId;
 use sqlx::PgPool;
 use tracing::{debug, info};
 
@@ -21,7 +22,7 @@ pub struct DebianBuild {
     /// Source package name.
     pub source: String,
     /// Run ID; used to look up the artifacts.
-    pub run_id: String,
+    pub run_id: RunId,
 }
 
 impl DatabaseClient {

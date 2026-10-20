@@ -14,6 +14,7 @@ use tokio::net::lookup_host;
 use janitor::api::worker::{Metadata, TargetDetails, WorkerFailure};
 use janitor::prometheus::push_to_gateway;
 use janitor::vcs::VcsType;
+use janitor::{Campaign, Codebase, RunId};
 
 use url::Url;
 
@@ -182,10 +183,10 @@ pub trait Target {
 }
 
 pub fn run_worker(
-    codebase: &str,
-    campaign: &str,
+    codebase: &Codebase,
+    campaign: &Campaign,
     main_branch_url: Option<&url::Url>,
-    run_id: &str,
+    run_id: &RunId,
     build_config: &serde_json::Value,
     env: HashMap<String, String>,
     command: Vec<&str>,
@@ -214,7 +215,7 @@ pub fn run_worker(
     log::debug!("Writing worker log to {}", worker_log_path.display());
     let copy_output = crate::tee::CopyOutput::new(&worker_log_path, tee).unwrap();
     metadata.command = Some(command.iter().map(|s| s.to_string()).collect());
-    metadata.codebase = Some(codebase.to_string());
+    metadata.codebase = Some(codebase.clone());
 
     let build_target: Box<dyn Target> = match target {
         "debian" => Box::new(crate::debian::DebianTarget::new(env)),
@@ -977,8 +978,8 @@ pub async fn process_single_item(
     node_name: &str,
     jenkins_build_url: Option<&Url>,
     prometheus: Option<&Url>,
-    codebase: Option<&str>,
-    campaign: Option<&str>,
+    codebase: Option<&Codebase>,
+    campaign: Option<&Campaign>,
     tee: bool,
     output_directory_base: Option<&std::path::Path>,
     state: std::sync::Arc<std::sync::RwLock<AppState>>,
@@ -1406,10 +1407,10 @@ check:
         std::fs::create_dir(&output_dir).unwrap();
         let mut metadata = Metadata::default();
         run_worker(
-            "mycodebase",
-            "mycampaign",
+            &Codebase::new("mycodebase").unwrap(),
+            &Campaign::new("mycampaign").unwrap(),
             Some(&wt.branch().get_user_url()),
-            "run-id",
+            &RunId::new("run-id").unwrap(),
             &serde_json::json!({
                 "chroot": serde_json::Value::Null,
                 "dep_server_url": serde_json::Value::Null,
@@ -1485,7 +1486,7 @@ check:
                 code: None,
                 failure_details: None,
                 finish_time: None,
-                codebase: Some("mycodebase".to_string()),
+                codebase: Some(Codebase::new("mycodebase").unwrap()),
                 codemod: Some(serde_json::Value::Null),
                 queue_id: None,
                 start_time: None,

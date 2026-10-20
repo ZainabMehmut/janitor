@@ -5,6 +5,7 @@ use breezyshim::RevisionId;
 use janitor::publish::Mode;
 use janitor::vcs::{VcsManager, VcsType};
 use janitor::{schema::setup_test_database, test_with_database};
+use janitor::{Campaign, Codebase, RunId};
 use janitor_publish::rate_limiter::{NonRateLimiter, RateLimiter};
 use janitor_publish::{publish_and_store, PublishWorker};
 use sqlx::PgPool;
@@ -12,7 +13,7 @@ use sqlx::PgPool;
 /// A run with a single result branch for `role`.
 fn make_run(role: &str, revision: Option<&str>) -> janitor::state::Run {
     janitor::state::Run {
-        id: "run-1".to_string(),
+        id: RunId::new("run-1").unwrap(),
         command: "noop".to_string(),
         description: None,
         result_code: "success".to_string(),
@@ -20,7 +21,7 @@ fn make_run(role: &str, revision: Option<&str>) -> janitor::state::Run {
         revision: None,
         context: None,
         result: None,
-        suite: "lintian-fixes".to_string(),
+        suite: Campaign::new("lintian-fixes").unwrap(),
         instigated_context: None,
         vcs_type: "git".to_string(),
         branch_url: "https://example.invalid/cb-1".to_string(),
@@ -38,7 +39,7 @@ fn make_run(role: &str, revision: Option<&str>) -> janitor::state::Run {
         failure_details: None,
         failure_transient: None,
         failure_stage: None,
-        codebase: "cb-1".to_string(),
+        codebase: Codebase::new("cb-1").unwrap(),
         start_time: chrono::Utc::now(),
         finish_time: chrono::Utc::now(),
         value: None,

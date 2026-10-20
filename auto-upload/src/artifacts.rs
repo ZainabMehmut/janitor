@@ -5,6 +5,7 @@ use tracing::{debug, info, warn};
 
 use crate::error::{Result, UploadError};
 use janitor::artifacts::{get_artifact_manager, ArtifactManager};
+use janitor::RunId;
 
 /// Wraps the shared [`ArtifactManager`] and downloads runs into a fresh temp dir.
 pub struct ArtifactProcessor {
@@ -24,8 +25,8 @@ impl ArtifactProcessor {
     ///
     /// The `TempDir` is deleted when dropped, so callers must keep it alive
     /// for the lifetime of any paths derived from it.
-    pub async fn retrieve_artifacts(&self, run_id: &str) -> Result<TempDir> {
-        info!(run_id, "retrieving artifacts");
+    pub async fn retrieve_artifacts(&self, run_id: &RunId) -> Result<TempDir> {
+        info!(%run_id, "retrieving artifacts");
 
         let temp_dir = TempDir::new().map_err(UploadError::Io)?;
         match self
@@ -34,11 +35,11 @@ impl ArtifactProcessor {
             .await
         {
             Ok(_) => {
-                debug!(run_id, path = ?temp_dir.path(), "retrieved");
+                debug!(%run_id, path = ?temp_dir.path(), "retrieved");
                 Ok(temp_dir)
             }
             Err(e) => {
-                warn!(run_id, error = ?e, "artifacts missing");
+                warn!(%run_id, error = ?e, "artifacts missing");
                 Err(UploadError::ArtifactsMissing(run_id.to_string()))
             }
         }

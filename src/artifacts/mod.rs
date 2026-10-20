@@ -1,3 +1,4 @@
+use crate::RunId;
 use async_trait::async_trait;
 use std::path::Path;
 
@@ -45,7 +46,7 @@ pub trait ArtifactManager: std::fmt::Debug + Send + Sync {
     /// Store artifacts from a local directory
     async fn store_artifacts(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         local_path: &Path,
         names: Option<&[String]>,
     ) -> Result<(), Error>;
@@ -53,17 +54,17 @@ pub trait ArtifactManager: std::fmt::Debug + Send + Sync {
     /// Get a single artifact as a reader
     async fn get_artifact(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         filename: &str,
     ) -> Result<Box<dyn std::io::Read + Sync + Send>, Error>;
 
     /// Get the public URL for an artifact
-    fn public_artifact_url(&self, run_id: &str, filename: &str) -> url::Url;
+    fn public_artifact_url(&self, run_id: &RunId, filename: &str) -> url::Url;
 
     /// Retrieve artifacts to a local directory with optional filter
     async fn retrieve_artifacts(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         local_path: &Path,
         filter_fn: Option<&(dyn for<'a> Fn(&'a str) -> bool + Sync + Send)>,
     ) -> Result<(), Error>;
@@ -72,7 +73,7 @@ pub trait ArtifactManager: std::fmt::Debug + Send + Sync {
     async fn iter_ids(&self) -> Box<dyn Iterator<Item = String> + Send>;
 
     /// Delete all artifacts for a run
-    async fn delete_artifacts(&self, run_id: &str) -> Result<(), Error>;
+    async fn delete_artifacts(&self, run_id: &RunId) -> Result<(), Error>;
 }
 
 pub async fn list_ids(manager: &dyn ArtifactManager) -> Result<(), Error> {
@@ -152,14 +153,15 @@ async fn process_single_backup_artifact(
     // a directory. An earlier version used NamedTempFile, which
     // silently made every migration fail as a filesystem-level
     // "not a directory" error.
+    let id: RunId = id.parse().map_err(|e| Error::Other(format!("{}", e)))?;
     let td = tempfile::tempdir()?;
     backup_artifact_manager
-        .retrieve_artifacts(id, td.path(), None)
+        .retrieve_artifacts(&id, td.path(), None)
         .await?;
 
-    match artifact_manager.store_artifacts(id, td.path(), None).await {
+    match artifact_manager.store_artifacts(&id, td.path(), None).await {
         Ok(_) => {
-            backup_artifact_manager.delete_artifacts(id).await?;
+            backup_artifact_manager.delete_artifacts(&id).await?;
             Ok(())
         }
         Err(Error::ArtifactsMissing) => unreachable!(),
@@ -171,7 +173,7 @@ pub async fn store_artifacts_with_backup(
     manager: &dyn ArtifactManager,
     backup_manager: Option<&dyn ArtifactManager>,
     from_dir: &Path,
-    run_id: &str,
+    run_id: &RunId,
     names: Option<&[String]>,
 ) -> Result<(), Error> {
     match manager.store_artifacts(run_id, from_dir, names).await {
@@ -265,17 +267,29 @@ mod tests {
         let src = tempfile::tempdir().unwrap();
         std::fs::write(src.path().join("out.txt"), b"body").unwrap();
 
-        store_artifacts_with_backup(&primary, Some(&backup), src.path(), "run-1", None)
-            .await
-            .unwrap();
+        store_artifacts_with_backup(
+            &primary,
+            Some(&backup),
+            src.path(),
+            &RunId::new("run-1").unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
 
         // Primary has the artifact; backup does not.
-        let mut primary_out = primary.get_artifact("run-1", "out.txt").await.unwrap();
+        let mut primary_out = primary
+            .get_artifact(&RunId::new("run-1").unwrap(), "out.txt")
+            .await
+            .unwrap();
         let mut primary_contents = Vec::new();
         primary_out.read_to_end(&mut primary_contents).unwrap();
         assert_eq!(primary_contents, b"body");
 
-        let err = match backup.get_artifact("run-1", "out.txt").await {
+        let err = match backup
+            .get_artifact(&RunId::new("run-1").unwrap(), "out.txt")
+            .await
+        {
             Ok(_) => panic!("backup must not have the artifact"),
             Err(e) => e,
         };
@@ -296,11 +310,20 @@ mod tests {
         let src = tempfile::tempdir().unwrap();
         std::fs::write(src.path().join("out.txt"), b"body").unwrap();
 
-        store_artifacts_with_backup(&primary, Some(&backup), src.path(), "run-1", None)
+        store_artifacts_with_backup(
+            &primary,
+            Some(&backup),
+            src.path(),
+            &RunId::new("run-1").unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let mut backup_out = backup
+            .get_artifact(&RunId::new("run-1").unwrap(), "out.txt")
             .await
             .unwrap();
-
-        let mut backup_out = backup.get_artifact("run-1", "out.txt").await.unwrap();
         let mut backup_contents = Vec::new();
         backup_out.read_to_end(&mut backup_contents).unwrap();
         assert_eq!(backup_contents, b"body");
@@ -316,9 +339,15 @@ mod tests {
         let src = tempfile::tempdir().unwrap();
         std::fs::write(src.path().join("out.txt"), b"body").unwrap();
 
-        let err = store_artifacts_with_backup(&primary, None, src.path(), "run-1", None)
-            .await
-            .unwrap_err();
+        let err = store_artifacts_with_backup(
+            &primary,
+            None,
+            src.path(),
+            &RunId::new("run-1").unwrap(),
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::IoError(_)), "got {err:?}");
     }
 
@@ -335,7 +364,10 @@ mod tests {
         for run in ["run-a", "run-b"] {
             let src = tempfile::tempdir().unwrap();
             std::fs::write(src.path().join("out.txt"), run.as_bytes()).unwrap();
-            backup.store_artifacts(run, src.path(), None).await.unwrap();
+            backup
+                .store_artifacts(&RunId::new(run).unwrap(), src.path(), None)
+                .await
+                .unwrap();
         }
 
         let done = upload_backup_artifacts(&backup, &primary).await.unwrap();
@@ -353,7 +385,10 @@ mod tests {
 
         // Primary now holds both runs with correct bodies.
         for run in ["run-a", "run-b"] {
-            let mut reader = primary.get_artifact(run, "out.txt").await.unwrap();
+            let mut reader = primary
+                .get_artifact(&RunId::new(run).unwrap(), "out.txt")
+                .await
+                .unwrap();
             let mut buf = Vec::new();
             reader.read_to_end(&mut buf).unwrap();
             assert_eq!(buf, run.as_bytes());
