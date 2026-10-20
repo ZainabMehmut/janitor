@@ -229,6 +229,18 @@ async def test_webhook_gitlab_push_matches_codebase(aiohttp_client, database_loc
     )
 
 
+async def test_webhook_empty_body_returns_400(aiohttp_client, database_location):
+    _private_app, app = await create_app(
+        config=create_config(database_location), redis=FakeRedis()
+    )
+    client = await aiohttp_client(app)
+    resp = await client.post(
+        "/webhook",
+        headers={"X-GitHub-Event": "push", "Content-Type": "application/json"},
+    )
+    assert (resp.status, await resp.text()) == (400, "Body is not valid JSON")
+
+
 async def test_candidates_with_multiple_unscored_does_not_500(
     aiohttp_client, database_location
 ):

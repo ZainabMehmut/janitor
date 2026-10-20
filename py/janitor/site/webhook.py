@@ -237,14 +237,18 @@ WHERE
 
 async def parse_webhook(request, db):
     if request.content_type == "application/json":
-        body = await request.json()
+        payload = await request.text()
     elif request.content_type == "application/x-www-form-urlencoded":
         post = await request.post()
-        body = json.loads(post["payload"])
+        payload = post["payload"]
     else:
         raise web.HTTPUnsupportedMediaType(
             text=f"Invalid content type {request.content_type}"
         )
+    try:
+        body = json.loads(payload)
+    except json.JSONDecodeError as e:
+        raise web.HTTPBadRequest(text="Body is not valid JSON") from e
     changes: list[Union[GitChange, BzrChange]]
     if "X-Gitlab-Event" in request.headers:
         if request.headers["X-Gitlab-Event"] != "Push Hook":
