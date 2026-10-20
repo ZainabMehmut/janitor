@@ -165,7 +165,7 @@ fn test_active_run_structure() {
         finish_time: None,
         estimated_duration: Some(std::time::Duration::from_secs(300)),
         campaign: janitor::Campaign::new("test-campaign").unwrap(),
-        change_set: Some("changeset-123".to_string()),
+        change_set: Some(janitor::ChangeSetId::new("changeset-123").unwrap()),
         command: "test-command".to_string(),
         codebase: janitor::Codebase::new("test-codebase").unwrap(),
         backchannel: janitor_runner::Backchannel::Polling {

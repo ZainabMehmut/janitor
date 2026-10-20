@@ -6,7 +6,7 @@
 
 use breezyshim::RevisionId;
 use chrono::{DateTime, Utc};
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, ChangeSetId, Codebase, RunId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -472,7 +472,7 @@ pub struct JanitorResult {
     pub main_branch_revision: Option<RevisionId>,
 
     /// Optional changeset ID.
-    pub change_set: Option<String>,
+    pub change_set: Option<ChangeSetId>,
 
     /// Optional tags with revision IDs.
     pub tags: Option<Vec<(String, Option<RevisionId>)>>,
@@ -716,7 +716,7 @@ pub struct ActiveRun {
     /// Campaign name.
     pub campaign: Campaign,
     /// Optional change set.
-    pub change_set: Option<String>,
+    pub change_set: Option<ChangeSetId>,
     /// Command being executed.
     pub command: String,
     /// Backchannel for communication.
@@ -1643,7 +1643,7 @@ pub struct QueueItem {
     /// Who requested this run.
     pub requester: Option<String>,
     /// Optional change set identifier.
-    pub change_set: Option<String>,
+    pub change_set: Option<ChangeSetId>,
     /// Name of the codebase.
     pub codebase: Codebase,
 }
@@ -2423,7 +2423,7 @@ mod tests {
             finish_time: chrono::Utc::now(),
             revision: Some(breezyshim::RevisionId::from(b"rev-1".to_vec())),
             main_branch_revision: Some(breezyshim::RevisionId::from(b"rev-0".to_vec())),
-            change_set: Some("cs-1".to_string()),
+            change_set: Some(ChangeSetId::new("cs-1").unwrap()),
             tags: None,
             remotes: None,
             branches: None,

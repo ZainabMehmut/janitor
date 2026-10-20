@@ -27,7 +27,7 @@ use apt_repository::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::StreamExt;
-use janitor::{Campaign, Codebase, InvalidIdentifier, RunId};
+use janitor::{Campaign, ChangeSetId, Codebase, InvalidIdentifier, RunId};
 use tracing::{debug, info, warn};
 
 use crate::database::{BuildManager, BuildRecord};
@@ -63,7 +63,7 @@ pub enum OnDemandTarget {
     /// A single run's outputs.
     Run(RunId),
     /// A changeset's outputs.
-    ChangeSet(String),
+    ChangeSet(ChangeSetId),
     /// A campaign's latest changeset for a codebase (or source package).
     Campaign(Campaign, Codebase),
 }
@@ -73,7 +73,7 @@ impl OnDemandTarget {
     pub fn parse(kind: &str, id: &str) -> Result<Self, InvalidIdentifier> {
         Ok(match parse_kind(kind) {
             OnDemandKind::Run => Self::Run(id.parse()?),
-            OnDemandKind::ChangeSet => Self::ChangeSet(id.to_string()),
+            OnDemandKind::ChangeSet => Self::ChangeSet(id.parse()?),
             OnDemandKind::Campaign => Self::Campaign(kind.parse()?, id.parse()?),
         })
     }
@@ -91,7 +91,7 @@ impl OnDemandTarget {
     pub fn id(&self) -> &str {
         match self {
             Self::Run(run_id) => run_id.as_str(),
-            Self::ChangeSet(cs) => cs,
+            Self::ChangeSet(cs) => cs.as_str(),
             Self::Campaign(_, codebase) => codebase.as_str(),
         }
     }
@@ -189,7 +189,7 @@ pub async fn lookup_builds(
             // Look up the most-recent
             // working/ready/publishing/done change_set for that
             // pair, then load builds for that changeset.
-            let cs_id: Option<String> = sqlx::query_scalar(
+            let cs_id: Option<ChangeSetId> = sqlx::query_scalar(
                 "SELECT run.change_set \
                  FROM run \
                  INNER JOIN change_set ON change_set.id = run.change_set \
@@ -500,7 +500,7 @@ mod tests {
         );
         assert_eq!(
             OnDemandTarget::parse("cs", "cs-1").unwrap(),
-            OnDemandTarget::ChangeSet("cs-1".to_string())
+            OnDemandTarget::ChangeSet(ChangeSetId::new("cs-1").unwrap())
         );
         let target = OnDemandTarget::parse("lintian-fixes", "hello").unwrap();
         assert_eq!(
@@ -517,6 +517,8 @@ mod tests {
     fn test_on_demand_target_parse_rejects_invalid_ids() {
         assert!(OnDemandTarget::parse("run", "..").is_err());
         assert!(OnDemandTarget::parse("run", "").is_err());
+        assert!(OnDemandTarget::parse("cs", "..").is_err());
+        assert!(OnDemandTarget::parse("cs", "a.b").is_err());
         assert!(OnDemandTarget::parse("lintian-fixes", "..").is_err());
         assert!(OnDemandTarget::parse("Lintian", "hello").is_err());
     }

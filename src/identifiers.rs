@@ -1,4 +1,5 @@
-//! Validated identifiers for codebases, runs and campaigns.
+//! Validated identifiers for codebases, campaigns, runs, change sets and
+//! publish attempts.
 //!
 //! These values end up in filesystem paths, URLs, redis keys and
 //! subprocess arguments, so anything coming from outside (HTTP paths,
@@ -49,7 +50,7 @@ fn is_valid_name(s: &str) -> bool {
     rest.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '+' | '.' | '-'))
 }
 
-fn is_valid_run_id(s: &str) -> bool {
+fn is_valid_id(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
@@ -231,7 +232,21 @@ identifier!(
     /// Identifier of a run.
     RunId,
     "run id",
-    is_valid_run_id
+    is_valid_id
+);
+
+identifier!(
+    /// Identifier of a change set.
+    ChangeSetId,
+    "change set id",
+    is_valid_id
+);
+
+identifier!(
+    /// Identifier of a publish attempt.
+    PublishId,
+    "publish id",
+    is_valid_id
 );
 
 #[cfg(test)]
@@ -275,6 +290,21 @@ mod tests {
         for id in ["", ".", "..", ".hidden", "a/b", "a.b", "a b", "a;b", "a\0"] {
             assert!(RunId::new(id).is_err(), "{:?}", id);
         }
+    }
+
+    #[test]
+    fn test_change_set_id() {
+        assert_eq!(ChangeSetId::new("cs-1").unwrap().as_str(), "cs-1");
+        for id in ["", "..", "a/b", "a.b"] {
+            assert!(ChangeSetId::new(id).is_err(), "{:?}", id);
+        }
+    }
+
+    #[test]
+    fn test_publish_id() {
+        let id = "2f1c7a4e-9b3d-4e5f-8a6b-0c1d2e3f4a5b";
+        assert_eq!(PublishId::new(id).unwrap().as_str(), id);
+        assert!(PublishId::new("../x").is_err());
     }
 
     #[test]

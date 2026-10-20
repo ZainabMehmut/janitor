@@ -3,7 +3,7 @@
 use crate::{BuilderResult, JanitorResult};
 use breezyshim::RevisionId;
 use chrono::{DateTime, Duration, Utc};
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, ChangeSetId, Codebase, RunId};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::types::PgInterval;
@@ -26,7 +26,7 @@ struct QueueRowJoined {
     campaign: Campaign,
     refresh: Option<bool>,
     requester: Option<String>,
-    change_set: Option<String>,
+    change_set: Option<ChangeSetId>,
     codebase: Codebase,
     vcs_type: Option<String>,
     branch_url: Option<String>,
@@ -408,7 +408,7 @@ impl RunnerDatabase {
     pub async fn store_change_set(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        name: &str,
+        name: &ChangeSetId,
         campaign: &Campaign,
     ) -> Result<(), sqlx::Error> {
         sqlx::query("INSERT INTO change_set (id, campaign) VALUES ($1, $2) ON CONFLICT DO NOTHING")
@@ -595,10 +595,12 @@ INSERT INTO run (
 
         let mut tx = self.pool().begin().await?;
 
-        if result.change_set.is_none() || result.change_set.as_deref() == Some("") {
-            result.change_set = Some(result.log_id.to_string());
-            self.store_change_set(&mut tx, result.log_id.as_str(), &result.campaign)
+        if matches!(result.change_set.as_deref(), None | Some("")) {
+            let change_set = ChangeSetId::new(result.log_id.as_str())
+                .expect("a run id is a valid change set id");
+            self.store_change_set(&mut tx, &change_set, &result.campaign)
                 .await?;
+            result.change_set = Some(change_set);
         }
 
         self.store_run(&mut tx, result, command, instigated_context)
@@ -1840,7 +1842,7 @@ pub struct CandidateRow {
     #[serde(rename = "publish-policy")]
     pub publish_policy: Option<String>,
     /// Change set the candidate belongs to.
-    pub change_set: Option<String>,
+    pub change_set: Option<ChangeSetId>,
     /// Free-form context.
     pub context: Option<String>,
     /// Value of the candidate.

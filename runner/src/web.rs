@@ -12,7 +12,7 @@ use axum::{
     Extension, Json, Router,
 };
 use chrono::Utc;
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, ChangeSetId, Codebase, RunId};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -75,7 +75,7 @@ struct ScheduleRequest {
     campaign: Option<Campaign>,
     codebase: Option<Codebase>,
     refresh: Option<bool>,
-    change_set: Option<String>,
+    change_set: Option<ChangeSetId>,
     requester: Option<String>,
     bucket: Option<String>,
     offset: Option<f64>,
@@ -89,7 +89,7 @@ struct ScheduleControlRequest {
     run_id: Option<RunId>,
     codebase: Option<Codebase>,
     main_branch_revision: Option<String>,
-    change_set: Option<String>,
+    change_set: Option<ChangeSetId>,
     offset: Option<f64>,
     requester: Option<String>,
     refresh: Option<bool>,
@@ -329,7 +329,7 @@ async fn schedule_control(
     let result = janitor::schedule::do_schedule_control(
         pool,
         &codebase,
-        request.change_set.as_deref(),
+        request.change_set.as_ref(),
         Some(&main_branch_revision),
         request.offset,
         request.refresh.unwrap_or(false),
@@ -477,7 +477,7 @@ async fn schedule(
         &campaign,
         &codebase,
         request.bucket.as_deref().unwrap_or("default"),
-        request.change_set.as_deref(),
+        request.change_set.as_ref(),
         request.offset,
         request.refresh.unwrap_or(false),
         request.requester.as_deref(),
@@ -958,11 +958,12 @@ pub(crate) enum CandidatePreflight {
     Ok {
         codebase: Codebase,
         campaign: Campaign,
+        change_set: Option<ChangeSetId>,
         command: String,
         value: Option<i64>,
     },
     /// Request is malformed: `codebase` or `campaign` field missing
-    /// or not a valid name. Python raises HTTPBadRequest; the handler returns
+    /// or not a valid name, or `change_set` not a valid id. Python raises HTTPBadRequest; the handler returns
     /// 400 with the given message.
     BadRequest(String),
     /// Candidate references a campaign not in the runner config.
@@ -1012,6 +1013,16 @@ pub(crate) fn candidate_preflight(
         }
     };
 
+    let change_set = match candidate
+        .get("change_set")
+        .and_then(|v| v.as_str())
+        .map(ChangeSetId::new)
+        .transpose()
+    {
+        Ok(cs) => cs,
+        Err(e) => return CandidatePreflight::BadRequest(e.to_string()),
+    };
+
     if !known_campaigns.contains(campaign.as_str()) {
         return CandidatePreflight::UnknownCampaign(campaign);
     }
@@ -1035,6 +1046,7 @@ pub(crate) fn candidate_preflight(
     CandidatePreflight::Ok {
         codebase,
         campaign,
+        change_set,
         command,
         value,
     }
@@ -1061,7 +1073,7 @@ async fn upload_candidates(
         .collect();
 
     for candidate in &candidates {
-        let (codebase, campaign, command, value) =
+        let (codebase, campaign, change_set, command, value) =
             match candidate_preflight(candidate, &known_campaign_names, |name| {
                 state
                     .config
@@ -1072,9 +1084,10 @@ async fn upload_candidates(
                 CandidatePreflight::Ok {
                     codebase,
                     campaign,
+                    change_set,
                     command,
                     value,
-                } => (codebase, campaign, command, value),
+                } => (codebase, campaign, change_set, command, value),
                 CandidatePreflight::BadRequest(msg) => {
                     return (StatusCode::BAD_REQUEST, msg).into_response();
                 }
@@ -1097,10 +1110,6 @@ async fn upload_candidates(
 
         let publish_policy = candidate
             .get("publish-policy")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let change_set = candidate
-            .get("change_set")
             .and_then(|v| v.as_str())
             .map(str::to_string);
         let context = candidate
@@ -1139,7 +1148,7 @@ async fn upload_candidates(
         )
         .bind(&campaign)
         .bind(&command)
-        .bind(change_set.as_deref())
+        .bind(&change_set)
         .bind(context.as_deref())
         .bind(value)
         .bind(success_chance)
@@ -1302,7 +1311,7 @@ async fn upload_candidates(
             Some(&requester),
             0.0,
             context.as_deref(),
-            change_set.as_deref(),
+            change_set.as_ref(),
             false,
             refresh,
             bucket_override.as_deref(),
@@ -2355,7 +2364,7 @@ async fn publish_finish_events(
             Some("after run schedule"),
             0.0,
             context_str.as_deref(),
-            change_set.as_deref(),
+            change_set.as_ref(),
             false,
             false,
             None,
@@ -2393,7 +2402,7 @@ async fn publish_finish_events(
             match janitor::schedule::do_schedule_control(
                 &pool,
                 &codebase,
-                change_set.as_deref(),
+                change_set.as_ref(),
                 main_branch_revision.as_ref(),
                 None,
                 false,
@@ -4142,6 +4151,12 @@ distribution {
             result,
             CandidatePreflight::BadRequest("invalid campaign name: \"Lintian_Fixes\"".to_string())
         );
+        let c = json!({"codebase": "pkg", "campaign": "lintian-fixes", "change_set": "../cs"});
+        let result = candidate_preflight(&c, &known(&["lintian-fixes"]), no_default);
+        assert_eq!(
+            result,
+            CandidatePreflight::BadRequest("invalid change set id: \"../cs\"".to_string())
+        );
     }
 
     #[test]
@@ -4237,11 +4252,13 @@ distribution {
             CandidatePreflight::Ok {
                 codebase,
                 campaign,
+                change_set,
                 command,
                 value,
             } => {
                 assert_eq!(codebase, "pkg");
                 assert_eq!(campaign, "lintian-fixes");
+                assert_eq!(change_set, None);
                 assert_eq!(command, "lintian-brush");
                 assert_eq!(value, Some(10));
             }

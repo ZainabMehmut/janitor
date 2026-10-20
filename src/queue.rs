@@ -1,4 +1,4 @@
-use crate::{Campaign, Codebase};
+use crate::{Campaign, ChangeSetId, Codebase};
 use chrono::TimeDelta;
 use sqlx::postgres::types::PgInterval;
 use sqlx::{Error, FromRow, PgPool};
@@ -15,7 +15,7 @@ pub struct QueueItem {
     pub campaign: Campaign,
     pub refresh: Option<bool>,
     pub requester: Option<String>,
-    pub change_set: Option<String>,
+    pub change_set: Option<ChangeSetId>,
     pub codebase: Codebase,
 }
 
@@ -186,7 +186,7 @@ impl<'a> Queue<'a> {
         codebase: &Codebase,
         command: &str,
         campaign: &Campaign,
-        change_set: Option<&str>,
+        change_set: Option<&ChangeSetId>,
         offset: f64,
         bucket: &str,
         context: Option<&str>,
@@ -231,7 +231,7 @@ impl<'a> Queue<'a> {
             )
             .bind(codebase)
             .bind(campaign)
-            .bind(change_set.unwrap_or(""))
+            .bind(change_set.map_or("", |c| c.as_str()))
             .fetch_one(self.pool)
             .await
         }

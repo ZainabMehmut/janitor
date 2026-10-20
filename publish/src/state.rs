@@ -2,7 +2,7 @@ use crate::Mode;
 use breezyshim::branch::Branch;
 use breezyshim::transport::Transport;
 use breezyshim::RevisionId;
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, ChangeSetId, Codebase, PublishId, RunId};
 use sqlx::PgPool;
 use url::Url;
 
@@ -12,7 +12,7 @@ use url::Url;
 /// change_set state to `publishing` or `done` as appropriate.
 pub async fn store_publish(
     conn: &PgPool,
-    change_set: &str,
+    change_set: &ChangeSetId,
     codebase: &Codebase,
     branch_name: Option<&str>,
     target_branch_url: Option<&Url>,
@@ -24,7 +24,7 @@ pub async fn store_publish(
     result_code: &str,
     description: &str,
     merge_proposal_url: Option<&Url>,
-    publish_id: Option<&str>,
+    publish_id: Option<&PublishId>,
     requester: Option<&str>,
     run_id: Option<&RunId>,
 ) -> Result<(), sqlx::Error> {
@@ -487,8 +487,9 @@ pub struct MergeProposalRun {
     pub revision: RevisionId,
     /// Codebase the run belonged to.
     pub codebase: Codebase,
-    /// Change set id.
-    pub change_set: String,
+    /// Change set id; None for the placeholder built for an orphaned
+    /// merge proposal.
+    pub change_set: Option<ChangeSetId>,
 }
 
 /// Look up the most recent run whose `new_result_branch.revision`

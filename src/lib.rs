@@ -30,4 +30,4 @@ pub mod utils;
 pub mod vcs;
 pub mod worker_auth;
 
-pub use identifiers::{Campaign, Codebase, InvalidIdentifier, RunId};
+pub use identifiers::{Campaign, ChangeSetId, Codebase, InvalidIdentifier, PublishId, RunId};

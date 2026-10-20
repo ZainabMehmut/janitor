@@ -1,4 +1,4 @@
-use crate::{Campaign, Codebase, RunId};
+use crate::{Campaign, Codebase, PublishId, RunId};
 use chrono::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url::Url;
@@ -171,7 +171,7 @@ where
 
 #[derive(Serialize, Deserialize)]
 pub struct PublishNotification {
-    pub id: String,
+    pub id: PublishId,
     pub codebase: Codebase,
     pub campaign: Campaign,
     pub proposal_url: Option<Url>,
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn test_publish_notification_serde() {
         let notification = PublishNotification {
-            id: "pub-123".to_string(),
+            id: PublishId::new("pub-123").unwrap(),
             codebase: Codebase::new("mycodebase").unwrap(),
             campaign: Campaign::new("lintian-fixes").unwrap(),
             proposal_url: Some(

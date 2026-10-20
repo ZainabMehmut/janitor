@@ -1,6 +1,6 @@
 use crate::publish::Mode;
 use crate::queue::Queue;
-use crate::{Campaign, Codebase};
+use crate::{Campaign, ChangeSetId, Codebase};
 use breezyshim::RevisionId;
 use chrono::Duration;
 use debian_control::lossless::relations::{Relation, Relations};
@@ -37,7 +37,7 @@ pub struct ScheduleRequest {
     value: i64,
     success_chance: f64,
     command: String,
-    change_set: Option<String>,
+    change_set: Option<ChangeSetId>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -392,7 +392,7 @@ pub async fn do_schedule_regular(
     requester: Option<&str>,
     default_offset: f64,
     context: Option<&str>,
-    change_set: Option<&str>,
+    change_set: Option<&ChangeSetId>,
     dry_run: bool,
     refresh: bool,
     bucket: Option<&str>,
@@ -407,7 +407,7 @@ pub async fn do_schedule_regular(
         // Option semantics so downstream defaulting (matches Python's
         // `row["value"] -> None`) can propagate.
         let candidate = sqlx::query_as::<_, (Option<i32>, Option<f64>, String, Option<String>)>(
-            "SELECT value, success_chance, command, context FROM candidate WHERE codebase = $1 and suite = $2 and coalesce(change_set, '') = $3").bind(codebase).bind(campaign).bind(change_set.unwrap_or("")).fetch_optional(conn).await?;
+            "SELECT value, success_chance, command, context FROM candidate WHERE codebase = $1 and suite = $2 and coalesce(change_set, '') = $3").bind(codebase).bind(campaign).bind(change_set.map_or("", |c| c.as_str())).fetch_optional(conn).await?;
         let candidate = if let Some(candidate) = candidate {
             candidate
         } else {
@@ -546,7 +546,7 @@ pub async fn bulk_add_to_queue(
             requester,
             default_offset,
             Some(&req.context),
-            req.change_set.as_deref(),
+            req.change_set.as_ref(),
             dry_run,
             refresh,
             Some(bucket),
@@ -629,7 +629,7 @@ async fn deps_satisfied(
 pub async fn do_schedule_control(
     conn: &PgPool,
     codebase: &Codebase,
-    change_set: Option<&str>,
+    change_set: Option<&ChangeSetId>,
     main_branch_revision: Option<&RevisionId>,
     offset: Option<f64>,
     refresh: bool,
@@ -1108,7 +1108,7 @@ pub async fn do_schedule(
     campaign: &Campaign,
     codebase: &Codebase,
     bucket: &str,
-    change_set: Option<&str>,
+    change_set: Option<&ChangeSetId>,
     offset: Option<f64>,
     refresh: bool,
     requester: Option<&str>,

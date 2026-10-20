@@ -7,7 +7,7 @@ use axum::response::{IntoResponse, Json};
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use breezyshim::error::Error as BrzError;
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, ChangeSetId, Codebase, PublishId, RunId};
 use log::error;
 use sequoia_openpgp::armor;
 use sqlx::PgPool;
@@ -168,7 +168,7 @@ async fn list_merge_proposals(State(state): State<Arc<AppState>>) -> impl IntoRe
 #[derive(serde::Serialize, sqlx::FromRow)]
 struct AbsorbedRun {
     mode: String,
-    change_set: Option<String>,
+    change_set: Option<ChangeSetId>,
     codebase: Codebase,
     delay: Option<i64>, // seconds
     campaign: Campaign,
@@ -1265,9 +1265,9 @@ async fn publish(
     // Spawn one publish_and_store per active (role, mode) pair.
     // Skip/build-only roles get recorded in publish_ids without
     // queuing any work.
-    let mut publish_ids: HashMap<String, String> = HashMap::new();
+    let mut publish_ids: HashMap<String, PublishId> = HashMap::new();
     for (role, mode_str) in branches {
-        let publish_id = uuid::Uuid::new_v4().to_string();
+        let publish_id = crate::new_publish_id();
         publish_ids.insert(role.clone(), publish_id.clone());
 
         log::info!(".. publishing for role {}: {}", role, mode_str);
@@ -1941,7 +1941,7 @@ struct BlockerBackoffDetails {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct BlockerChangeSetDetails {
-    change_set_id: String,
+    change_set_id: ChangeSetId,
     change_set_state: String,
 }
 
@@ -1986,7 +1986,7 @@ struct RunDetails {
     policy_command: String,
     result_code: String,
     change_set_state: String,
-    change_set: String,
+    change_set: ChangeSetId,
     inactive: bool,
 }
 

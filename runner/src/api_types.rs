@@ -1,4 +1,4 @@
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, ChangeSetId, Codebase, RunId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -127,7 +127,7 @@ pub struct CandidateUpdate {
     /// Campaign this candidate belongs to
     pub campaign: Campaign,
     /// Identifier for the set of changes this candidate belongs to
-    pub change_set: Option<String>,
+    pub change_set: Option<ChangeSetId>,
     /// Additional context or metadata for the candidate
     pub context: Option<String>,
     /// Numeric value associated with the candidate (e.g., priority)

@@ -7,7 +7,7 @@ use tracing::debug;
 
 // Import shared database utilities
 use janitor::database::{Database as SharedDatabase, DatabaseError};
-use janitor::{Codebase, RunId};
+use janitor::{ChangeSetId, Codebase, RunId};
 
 use crate::error::{ArchiveError, ArchiveResult};
 use crate::scanner::BuildInfo;
@@ -147,7 +147,7 @@ impl ArchiveDatabase {
     /// Get builds for a specific changeset.
     pub async fn get_builds_for_changeset(
         &self,
-        changeset_id: &str,
+        changeset_id: &ChangeSetId,
     ) -> ArchiveResult<Vec<BuildRecord>> {
         debug!("Querying builds for changeset: {}", changeset_id);
 

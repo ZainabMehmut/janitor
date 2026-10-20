@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::{Campaign, Codebase, RunId};
+use crate::{Campaign, ChangeSetId, Codebase, RunId};
 use breezyshim::RevisionId;
 use log::warn;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, Postgres};
@@ -49,7 +49,7 @@ pub struct Run {
     pub result_branches: Option<Vec<(String, String, Option<RevisionId>, Option<RevisionId>)>>,
     pub result_tags: Option<Vec<(String, String)>>,
     pub target_branch_url: Option<String>,
-    pub change_set: String,
+    pub change_set: ChangeSetId,
     pub failure_details: Option<serde_json::Value>,
     pub failure_transient: Option<bool>,
     pub failure_stage: Option<String>,
@@ -178,7 +178,7 @@ mod tests {
             ]),
             result_tags: Some(vec![("v1.0".to_string(), "tag-ref".to_string())]),
             target_branch_url: Some("https://salsa.debian.org/foo/bar".to_string()),
-            change_set: "cs-1".to_string(),
+            change_set: ChangeSetId::new("cs-1").unwrap(),
             failure_details: None,
             failure_transient: None,
             failure_stage: None,

@@ -14,7 +14,7 @@ use janitor::config::Campaign;
 use janitor::publish::{MergeProposalStatus, Mode};
 use janitor::state::Run;
 use janitor::vcs::{VcsManager, VcsType};
-use janitor::{Codebase, RunId};
+use janitor::{Codebase, PublishId, RunId};
 use reqwest::header::HeaderMap;
 use serde::ser::SerializeStruct;
 use std::collections::HashMap;
@@ -50,6 +50,11 @@ use rate_limiter::RateLimiter;
 pub use crate::redis::RedisConnectionManager;
 // Import pyo3 for PyErr
 use pyo3::{exceptions::PyRuntimeError, PyErr};
+
+/// Generate a fresh publish id.
+pub fn new_publish_id() -> PublishId {
+    PublishId::new(uuid::Uuid::new_v4().to_string()).expect("a UUID is a valid publish id")
+}
 
 /// Calculate the next time to try publishing based on previous attempts.
 ///
@@ -2605,7 +2610,7 @@ pub async fn publish_from_policy(
         return Ok(None);
     }
 
-    let publish_id = uuid::Uuid::new_v4().to_string();
+    let publish_id = new_publish_id();
     if matches!(mode, Mode::BuildOnly | Mode::Skip) {
         return Ok(None);
     }
@@ -2969,7 +2974,7 @@ pub async fn publish_and_store(
     redis_manager: Option<&Arc<janitor::redis::RedisManager>>,
     campaign_config: &Campaign,
     publish_worker: &PublishWorker,
-    publish_id: &str,
+    publish_id: &PublishId,
     run: &janitor::state::Run,
     mode: Mode,
     role: &str,
@@ -3660,7 +3665,7 @@ async fn check_existing_mp(
                         remote_branch_name: String::new(),
                         revision: synth_revision,
                         codebase: cb.clone(),
-                        change_set: String::new(),
+                        change_set: None,
                     });
                 } else {
                     return Err(CheckMpError::NoRunForMergeProposal(mp_url.clone()));
@@ -4008,7 +4013,7 @@ async fn check_existing_mp(
             return Ok(false);
         }
 
-        let publish_id = uuid::Uuid::new_v4().to_string();
+        let publish_id = new_publish_id();
         log::info!(
             "{} ({}) needs to be updated ({:?} -> {}).",
             mp_url,
@@ -4173,7 +4178,7 @@ async fn check_existing_mp(
                     "success",
                     &description,
                     publish_result.proposal_url(),
-                    Some(publish_id.as_str()),
+                    Some(&publish_id),
                     Some("publisher (regular refresh)"),
                     Some(&last_run.id),
                 )
@@ -4272,7 +4277,7 @@ async fn check_existing_mp(
                     &code,
                     &description,
                     Some(&mp_url),
-                    Some(publish_id.as_str()),
+                    Some(&publish_id),
                     Some("publisher (regular refresh)"),
                     Some(&last_run.id),
                 )
@@ -4294,7 +4299,7 @@ async fn check_existing_mp(
             &mp_run.campaign,
             &mp_run.codebase,
             "update-existing-mp",
-            Some(&mp_run.change_set),
+            mp_run.change_set.as_ref(),
             None,
             true,
             Some("publisher (merge conflict)"),
