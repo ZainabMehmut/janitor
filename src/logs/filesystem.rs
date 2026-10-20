@@ -21,7 +21,7 @@ impl FileSystemLogFileManager {
     }
 
     fn get_paths(&self, codebase: &Codebase, run_id: &RunId, name: &str) -> Vec<PathBuf> {
-        if codebase.contains('/') || run_id.contains('/') || name.contains('/') {
+        if name.contains('/') {
             return vec![];
         }
         vec![
