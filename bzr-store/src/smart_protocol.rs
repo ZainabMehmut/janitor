@@ -34,7 +34,7 @@ use axum::{
 use breezyshim::bazaar::smart;
 use breezyshim::repository::Repository;
 use breezyshim::transport::Transport;
-use janitor::{Campaign, Codebase};
+use janitor::{Campaign, CodebaseName};
 use tracing::{debug, info, warn};
 
 use crate::error::{BzrError, Result};
@@ -160,7 +160,7 @@ fn handle_exchange(
 /// `allow_writes` semantics.
 pub async fn smart_protocol_dispatch(
     state: AppState,
-    codebase: Codebase,
+    codebase: CodebaseName,
     campaign: Option<Campaign>,
     role: Option<String>,
     headers: HeaderMap,
@@ -219,7 +219,7 @@ pub async fn smart_protocol_dispatch(
 /// `POST /:codebase/.bzr/smart`
 pub async fn smart_protocol_codebase_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
@@ -229,7 +229,7 @@ pub async fn smart_protocol_codebase_handler(
 /// `POST /:codebase/:campaign/.bzr/smart`
 pub async fn smart_protocol_campaign_handler(
     State(state): State<AppState>,
-    Path((codebase, campaign)): Path<(Codebase, Campaign)>,
+    Path((codebase, campaign)): Path<(CodebaseName, Campaign)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
@@ -239,7 +239,7 @@ pub async fn smart_protocol_campaign_handler(
 /// `POST /:codebase/:campaign/:role/.bzr/smart`
 pub async fn smart_protocol_role_handler(
     State(state): State<AppState>,
-    Path((codebase, campaign, role)): Path<(Codebase, Campaign, String)>,
+    Path((codebase, campaign, role)): Path<(CodebaseName, Campaign, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {

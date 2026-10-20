@@ -8,7 +8,7 @@ use axum::Json;
 use breezyshim::RevisionId;
 use clap::Parser;
 use janitor::artifacts::{ArtifactManager, Error as ArtifactError};
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, CodebaseName, RunId};
 use janitor_differ::diffoscope::{self, DiffoscopeOutput};
 use janitor_differ::{find_binaries, is_binary, Error, Result};
 use prometheus::{
@@ -256,7 +256,7 @@ async fn get_run(pool: &sqlx::PgPool, run_id: &RunId) -> sqlx::Result<Option<Run
 
 async fn get_unchanged_run(
     pool: &sqlx::PgPool,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     main_branch_revision: &RevisionId,
 ) -> sqlx::Result<Option<Run>> {
     sqlx::query_as::<_, Run>(
@@ -1057,7 +1057,7 @@ struct ResultMessage {
     log_id: RunId,
     revision: String,
     main_branch_revision: String,
-    codebase: Codebase,
+    codebase: CodebaseName,
 }
 
 impl janitor::redis::PubSubMessage for ResultMessage {

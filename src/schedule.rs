@@ -1,6 +1,6 @@
 use crate::publish::Mode;
 use crate::queue::Queue;
-use crate::{Campaign, ChangeSetId, Codebase};
+use crate::{Campaign, ChangeSetId, CodebaseName};
 use breezyshim::RevisionId;
 use chrono::Duration;
 use debian_control::lossless::relations::{Relation, Relations};
@@ -29,7 +29,7 @@ fn publish_mode_value(mode: &Mode) -> usize {
 
 #[derive(sqlx::FromRow)]
 pub struct ScheduleRequest {
-    codebase: Codebase,
+    codebase: CodebaseName,
     #[allow(dead_code)]
     branch_url: String,
     campaign: Campaign,
@@ -49,7 +49,7 @@ struct ScheduleRequestRow {
 
 pub async fn iter_schedule_requests_from_candidates(
     conn: &PgPool,
-    codebases: Option<&[Codebase]>,
+    codebases: Option<&[CodebaseName]>,
     campaign: Option<&Campaign>,
 ) -> Result<impl Iterator<Item = ScheduleRequest>, sqlx::Error> {
     // named_publish_policy.per_branch_policy is an array of
@@ -105,7 +105,7 @@ WHERE TRUE
 
 async fn estimate_duration_campaign_codebase(
     conn: &PgPool,
-    codebase: Option<&Codebase>,
+    codebase: Option<&CodebaseName>,
     campaign: Option<&Campaign>,
 ) -> Result<Option<Duration>, sqlx::Error> {
     let mut query = sqlx::QueryBuilder::new(
@@ -160,7 +160,7 @@ fn duration_from_seconds(seconds: f64) -> Duration {
 /// Estimate the duration of a codebase build for a certain campaign.
 async fn estimate_duration(
     conn: &PgPool,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     campaign: &Campaign,
 ) -> Result<Duration, sqlx::Error> {
     if let Some(estimated_duration) =
@@ -182,7 +182,7 @@ async fn estimate_duration(
 
 async fn estimate_success_probability_and_duration(
     conn: &PgPool,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     campaign: &Campaign,
     context: Option<&str>,
 ) -> Result<(f64, chrono::Duration, usize), sqlx::Error> {
@@ -383,7 +383,7 @@ fn calculate_offset(
 /// probability, duration and candidate value.
 pub async fn do_schedule_regular(
     conn: &PgPool,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     campaign: &Campaign,
     command: Option<&str>,
     candidate_value: Option<f64>,
@@ -628,7 +628,7 @@ async fn deps_satisfied(
 
 pub async fn do_schedule_control(
     conn: &PgPool,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     change_set: Option<&ChangeSetId>,
     main_branch_revision: Option<&RevisionId>,
     offset: Option<f64>,
@@ -661,7 +661,7 @@ pub async fn do_schedule_control(
 pub enum Error {
     CandidateUnavailable {
         campaign: Campaign,
-        codebase: Codebase,
+        codebase: CodebaseName,
     },
     SqlError(sqlx::Error),
 }
@@ -955,7 +955,9 @@ mod tests {
     /// Load the production schema into a fresh test database and add
     /// the `codebase` and `change_set` rows that runs reference.
     #[cfg(feature = "testing")]
-    async fn setup_run_database(codebase: &Codebase) -> Option<crate::test_utils::TestDatabase> {
+    async fn setup_run_database(
+        codebase: &CodebaseName,
+    ) -> Option<crate::test_utils::TestDatabase> {
         let db = crate::test_utils::TestDatabase::new_optional()
             .await
             .unwrap()?;
@@ -978,7 +980,7 @@ mod tests {
     #[cfg(feature = "testing")]
     #[tokio::test]
     async fn test_iter_schedule_requests_from_candidates() {
-        let Some(db) = setup_run_database(&Codebase::new("cb").unwrap()).await else {
+        let Some(db) = setup_run_database(&CodebaseName::new("cb").unwrap()).await else {
             return;
         };
         let pool = db.pool();
@@ -1013,7 +1015,7 @@ mod tests {
     #[cfg(feature = "testing")]
     #[tokio::test]
     async fn test_estimate_success_probability_and_duration() {
-        let Some(db) = setup_run_database(&Codebase::new("cb").unwrap()).await else {
+        let Some(db) = setup_run_database(&CodebaseName::new("cb").unwrap()).await else {
             return;
         };
         let pool = db.pool();
@@ -1033,7 +1035,7 @@ mod tests {
 
         let (probability, duration, total) = estimate_success_probability_and_duration(
             pool,
-            &Codebase::new("cb").unwrap(),
+            &CodebaseName::new("cb").unwrap(),
             &Campaign::new("lintian-fixes").unwrap(),
             None,
         )
@@ -1051,7 +1053,7 @@ mod tests {
     fn test_schedule_error_display() {
         let err = Error::CandidateUnavailable {
             campaign: Campaign::new("lintian-fixes").unwrap(),
-            codebase: Codebase::new("mycodebase").unwrap(),
+            codebase: CodebaseName::new("mycodebase").unwrap(),
         };
         assert_eq!(
             err.to_string(),
@@ -1072,7 +1074,7 @@ mod tests {
     #[cfg(feature = "testing")]
     #[tokio::test]
     async fn test_estimate_success_probability_with_previous_runs() {
-        let Some(db) = setup_run_database(&Codebase::new("foo").unwrap()).await else {
+        let Some(db) = setup_run_database(&CodebaseName::new("foo").unwrap()).await else {
             return;
         };
         let pool = db.pool();
@@ -1090,7 +1092,7 @@ mod tests {
 
         let (probability, duration, total) = estimate_success_probability_and_duration(
             pool,
-            &Codebase::new("foo").unwrap(),
+            &CodebaseName::new("foo").unwrap(),
             &Campaign::new("lintian-fixes").unwrap(),
             None,
         )
@@ -1106,7 +1108,7 @@ mod tests {
 pub async fn do_schedule(
     conn: &PgPool,
     campaign: &Campaign,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     bucket: &str,
     change_set: Option<&ChangeSetId>,
     offset: Option<f64>,

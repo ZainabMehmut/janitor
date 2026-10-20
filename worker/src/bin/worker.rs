@@ -33,7 +33,7 @@ struct Args {
 
     /// Request run for specified codebase
     #[clap(long)]
-    codebase: Option<janitor::Codebase>,
+    codebase: Option<janitor::CodebaseName>,
 
     /// Request run for specified campaign
     #[clap(long)]

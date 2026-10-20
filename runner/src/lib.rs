@@ -6,7 +6,7 @@
 
 use breezyshim::RevisionId;
 use chrono::{DateTime, Utc};
-use janitor::{Campaign, ChangeSetId, Codebase, RunId};
+use janitor::{Campaign, ChangeSetId, CodebaseName, RunId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -449,7 +449,7 @@ pub struct JanitorResult {
     /// Whether the result is transient.
     pub transient: Option<bool>,
     /// Name of the codebase.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Name of the campaign.
     pub campaign: Campaign,
     /// Human-readable description of the result.
@@ -692,7 +692,7 @@ pub struct WorkerResult {
     /// Whether the result is transient.
     pub transient: Option<bool>,
     /// Codebase name.
-    pub codebase: Option<Codebase>,
+    pub codebase: Option<CodebaseName>,
 }
 
 /// Information about an active run.
@@ -724,7 +724,7 @@ pub struct ActiveRun {
     /// VCS information.
     pub vcs_info: VcsInfo,
     /// Codebase name.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Instigated context.
     pub instigated_context: Option<serde_json::Value>,
     /// Optional resume from run ID.
@@ -1645,7 +1645,7 @@ pub struct QueueItem {
     /// Optional change set identifier.
     pub change_set: Option<ChangeSetId>,
     /// Name of the codebase.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
 }
 
 impl QueueItem {
@@ -2091,7 +2091,7 @@ mod tests {
             command: "test command".to_string(),
             backchannel: Backchannel::default(),
             vcs_info,
-            codebase: Codebase::new("test-codebase").unwrap(),
+            codebase: CodebaseName::new("test-codebase").unwrap(),
             instigated_context: None,
             resume_from: None,
         };
@@ -2413,7 +2413,7 @@ mod tests {
             subpath: Some("debian/".to_string()),
             code: "success".to_string(),
             transient: Some(false),
-            codebase: Codebase::new("mycodebase").unwrap(),
+            codebase: CodebaseName::new("mycodebase").unwrap(),
             campaign: Campaign::new("lintian-fixes").unwrap(),
             description: Some("Fixed 3 lintian issues".to_string()),
             codemod: Some(serde_json::json!({"applied": 3})),
@@ -2455,7 +2455,7 @@ mod tests {
             subpath: None,
             code: "build-failed".to_string(),
             transient: Some(true),
-            codebase: Codebase::new("failcodebase").unwrap(),
+            codebase: CodebaseName::new("failcodebase").unwrap(),
             campaign: Campaign::new("fresh-releases").unwrap(),
             description: Some("Build failed".to_string()),
             codemod: None,
@@ -2495,7 +2495,7 @@ mod tests {
             subpath: None,
             code: "success".to_string(),
             transient: None,
-            codebase: Codebase::new("test").unwrap(),
+            codebase: CodebaseName::new("test").unwrap(),
             campaign: Campaign::new("test").unwrap(),
             description: Some("OK".to_string()),
             codemod: Some(serde_json::json!({})),

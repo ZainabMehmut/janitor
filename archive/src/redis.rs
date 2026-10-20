@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use janitor::redis::{PubSubMessage, RedisConfig, RedisManager};
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, CodebaseName, RunId};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -20,7 +20,7 @@ use crate::manager::GeneratorManager;
 pub enum ArchiveEvent {
     BuildCompleted {
         run_id: RunId,
-        codebase: Codebase,
+        codebase: CodebaseName,
         campaign: Campaign,
         artifacts: Vec<String>,
     },

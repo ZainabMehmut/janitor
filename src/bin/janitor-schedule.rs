@@ -1,5 +1,5 @@
 use clap::Parser;
-use janitor::{Campaign, Codebase};
+use janitor::{Campaign, CodebaseName};
 
 #[derive(Parser)]
 struct Args {
@@ -20,7 +20,7 @@ struct Args {
     campaign: Option<Campaign>,
 
     /// Codebase to process.
-    codebases: Vec<Codebase>,
+    codebases: Vec<CodebaseName>,
 
     #[clap(long)]
     /// Bucket to use.

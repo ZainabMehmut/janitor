@@ -2,7 +2,7 @@ use crate::database::RunnerDatabase;
 use breezyshim::branch::{Branch, GenericBranch};
 use breezyshim::error::Error as BrzError;
 use breezyshim::forge::get_forge;
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, CodebaseName, RunId};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
@@ -22,7 +22,7 @@ pub struct ResumeInfo {
     /// Campaign (schema column: `suite`) that produced the run.
     pub campaign: Campaign,
     /// Codebase the run targeted.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Remote branch name from the `main` role of the resumed run's
     /// result branches, if any. May be empty for legacy runs.
     pub branch_name: String,
@@ -98,7 +98,7 @@ impl ResumeService {
         struct ResumeRow {
             id: RunId,
             campaign: Campaign,
-            codebase: Codebase,
+            codebase: CodebaseName,
             result_code: String,
             revision: Option<String>,
             publish_status: Option<String>,
@@ -213,9 +213,9 @@ impl ResumeService {
         #[derive(sqlx::FromRow)]
         struct RunPair {
             current_campaign: Campaign,
-            current_codebase: Codebase,
+            current_codebase: CodebaseName,
             resume_campaign: Campaign,
-            resume_codebase: Codebase,
+            resume_codebase: CodebaseName,
             resume_result: String,
         }
         let row: Option<RunPair> = sqlx::query_as(
@@ -353,7 +353,7 @@ pub enum ResumeLookup {
 pub fn open_resume_branch(
     main_branch: &GenericBranch,
     campaign_branch_name: &str,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
 ) -> ResumeLookup {
     use silver_platter::vcs::BranchOpenError;
 
@@ -451,7 +451,7 @@ mod tests {
         let resume_info = ResumeInfo {
             run_id: RunId::new("test-run-1").unwrap(),
             campaign: Campaign::new("test-campaign").unwrap(),
-            codebase: Codebase::new("example-repo").unwrap(),
+            codebase: CodebaseName::new("example-repo").unwrap(),
             branch_name: "test-branch".to_string(),
             result_code: "success".to_string(),
             revision: Some("abc123".to_string()),

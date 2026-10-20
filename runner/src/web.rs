@@ -12,7 +12,7 @@ use axum::{
     Extension, Json, Router,
 };
 use chrono::Utc;
-use janitor::{Campaign, ChangeSetId, Codebase, RunId};
+use janitor::{Campaign, ChangeSetId, CodebaseName, RunId};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ struct AssignRequest {
     /// Backchannel configuration.
     backchannel: Option<serde_json::Value>,
     /// Specific codebase to work on.
-    codebase: Option<Codebase>,
+    codebase: Option<CodebaseName>,
     /// Specific campaign to work on.
     campaign: Option<Campaign>,
     /// Hosts the worker is temporarily rate-limited on; the queue
@@ -73,7 +73,7 @@ struct ResumeInfoRequest {
 struct ScheduleRequest {
     run_id: Option<RunId>,
     campaign: Option<Campaign>,
-    codebase: Option<Codebase>,
+    codebase: Option<CodebaseName>,
     refresh: Option<bool>,
     change_set: Option<ChangeSetId>,
     requester: Option<String>,
@@ -87,7 +87,7 @@ struct ScheduleRequest {
 #[derive(Debug, Deserialize)]
 struct ScheduleControlRequest {
     run_id: Option<RunId>,
-    codebase: Option<Codebase>,
+    codebase: Option<CodebaseName>,
     main_branch_revision: Option<String>,
     change_set: Option<ChangeSetId>,
     offset: Option<f64>,
@@ -209,7 +209,7 @@ fn create_campaign_config(
 /// (`?codebase=...&campaign=...`).
 #[derive(serde::Deserialize)]
 struct QueuePositionQuery {
-    codebase: Codebase,
+    codebase: CodebaseName,
     campaign: Campaign,
 }
 
@@ -269,7 +269,7 @@ async fn schedule_control(
     let pool = state.database.pool();
 
     let (codebase, main_branch_revision) = if let Some(run_id) = request.run_id.as_ref() {
-        let row: Option<(Option<String>, Codebase)> =
+        let row: Option<(Option<String>, CodebaseName)> =
             match sqlx::query_as("SELECT main_branch_revision, codebase FROM run WHERE id = $1")
                 .bind(run_id)
                 .fetch_optional(pool)
@@ -378,7 +378,7 @@ async fn schedule(
     let pool = state.database.pool();
 
     let (campaign, codebase, run_command) = if let Some(run_id) = request.run_id.as_ref() {
-        let row: Option<(Campaign, Codebase, Option<String>)> = match sqlx::query_as(
+        let row: Option<(Campaign, CodebaseName, Option<String>)> = match sqlx::query_as(
             "SELECT suite AS campaign, codebase, command FROM run WHERE id = $1",
         )
         .bind(run_id)
@@ -908,7 +908,7 @@ fn cache_branch_name(
 fn worker_vcs_urls(
     managers: &HashMap<janitor::vcs::VcsType, Box<dyn janitor::vcs::VcsManager>>,
     vcs_type: Option<&str>,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     cache_branch_name: Option<&str>,
 ) -> (Option<String>, Option<String>) {
     let Some(manager) = vcs_type
@@ -956,7 +956,7 @@ pub(crate) enum CandidatePreflight {
     /// Candidate passed the pure-logic checks. Callers still need
     /// to perform the DB insert and follow-up scheduling.
     Ok {
-        codebase: Codebase,
+        codebase: CodebaseName,
         campaign: Campaign,
         change_set: Option<ChangeSetId>,
         command: String,
@@ -989,7 +989,7 @@ pub(crate) fn candidate_preflight(
     campaign_default_command: impl Fn(&str) -> Option<String>,
 ) -> CandidatePreflight {
     let codebase = match candidate.get("codebase").and_then(|v| v.as_str()) {
-        Some(s) if !s.is_empty() => match Codebase::new(s) {
+        Some(s) if !s.is_empty() => match CodebaseName::new(s) {
             Ok(c) => c,
             Err(e) => return CandidatePreflight::BadRequest(e.to_string()),
         },
@@ -1059,7 +1059,7 @@ async fn upload_candidates(
     let pool = state.database.pool();
 
     let mut success = Vec::<serde_json::Value>::new();
-    let mut unknown_codebases = std::collections::BTreeSet::<Codebase>::new();
+    let mut unknown_codebases = std::collections::BTreeSet::<CodebaseName>::new();
     let mut unknown_campaigns = std::collections::BTreeSet::<Campaign>::new();
     let mut invalid_command = std::collections::BTreeSet::<String>::new();
     let mut invalid_value = std::collections::BTreeSet::<i64>::new();
@@ -1367,7 +1367,7 @@ async fn upload_candidates(
 /// publish_status}` triple. Only those three fields are returned,
 /// not the entire run row.
 async fn get_run(State(state): State<Arc<AppState>>, Path(id): Path<RunId>) -> impl IntoResponse {
-    let row: Result<Option<(Codebase, Campaign, String)>, _> =
+    let row: Result<Option<(CodebaseName, Campaign, String)>, _> =
         sqlx::query_as("SELECT codebase, suite, publish_status::text FROM run WHERE id = $1")
             .bind(&id)
             .fetch_optional(state.database.pool())
@@ -1927,7 +1927,7 @@ async fn admin_cleanup_runs(
     sql.push_str(&format!(" ORDER BY finish_time ASC LIMIT ${}", next_param));
 
     let mut query =
-        sqlx::query_as::<_, (RunId, Codebase, Campaign, String)>(sqlx::AssertSqlSafe(&*sql))
+        sqlx::query_as::<_, (RunId, CodebaseName, Campaign, String)>(sqlx::AssertSqlSafe(&*sql))
             .bind(&q.result_code);
     if let Some(ref c) = q.campaign {
         query = query.bind(c);
@@ -1943,7 +1943,7 @@ async fn admin_cleanup_runs(
     }
     query = query.bind(max);
 
-    let rows: Vec<(RunId, Codebase, Campaign, String)> =
+    let rows: Vec<(RunId, CodebaseName, Campaign, String)> =
         match query.fetch_all(state.database.pool()).await {
             Ok(r) => r,
             Err(e) => {
@@ -3971,7 +3971,7 @@ mod tests {
         CandidatePreflight,
     };
     use crate::CampaignConfig;
-    use janitor::{Campaign, Codebase};
+    use janitor::{Campaign, CodebaseName};
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -4029,7 +4029,7 @@ mod tests {
     #[test]
     fn test_worker_vcs_urls_inserts_vcs_segment() {
         let managers = janitor::vcs::get_vcs_managers("https://janitor.example.com/").unwrap();
-        let foo = Codebase::new("foo").unwrap();
+        let foo = CodebaseName::new("foo").unwrap();
         assert_eq!(
             super::worker_vcs_urls(&managers, Some("git"), &foo, Some("debian/latest")),
             (
@@ -4049,7 +4049,7 @@ mod tests {
     #[test]
     fn test_worker_vcs_urls_unsupported_vcs() {
         let managers = janitor::vcs::get_vcs_managers("git=https://git.example.com/").unwrap();
-        let foo = Codebase::new("foo").unwrap();
+        let foo = CodebaseName::new("foo").unwrap();
         assert_eq!(
             super::worker_vcs_urls(&managers, Some("bzr"), &foo, Some("main")),
             (None, None)

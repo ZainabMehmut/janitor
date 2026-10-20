@@ -1,6 +1,6 @@
 use crate::analyze_log::AnalyzeLogFn;
 use crate::logs::LogFileManager;
-use crate::{Campaign, ChangeSetId, Codebase, RunId};
+use crate::{Campaign, ChangeSetId, CodebaseName, RunId};
 use sqlx::Executor;
 use tokio::time::timeout;
 use tracing::{error, info};
@@ -9,7 +9,7 @@ use tracing::{error, info};
 pub async fn reprocess_run_logs(
     db: &sqlx::PgPool,
     logfile_manager: &dyn LogFileManager,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     campaign: &Campaign,
     log_id: &RunId,
     _command: &str,

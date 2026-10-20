@@ -1,4 +1,4 @@
-use crate::{Codebase, RunId};
+use crate::{CodebaseName, RunId};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -59,7 +59,7 @@ impl GCSLogFileManager {
         format!("projects/_/buckets/{}", self.bucket_name)
     }
 
-    fn get_object_name(&self, codebase: &Codebase, run_id: &RunId, name: &str) -> String {
+    fn get_object_name(&self, codebase: &CodebaseName, run_id: &RunId, name: &str) -> String {
         format!("{}/{}/{}.gz", codebase, run_id, name)
     }
 }
@@ -68,7 +68,7 @@ impl GCSLogFileManager {
 impl LogFileManager for GCSLogFileManager {
     async fn has_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<bool, Error> {
@@ -96,7 +96,7 @@ impl LogFileManager for GCSLogFileManager {
 
     async fn get_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<Box<dyn Read + Send + Sync>, Error> {
@@ -129,7 +129,7 @@ impl LogFileManager for GCSLogFileManager {
 
     async fn import_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         orig_path: &str,
         _mtime: Option<DateTime<Utc>>,
@@ -196,7 +196,7 @@ impl LogFileManager for GCSLogFileManager {
 
     async fn get_ctime(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<DateTime<Utc>, Error> {
@@ -240,7 +240,7 @@ impl LogFileManager for GCSLogFileManager {
 
     async fn delete_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<(), Error> {
@@ -320,7 +320,7 @@ impl GCSLogFileManager {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Codebase, RunId};
+    use crate::{CodebaseName, RunId};
 
     /// A simplified test for get_object_name that doesn't require actual GCS connections
     #[test]
@@ -329,7 +329,12 @@ mod tests {
         struct TestGCSLogFileManager;
 
         impl TestGCSLogFileManager {
-            fn get_object_name(&self, codebase: &Codebase, run_id: &RunId, name: &str) -> String {
+            fn get_object_name(
+                &self,
+                codebase: &CodebaseName,
+                run_id: &RunId,
+                name: &str,
+            ) -> String {
                 format!("{}/{}/{}.gz", codebase, run_id, name)
             }
         }
@@ -338,7 +343,7 @@ mod tests {
 
         assert_eq!(
             manager.get_object_name(
-                &Codebase::new("my-codebase").unwrap(),
+                &CodebaseName::new("my-codebase").unwrap(),
                 &RunId::new("run123").unwrap(),
                 "build.log"
             ),

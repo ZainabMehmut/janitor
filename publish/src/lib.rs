@@ -14,7 +14,7 @@ use janitor::config::Campaign;
 use janitor::publish::{MergeProposalStatus, Mode};
 use janitor::state::Run;
 use janitor::vcs::{VcsManager, VcsType};
-use janitor::{Codebase, PublishId, RunId};
+use janitor::{CodebaseName, PublishId, RunId};
 use reqwest::header::HeaderMap;
 use serde::ser::SerializeStruct;
 use std::collections::HashMap;
@@ -878,7 +878,7 @@ impl PublishWorker {
     pub async fn publish_one(
         &self,
         campaign: &janitor::Campaign,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         command: &str,
         target_branch_url: &url::Url,
         mode: Mode,
@@ -1098,7 +1098,7 @@ pub async fn derived_branch_name(
 /// * `None`: no rows matched, so we can't tell.
 async fn has_cotenants(
     conn: &sqlx::PgPool,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     branch_url: &str,
 ) -> Result<Option<bool>, sqlx::Error> {
     let url = match url::Url::parse(branch_url) {
@@ -1108,7 +1108,7 @@ async fn has_cotenants(
         Err(_) => branch_url.to_string(),
     };
 
-    let rows: Vec<(Codebase,)> =
+    let rows: Vec<(CodebaseName,)> =
         sqlx::query_as("SELECT name FROM codebase WHERE branch_url = $1 OR url = $1")
             .bind(url.trim_end_matches('/'))
             .fetch_all(conn)
@@ -1420,7 +1420,7 @@ pub async fn abandon_mp(
     proposal_info_manager: &mut proposal_info::ProposalInfoManager,
     mp: &breezyshim::forge::MergeProposal,
     revision: &RevisionId,
-    codebase: Option<&Codebase>,
+    codebase: Option<&CodebaseName>,
     target_branch_url: &str,
     campaign: Option<&janitor::Campaign>,
     can_be_merged: Option<bool>,
@@ -1521,7 +1521,7 @@ pub async fn close_applied_mp(
     proposal_info_manager: &mut proposal_info::ProposalInfoManager,
     mp: &breezyshim::forge::MergeProposal,
     revision: &RevisionId,
-    codebase: Option<&Codebase>,
+    codebase: Option<&CodebaseName>,
     target_branch_url: &str,
     campaign: Option<&janitor::Campaign>,
     can_be_merged: Option<bool>,
@@ -3245,7 +3245,7 @@ async fn check_existing_mp(
     let old_proposal_info = proposal_info_manager.get_proposal_info(&mp_url).await?;
 
     let (mut codebase, mut rate_limit_bucket) = if let Some(info) = &old_proposal_info {
-        // info.codebase is Option<Codebase> - the merge_proposal
+        // info.codebase is Option<CodebaseName> - the merge_proposal
         // row's codebase can be NULL for forge-discovered proposals
         // we haven't matched to a candidate yet. Pass through as-is;
         // the guess-from-revision pass below will populate it.
@@ -3507,7 +3507,7 @@ async fn check_existing_mp(
         // the local codebase so sqlx binds NULL - schema allows it
         // (`codebase text references codebase(name) on delete set null`).
         // Python passes Optional[str] here for the same reason.
-        let codebase_for_update: Option<&Codebase> = codebase.as_ref();
+        let codebase_for_update: Option<&CodebaseName> = codebase.as_ref();
         let mp_run = crate::state::get_merge_proposal_run(conn, &mp_url).await?;
         let campaign_for_update = mp_run.as_ref().map(|r| &r.campaign);
         let target_url_for_update = match &target_branch_url {
@@ -4339,7 +4339,7 @@ async fn abandon_or_close_mp_async(
     proposal_info_manager: &mut proposal_info::ProposalInfoManager,
     mp: &breezyshim::forge::MergeProposal,
     revision: &RevisionId,
-    codebase: Option<&Codebase>,
+    codebase: Option<&CodebaseName>,
     target_branch_url: &str,
     campaign: Option<&janitor::Campaign>,
     can_be_merged: Option<bool>,
@@ -5215,7 +5215,7 @@ async fn get_publish_attempt_count(
 /// level so each row comes back as `(role, mode, frequency_days)`.
 pub async fn get_publish_policy(
     conn: &sqlx::PgPool,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     campaign: &janitor::Campaign,
 ) -> Result<
     Option<(

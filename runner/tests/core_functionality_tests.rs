@@ -60,7 +60,7 @@ fn test_janitor_result_serialization() {
         subpath: Some("subdir".to_string()),
         code: "success".to_string(),
         transient: Some(false),
-        codebase: janitor::Codebase::new("test-codebase").unwrap(),
+        codebase: janitor::CodebaseName::new("test-codebase").unwrap(),
         campaign: janitor::Campaign::new("test-campaign").unwrap(),
         description: Some("Test successful".to_string()),
         codemod: None,
@@ -138,7 +138,7 @@ fn test_worker_result_compatibility() {
         vcs_type: Some("git".to_string()),
         subpath: None,
         transient: Some(false),
-        codebase: Some(janitor::Codebase::new("test-repo").unwrap()),
+        codebase: Some(janitor::CodebaseName::new("test-repo").unwrap()),
     };
 
     // Test all fields are preserved in serialization
@@ -167,7 +167,7 @@ fn test_active_run_structure() {
         campaign: janitor::Campaign::new("test-campaign").unwrap(),
         change_set: Some(janitor::ChangeSetId::new("changeset-123").unwrap()),
         command: "test-command".to_string(),
-        codebase: janitor::Codebase::new("test-codebase").unwrap(),
+        codebase: janitor::CodebaseName::new("test-codebase").unwrap(),
         backchannel: janitor_runner::Backchannel::Polling {
             my_url: "http://worker:8080".to_string(),
         },

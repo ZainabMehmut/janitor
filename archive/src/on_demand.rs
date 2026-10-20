@@ -27,7 +27,7 @@ use apt_repository::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::StreamExt;
-use janitor::{Campaign, ChangeSetId, Codebase, InvalidIdentifier, RunId};
+use janitor::{Campaign, ChangeSetId, CodebaseName, InvalidIdentifier, RunId};
 use tracing::{debug, info, warn};
 
 use crate::database::{BuildManager, BuildRecord};
@@ -65,7 +65,7 @@ pub enum OnDemandTarget {
     /// A changeset's outputs.
     ChangeSet(ChangeSetId),
     /// A campaign's latest changeset for a codebase (or source package).
-    Campaign(Campaign, Codebase),
+    Campaign(Campaign, CodebaseName),
 }
 
 impl OnDemandTarget {
@@ -507,7 +507,7 @@ mod tests {
             target,
             OnDemandTarget::Campaign(
                 Campaign::new("lintian-fixes").unwrap(),
-                Codebase::new("hello").unwrap()
+                CodebaseName::new("hello").unwrap()
             )
         );
         assert_eq!((target.kind(), target.id()), ("lintian-fixes", "hello"));

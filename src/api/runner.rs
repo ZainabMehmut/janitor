@@ -1,10 +1,10 @@
-use crate::{Codebase, RunId};
+use crate::{CodebaseName, RunId};
 
 /// Sent when the publish-status for a run changes.
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct PublishStatusPubsub {
     /// The codebase.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
 
     /// The run ID.
     pub run_id: RunId,

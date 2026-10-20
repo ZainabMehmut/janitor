@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::{Campaign, ChangeSetId, Codebase, RunId};
+use crate::{Campaign, ChangeSetId, CodebaseName, RunId};
 use breezyshim::RevisionId;
 use log::warn;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, Postgres};
@@ -53,7 +53,7 @@ pub struct Run {
     pub failure_details: Option<serde_json::Value>,
     pub failure_transient: Option<bool>,
     pub failure_stage: Option<String>,
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     pub start_time: chrono::DateTime<chrono::Utc>,
     pub finish_time: chrono::DateTime<chrono::Utc>,
     pub value: Option<i32>,
@@ -95,18 +95,18 @@ impl Run {
 /// codebase table).
 pub async fn has_cotenants(
     conn: &PgPool,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     url: &url::Url,
 ) -> Result<Option<bool>, sqlx::Error> {
     #[derive(Debug, Clone, sqlx::FromRow)]
-    struct Codebase {
+    struct CodebaseRow {
         pub name: String,
     }
     let url = breezyshim::urlutils::split_segment_parameters(url)
         .0
         .to_string();
 
-    let rows: Vec<Codebase> =
+    let rows: Vec<CodebaseRow> =
         sqlx::query_as("SELECT name FROM codebase where branch_url = $1 or url = $1")
             .bind(url.trim_end_matches('/'))
             .fetch_all(conn)
@@ -130,7 +130,7 @@ pub async fn has_cotenants(
 /// `codebase`, per the `publish_ready` view.
 pub async fn iter_publishable_suites(
     conn: &PgPool,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
 ) -> Result<Vec<String>, sqlx::Error> {
     let rows: Vec<(String,)> =
         sqlx::query_as("SELECT DISTINCT suite FROM publish_ready WHERE codebase = $1")
@@ -182,7 +182,7 @@ mod tests {
             failure_details: None,
             failure_transient: None,
             failure_stage: None,
-            codebase: Codebase::new("mycodebase").unwrap(),
+            codebase: CodebaseName::new("mycodebase").unwrap(),
             start_time: chrono::Utc.with_ymd_and_hms(2025, 1, 1, 10, 0, 0).unwrap(),
             finish_time: chrono::Utc.with_ymd_and_hms(2025, 1, 1, 10, 5, 0).unwrap(),
             value: Some(30),

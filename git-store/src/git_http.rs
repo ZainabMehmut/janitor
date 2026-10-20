@@ -9,7 +9,7 @@ use axum::{
     response::Response,
 };
 use futures_util::StreamExt;
-use janitor::Codebase;
+use janitor::CodebaseName;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -37,7 +37,7 @@ pub struct DiffQuery {
 
 pub async fn git_diff(
     State(state): State<crate::web::AppState>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
     Query(params): Query<DiffQuery>,
 ) -> Result<Response> {
     let (old, new) = match (params.old, params.new) {
@@ -183,7 +183,7 @@ fn is_valid_hexsha(s: &str) -> bool {
 /// `git cat-file -e <rev>`: exits 0 if the object is reachable.
 async fn ensure_revision_present(
     repo_path: &std::path::Path,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     revision: &str,
     timeout_secs: u64,
 ) -> Result<()> {
@@ -225,7 +225,7 @@ const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
 /// `py/janitor/site/cupboard/review.py::get_revision_info` expects.
 pub async fn revision_info(
     State(state): State<crate::web::AppState>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
     Query(params): Query<RevisionInfoQuery>,
 ) -> Result<Response> {
     let (old, new) = match (params.old, params.new) {
@@ -341,7 +341,7 @@ pub struct LogQuery {
 /// oldest first, with author info and message.
 pub async fn git_log(
     State(state): State<crate::web::AppState>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
     Query(params): Query<LogQuery>,
 ) -> Result<Response> {
     crate::repository::RepositoryManager::validate_sha(&params.new)?;

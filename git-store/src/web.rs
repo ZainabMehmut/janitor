@@ -23,7 +23,7 @@ use axum::{
 };
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use janitor::Codebase;
+use janitor::CodebaseName;
 use std::sync::Arc;
 use tera::Tera;
 
@@ -256,8 +256,8 @@ async fn klaus_or_git_backend(
     }
 }
 
-pub(crate) fn parse_codebase(codebase: String) -> Result<Codebase> {
-    Codebase::new(codebase).map_err(|e| GitStoreError::BadRequest(e.to_string()))
+pub(crate) fn parse_codebase(codebase: String) -> Result<CodebaseName> {
+    CodebaseName::new(codebase).map_err(|e| GitStoreError::BadRequest(e.to_string()))
 }
 
 /// Bare-codebase variant of [`klaus_or_git_backend`] with an empty
@@ -314,7 +314,7 @@ async fn list_repositories(
 /// auto-created bare repo. The `url` field is required.
 async fn set_remote(
     State(state): State<AppState>,
-    Path((codebase, name)): Path<(Codebase, String)>,
+    Path((codebase, name)): Path<(CodebaseName, String)>,
     body: String,
 ) -> Result<StatusCode> {
     if !state.db_manager.codebase_exists(&codebase).await? {

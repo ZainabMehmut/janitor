@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use async_trait::async_trait;
-use janitor::Codebase;
+use janitor::CodebaseName;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::process::Command;
@@ -32,7 +32,7 @@ use crate::pyo3_bridge::BreezyOperations;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryPath {
     /// Codebase identifier — the on-disk shared repo directory name.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Optional campaign name (transport sub-path).
     pub campaign: Option<String>,
     /// Optional role name (transport sub-path below campaign).
@@ -42,7 +42,7 @@ pub struct RepositoryPath {
 impl RepositoryPath {
     /// Create a new repository path for a codebase, with optional
     /// campaign/role.
-    pub fn new(codebase: Codebase, campaign: Option<String>, role: Option<String>) -> Self {
+    pub fn new(codebase: CodebaseName, campaign: Option<String>, role: Option<String>) -> Self {
         Self {
             codebase,
             campaign,
@@ -51,7 +51,7 @@ impl RepositoryPath {
     }
 
     /// Create a repository path that refers only to the codebase repo.
-    pub fn codebase_only(codebase: Codebase) -> Self {
+    pub fn codebase_only(codebase: CodebaseName) -> Self {
         Self {
             codebase,
             campaign: None,
@@ -170,7 +170,7 @@ impl PyO3RepositoryManager {
 
     /// Create `<base>/<codebase>` and initialize it as a shared bzr
     /// repository if it doesn't already exist.
-    async fn ensure_codebase_structure(&self, codebase: &Codebase) -> Result<()> {
+    async fn ensure_codebase_structure(&self, codebase: &CodebaseName) -> Result<()> {
         let codebase_path = self.base_path.join(codebase);
         if codebase_path.join(".bzr").exists() {
             return Ok(());
@@ -250,7 +250,7 @@ impl RepositoryManager for PyO3RepositoryManager {
                 continue;
             }
             let name = e.file_name().to_string_lossy().to_string();
-            let codebase = match Codebase::new(name) {
+            let codebase = match CodebaseName::new(name) {
                 Ok(c) => c,
                 Err(e) => {
                     warn!("skipping repository directory: {}", e);
@@ -454,20 +454,20 @@ mod tests {
 
     #[test]
     fn relative_path_codebase_only() {
-        let p = RepositoryPath::codebase_only(Codebase::new("foo").unwrap());
+        let p = RepositoryPath::codebase_only(CodebaseName::new("foo").unwrap());
         assert_eq!(p.relative_path(), "foo");
     }
 
     #[test]
     fn relative_path_codebase_campaign() {
-        let p = RepositoryPath::new(Codebase::new("foo").unwrap(), Some("c".into()), None);
+        let p = RepositoryPath::new(CodebaseName::new("foo").unwrap(), Some("c".into()), None);
         assert_eq!(p.relative_path(), "foo/c");
     }
 
     #[test]
     fn relative_path_full() {
         let p = RepositoryPath::new(
-            Codebase::new("foo").unwrap(),
+            CodebaseName::new("foo").unwrap(),
             Some("c".into()),
             Some("r".into()),
         );

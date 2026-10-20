@@ -14,7 +14,7 @@ use tokio::net::lookup_host;
 use janitor::api::worker::{Metadata, TargetDetails, WorkerFailure};
 use janitor::prometheus::push_to_gateway;
 use janitor::vcs::VcsType;
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, CodebaseName, RunId};
 
 use url::Url;
 
@@ -183,7 +183,7 @@ pub trait Target {
 }
 
 pub fn run_worker(
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     campaign: &Campaign,
     main_branch_url: Option<&url::Url>,
     run_id: &RunId,
@@ -978,7 +978,7 @@ pub async fn process_single_item(
     node_name: &str,
     jenkins_build_url: Option<&Url>,
     prometheus: Option<&Url>,
-    codebase: Option<&Codebase>,
+    codebase: Option<&CodebaseName>,
     campaign: Option<&Campaign>,
     tee: bool,
     output_directory_base: Option<&std::path::Path>,
@@ -1407,7 +1407,7 @@ check:
         std::fs::create_dir(&output_dir).unwrap();
         let mut metadata = Metadata::default();
         run_worker(
-            &Codebase::new("mycodebase").unwrap(),
+            &CodebaseName::new("mycodebase").unwrap(),
             &Campaign::new("mycampaign").unwrap(),
             Some(&wt.branch().get_user_url()),
             &RunId::new("run-id").unwrap(),
@@ -1486,7 +1486,7 @@ check:
                 code: None,
                 failure_details: None,
                 finish_time: None,
-                codebase: Some(Codebase::new("mycodebase").unwrap()),
+                codebase: Some(CodebaseName::new("mycodebase").unwrap()),
                 codemod: Some(serde_json::Value::Null),
                 queue_id: None,
                 start_time: None,

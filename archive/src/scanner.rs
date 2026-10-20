@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::{ArchiveError, ArchiveResult};
 use janitor::artifacts::{get_artifact_manager, ArtifactManager};
-use janitor::{Codebase, RunId};
+use janitor::{CodebaseName, RunId};
 
 /// Build information retrieved from database.
 ///
@@ -38,7 +38,7 @@ use janitor::{Codebase, RunId};
 pub struct BuildInfo {
     pub id: String,
     pub run_id: RunId,
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     pub source_package: String,
     pub suite: String,
     pub architecture: String,
@@ -540,7 +540,7 @@ fn handle_log_line(line: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use janitor::{Codebase, RunId};
+    use janitor::{CodebaseName, RunId};
 
     #[tokio::test]
     async fn test_scan_packages() {
@@ -862,7 +862,7 @@ mod tests {
         let build = BuildInfo {
             id: "run-1/hello".to_string(),
             run_id: RunId::new("run-1").unwrap(),
-            codebase: Codebase::new("hello").unwrap(),
+            codebase: CodebaseName::new("hello").unwrap(),
             source_package: "hello".to_string(),
             suite: "unstable".to_string(),
             architecture: "amd64".to_string(),
@@ -931,7 +931,7 @@ mod tests {
         let build = BuildInfo {
             id: "run-1/hello".to_string(),
             run_id: RunId::new("run-1").unwrap(),
-            codebase: Codebase::new("hello").unwrap(),
+            codebase: CodebaseName::new("hello").unwrap(),
             source_package: "hello".to_string(),
             suite: "unstable".to_string(),
             architecture: "amd64".to_string(),
@@ -969,7 +969,7 @@ mod tests {
         let build = BuildInfo {
             id: "run-missing/hello".to_string(),
             run_id: RunId::new("run-missing").unwrap(),
-            codebase: Codebase::new("hello").unwrap(),
+            codebase: CodebaseName::new("hello").unwrap(),
             source_package: "hello".to_string(),
             suite: "unstable".to_string(),
             architecture: "amd64".to_string(),

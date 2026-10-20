@@ -1,4 +1,4 @@
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, CodebaseName, RunId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -178,7 +178,7 @@ pub struct PublishQueueEntry {
     /// Campaign name associated with the run
     pub campaign: Campaign,
     /// Codebase where the change will be published
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Priority of this entry in the queue
     pub priority: i32,
     /// Timestamp when this entry was added to the queue
@@ -228,7 +228,7 @@ pub struct NotFoundResponse {
     pub campaign: Option<Campaign>,
     /// Codebase name if relevant to the not found error
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub codebase: Option<Codebase>,
+    pub codebase: Option<CodebaseName>,
 }
 
 /// Conflict response
@@ -257,7 +257,7 @@ pub struct PublishDryRunResponse {
     /// Campaign associated with the run
     pub campaign: Campaign,
     /// Codebase where the change would be published
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Whether this run would be published if not a dry run
     pub would_publish: bool,
     /// Publishing mode that would be used
@@ -274,7 +274,7 @@ pub struct PublishResponse {
     /// Campaign associated with the run
     pub campaign: Campaign,
     /// Codebase where the change was published
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Results of each publish action, keyed by branch name
     pub results: HashMap<String, Option<String>>,
     /// Number of branches that were not published

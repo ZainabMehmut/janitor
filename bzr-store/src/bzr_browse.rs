@@ -21,14 +21,14 @@ use tower::ServiceExt;
 
 use crate::error::Result;
 use crate::web::AppState;
-use janitor::Codebase;
+use janitor::CodebaseName;
 
 /// Insert-once cache of `(codebase) -> loggerhead Router`. Routers are
 /// cheap to build but they pay a Python-GIL hop to open the branch on
 /// first use, so we hold them across requests.
 #[derive(Clone, Default)]
 pub struct BrowseRouters {
-    inner: Arc<RwLock<std::collections::HashMap<Codebase, Arc<axum::Router>>>>,
+    inner: Arc<RwLock<std::collections::HashMap<CodebaseName, Arc<axum::Router>>>>,
 }
 
 impl BrowseRouters {
@@ -40,13 +40,13 @@ impl BrowseRouters {
 
     /// Fast path: return the cached router for `codebase` without
     /// building. `None` means no router has been built yet.
-    pub fn get(&self, codebase: &Codebase) -> Option<Arc<axum::Router>> {
+    pub fn get(&self, codebase: &CodebaseName) -> Option<Arc<axum::Router>> {
         self.inner.read().unwrap().get(codebase).cloned()
     }
 
     fn get_or_build(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         repo_path: &std::path::Path,
         static_dir: &std::path::Path,
     ) -> Arc<axum::Router> {
@@ -78,7 +78,7 @@ impl BrowseRouters {
 /// `/bzr/{codebase}` prefix.
 pub async fn bzr_browse_handler(
     State(state): State<AppState>,
-    Path((codebase, _sub_path)): Path<(Codebase, String)>,
+    Path((codebase, _sub_path)): Path<(CodebaseName, String)>,
     req: Request,
 ) -> Result<Response> {
     dispatch(&state, &codebase, req).await
@@ -89,13 +89,13 @@ pub async fn bzr_browse_handler(
 /// 0.8's `{*path}` wildcard requires at least one segment.
 pub async fn bzr_browse_root(
     State(state): State<AppState>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
     req: Request,
 ) -> Result<Response> {
     dispatch(&state, &codebase, req).await
 }
 
-async fn dispatch(state: &AppState, codebase: &Codebase, mut req: Request) -> Result<Response> {
+async fn dispatch(state: &AppState, codebase: &CodebaseName, mut req: Request) -> Result<Response> {
     let repo_path = state.config.repository_path.join(codebase);
     if !repo_path.exists() {
         return Ok((
@@ -152,6 +152,6 @@ mod tests {
     #[test]
     fn get_returns_none_for_unknown_codebase() {
         let cache = BrowseRouters::new();
-        assert!(cache.get(&Codebase::new("nothing").unwrap()).is_none());
+        assert!(cache.get(&CodebaseName::new("nothing").unwrap()).is_none());
     }
 }

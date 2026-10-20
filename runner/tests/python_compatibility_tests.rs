@@ -170,7 +170,7 @@ fn janitor_result_serialises_expected_field_names() {
         subpath: None,
         code: "success".to_string(),
         transient: Some(false),
-        codebase: janitor::Codebase::new("example-repo").unwrap(),
+        codebase: janitor::CodebaseName::new("example-repo").unwrap(),
         campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
         description: Some("Successfully applied lintian fixes".to_string()),
         codemod: Some(json!({"fixes_applied": 5})),

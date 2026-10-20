@@ -335,7 +335,7 @@ mod tests {
                 id: janitor::RunId::new("test").unwrap(),
                 queue_id: 1,
                 campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
-                codebase: janitor::Codebase::new("foo").unwrap(),
+                codebase: janitor::CodebaseName::new("foo").unwrap(),
                 force_build: true,
                 branch: janitor::api::worker::Branch {
                     cached_url: None,
@@ -400,7 +400,7 @@ mod tests {
                 id: janitor::RunId::new("test").unwrap(),
                 queue_id: 1,
                 campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
-                codebase: janitor::Codebase::new("foo").unwrap(),
+                codebase: janitor::CodebaseName::new("foo").unwrap(),
                 force_build: true,
                 branch: janitor::api::worker::Branch {
                     cached_url: None,
@@ -843,7 +843,7 @@ mod tests {
                 id: janitor::RunId::new("test").unwrap(),
                 queue_id: 1,
                 campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
-                codebase: janitor::Codebase::new("foo").unwrap(),
+                codebase: janitor::CodebaseName::new("foo").unwrap(),
                 force_build: true,
                 branch: janitor::api::worker::Branch {
                     cached_url: None,

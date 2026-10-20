@@ -1,7 +1,7 @@
 //! API for the worker to communicate with the runner.
 
 use crate::vcs::VcsType;
-use crate::{Campaign, Codebase, RunId};
+use crate::{Campaign, CodebaseName, RunId};
 use breezyshim::RevisionId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -34,7 +34,7 @@ pub struct Metadata {
     pub command: Option<Vec<String>>,
 
     /// Name of the codebase.
-    pub codebase: Option<Codebase>,
+    pub codebase: Option<CodebaseName>,
 
     /// VCS Type
     pub vcs_type: Option<VcsType>,
@@ -199,7 +199,7 @@ pub struct Assignment {
     pub id: RunId,
     pub queue_id: u64,
     pub campaign: Campaign,
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     #[serde(rename = "force-build")]
     pub force_build: bool,
     pub branch: Branch,

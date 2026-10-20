@@ -2,7 +2,7 @@
 
 use crate::error::{GitStoreError, Result};
 use git2::{Repository, RepositoryInitOptions};
-use janitor::Codebase;
+use janitor::CodebaseName;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -18,12 +18,12 @@ impl RepositoryManager {
     }
 
     /// Get the path for a repository
-    pub fn repo_path(&self, codebase: &Codebase) -> PathBuf {
+    pub fn repo_path(&self, codebase: &CodebaseName) -> PathBuf {
         self.base_path.join(codebase)
     }
 
     /// Open a repository, creating it if it doesn't exist
-    pub fn open_or_create(&self, codebase: &Codebase) -> Result<Repository> {
+    pub fn open_or_create(&self, codebase: &CodebaseName) -> Result<Repository> {
         let repo_path = self.repo_path(codebase);
 
         match Repository::open(&repo_path) {
@@ -50,7 +50,7 @@ impl RepositoryManager {
     }
 
     /// Check if a repository exists
-    pub fn exists(&self, codebase: &Codebase) -> bool {
+    pub fn exists(&self, codebase: &CodebaseName) -> bool {
         let repo_path = self.repo_path(codebase);
         Repository::open(&repo_path).is_ok()
     }
@@ -73,7 +73,7 @@ impl RepositoryManager {
     }
 
     /// Write remote URL + default fetch refspec.
-    pub fn set_remote(&self, codebase: &Codebase, name: &str, url: &str) -> Result<()> {
+    pub fn set_remote(&self, codebase: &CodebaseName, name: &str, url: &str) -> Result<()> {
         let repo = self.open_or_create(codebase)?;
 
         if repo.find_remote(name).is_ok() {
@@ -137,7 +137,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let manager = RepositoryManager::new(temp_dir.path().to_path_buf());
 
-        let codebase = Codebase::new("test-repo").unwrap();
+        let codebase = CodebaseName::new("test-repo").unwrap();
         assert!(!manager.exists(&codebase));
 
         let repo = manager.open_or_create(&codebase).unwrap();
@@ -157,10 +157,10 @@ mod tests {
         assert_eq!(manager.list_repositories().unwrap(), Vec::<String>::new());
 
         manager
-            .open_or_create(&Codebase::new("gamma").unwrap())
+            .open_or_create(&CodebaseName::new("gamma").unwrap())
             .unwrap();
         manager
-            .open_or_create(&Codebase::new("alpha").unwrap())
+            .open_or_create(&CodebaseName::new("alpha").unwrap())
             .unwrap();
         std::fs::create_dir(temp_dir.path().join("beta")).unwrap();
 

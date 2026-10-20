@@ -1,4 +1,4 @@
-use crate::{Codebase, RunId};
+use crate::{CodebaseName, RunId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
@@ -34,11 +34,11 @@ impl S3LogFileManager {
         })
     }
 
-    fn get_key(&self, codebase: &Codebase, run_id: &RunId, name: &str) -> String {
+    fn get_key(&self, codebase: &CodebaseName, run_id: &RunId, name: &str) -> String {
         format!("logs/{}/{}/{}.gz", codebase, run_id, name)
     }
 
-    fn get_url(&self, codebase: &Codebase, run_id: &RunId, name: &str) -> String {
+    fn get_url(&self, codebase: &CodebaseName, run_id: &RunId, name: &str) -> String {
         format!("{}{}", self.base_url, self.get_key(codebase, run_id, name))
     }
 }
@@ -47,7 +47,7 @@ impl S3LogFileManager {
 impl LogFileManager for S3LogFileManager {
     async fn has_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<bool, Error> {
@@ -69,7 +69,7 @@ impl LogFileManager for S3LogFileManager {
 
     async fn get_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<Box<dyn Read + Send + Sync>, Error> {
@@ -101,7 +101,7 @@ impl LogFileManager for S3LogFileManager {
 
     async fn import_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         orig_path: &str,
         _mtime: Option<DateTime<Utc>>,
@@ -145,7 +145,7 @@ impl LogFileManager for S3LogFileManager {
 
     async fn delete_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<(), Error> {
@@ -177,7 +177,7 @@ impl LogFileManager for S3LogFileManager {
 
     async fn get_ctime(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<DateTime<Utc>, Error> {

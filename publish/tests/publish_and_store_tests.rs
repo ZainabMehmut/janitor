@@ -5,7 +5,7 @@ use breezyshim::RevisionId;
 use janitor::publish::Mode;
 use janitor::vcs::{VcsManager, VcsType};
 use janitor::{schema::setup_test_database, test_with_database};
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, CodebaseName, RunId};
 use janitor_publish::rate_limiter::{NonRateLimiter, RateLimiter};
 use janitor_publish::{publish_and_store, PublishWorker};
 use sqlx::PgPool;
@@ -39,7 +39,7 @@ fn make_run(role: &str, revision: Option<&str>) -> janitor::state::Run {
         failure_details: None,
         failure_transient: None,
         failure_stage: None,
-        codebase: Codebase::new("cb-1").unwrap(),
+        codebase: CodebaseName::new("cb-1").unwrap(),
         start_time: chrono::Utc::now(),
         finish_time: chrono::Utc::now(),
         value: None,

@@ -7,7 +7,7 @@ use axum::response::{IntoResponse, Json};
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use breezyshim::error::Error as BrzError;
-use janitor::{Campaign, ChangeSetId, Codebase, PublishId, RunId};
+use janitor::{Campaign, ChangeSetId, CodebaseName, PublishId, RunId};
 use log::error;
 use sequoia_openpgp::armor;
 use sqlx::PgPool;
@@ -61,7 +61,7 @@ pub struct MergeProposalListEntry {
 /// optional codebase and campaign filters, and emits `[{url, status}]`.
 async fn fetch_merge_proposal_list(
     conn: &sqlx::PgPool,
-    codebase: Option<&Codebase>,
+    codebase: Option<&CodebaseName>,
     campaign: Option<&Campaign>,
 ) -> Result<Vec<MergeProposalListEntry>, sqlx::Error> {
     let mut query = String::from(
@@ -133,7 +133,7 @@ async fn get_merge_proposals_by_campaign(
 
 async fn get_merge_proposals_by_codebase(
     State(state): State<Arc<AppState>>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
 ) -> impl IntoResponse {
     match fetch_merge_proposal_list(&state.conn, Some(&codebase), None).await {
         Ok(rows) => (StatusCode::OK, Json(serde_json::to_value(rows).unwrap())),
@@ -169,7 +169,7 @@ async fn list_merge_proposals(State(state): State<Arc<AppState>>) -> impl IntoRe
 struct AbsorbedRun {
     mode: String,
     change_set: Option<ChangeSetId>,
-    codebase: Codebase,
+    codebase: CodebaseName,
     delay: Option<i64>, // seconds
     campaign: Campaign,
     result: Option<serde_json::Value>,
@@ -1060,7 +1060,7 @@ async fn consider(State(state): State<Arc<AppState>>, Path(id): Path<RunId>) -> 
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 /// Details about a publish operation.
 pub struct PublishDetails {
-    codebase: Option<Codebase>,
+    codebase: Option<CodebaseName>,
     target_branch_url: Option<String>,
     branch_name: Option<String>,
     main_branch_revision: Option<String>,
@@ -1170,7 +1170,7 @@ struct PublishQuery {
 /// operator override.
 async fn publish(
     State(state): State<Arc<AppState>>,
-    Path((campaign, codebase)): Path<(Campaign, Codebase)>,
+    Path((campaign, codebase)): Path<(Campaign, CodebaseName)>,
     Query(query): Query<PublishQuery>,
     axum::extract::Form(form): axum::extract::Form<PublishForm>,
 ) -> impl IntoResponse {
@@ -1976,7 +1976,7 @@ struct BlockerInfo {
 #[derive(sqlx::FromRow)]
 struct RunDetails {
     id: RunId,
-    codebase: Codebase,
+    codebase: CodebaseName,
     campaign: Campaign,
     finish_time: chrono::DateTime<chrono::Utc>,
     run_command: String,

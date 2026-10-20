@@ -1,4 +1,4 @@
-use crate::{Campaign, ChangeSetId, Codebase};
+use crate::{Campaign, ChangeSetId, CodebaseName};
 use chrono::TimeDelta;
 use sqlx::postgres::types::PgInterval;
 use sqlx::{Error, FromRow, PgPool};
@@ -16,7 +16,7 @@ pub struct QueueItem {
     pub refresh: Option<bool>,
     pub requester: Option<String>,
     pub change_set: Option<ChangeSetId>,
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
 }
 
 impl PartialEq for QueueItem {
@@ -70,7 +70,7 @@ impl<'a> Queue<'a> {
     pub async fn get_position(
         &self,
         campaign: &Campaign,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
     ) -> Result<Option<ETA>, Error> {
         let row: Option<ETA> = sqlx::query_as::<_, ETA>(
             "SELECT position, wait_time FROM queue_positions WHERE codebase = $1 AND suite = $2",
@@ -108,7 +108,7 @@ impl<'a> Queue<'a> {
     /// * `assigned_queue_items` - A set of queue items that are already assigned
     pub async fn next_item(
         &self,
-        codebase: Option<&Codebase>,
+        codebase: Option<&CodebaseName>,
         campaign: Option<&Campaign>,
         exclude_hosts: Option<HashSet<String>>,
         assigned_queue_items: Option<HashSet<i32>>,
@@ -183,7 +183,7 @@ impl<'a> Queue<'a> {
 
     pub async fn add(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         command: &str,
         campaign: &Campaign,
         change_set: Option<&ChangeSetId>,
@@ -313,7 +313,7 @@ mod tests {
 
         let (id, bucket) = queue
             .add(
-                &Codebase::new("cb").unwrap(),
+                &CodebaseName::new("cb").unwrap(),
                 "cmd",
                 &Campaign::new("lintian-fixes").unwrap(),
                 None,
@@ -332,7 +332,7 @@ mod tests {
         // entry alone and returns it.
         let (id2, bucket2) = queue
             .add(
-                &Codebase::new("cb").unwrap(),
+                &CodebaseName::new("cb").unwrap(),
                 "cmd",
                 &Campaign::new("lintian-fixes").unwrap(),
                 None,

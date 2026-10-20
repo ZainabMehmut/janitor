@@ -1,4 +1,4 @@
-use crate::{Codebase, RunId};
+use crate::{CodebaseName, RunId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::io::{self, Read};
@@ -92,13 +92,17 @@ fn increment_upload_success() {
 #[async_trait]
 pub trait LogFileManager: Send + Sync {
     /// Check if a log exists.
-    async fn has_log(&self, codebase: &Codebase, run_id: &RunId, name: &str)
-        -> Result<bool, Error>;
+    async fn has_log(
+        &self,
+        codebase: &CodebaseName,
+        run_id: &RunId,
+        name: &str,
+    ) -> Result<bool, Error>;
 
     /// Check if a log exists with timeout.
     async fn has_log_with_timeout(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
         _timeout: Option<Duration>,
@@ -118,7 +122,7 @@ pub trait LogFileManager: Send + Sync {
     /// A reader for the log file.
     async fn get_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<Box<dyn Read + Send + Sync>, Error>;
@@ -126,7 +130,7 @@ pub trait LogFileManager: Send + Sync {
     /// Get a log with timeout.
     async fn get_log_with_timeout(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
         _timeout: Option<Duration>,
@@ -145,7 +149,7 @@ pub trait LogFileManager: Send + Sync {
     /// * `basename` - The basename of the log.
     async fn import_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         orig_path: &str,
         mtime: Option<DateTime<Utc>>,
@@ -160,7 +164,7 @@ pub trait LogFileManager: Send + Sync {
     /// * `name` - The log name.
     async fn delete_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<(), Error>;
@@ -176,7 +180,7 @@ pub trait LogFileManager: Send + Sync {
     /// * `name` - The log name.
     async fn get_ctime(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<DateTime<Utc>, Error>;
@@ -238,7 +242,7 @@ pub async fn get_log_manager(location: Option<&str>) -> Result<Box<dyn LogFileMa
 pub async fn import_log(
     primary_log_manager: &dyn LogFileManager,
     backup_log_manager: Option<&dyn LogFileManager>,
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     run_id: &RunId,
     path: &str,
     basename: Option<&str>,
@@ -367,7 +371,7 @@ pub async fn import_log(
 pub async fn import_logs(
     primary_log_manager: &dyn LogFileManager,
     backup_log_manager: Option<&dyn LogFileManager>,
-    logs: Vec<(Codebase, RunId, String, Option<String>)>, // (codebase, run_id, path, basename)
+    logs: Vec<(CodebaseName, RunId, String, Option<String>)>, // (codebase, run_id, path, basename)
     mtime: Option<i64>,
 ) -> Vec<Result<(), Error>> {
     use futures::future::join_all;
@@ -401,7 +405,7 @@ pub struct LogEntry {
 pub async fn import_logs_from_entries(
     entries: Vec<LogEntry>,
     logfile_manager: &dyn LogFileManager,
-    pkg: &Codebase,
+    pkg: &CodebaseName,
     log_id: &RunId,
     backup_logfile_manager: Option<&dyn LogFileManager>,
     mtime: Option<i64>,

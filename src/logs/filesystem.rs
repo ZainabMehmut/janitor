@@ -1,4 +1,4 @@
-use crate::{Codebase, RunId};
+use crate::{CodebaseName, RunId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::fs;
@@ -20,7 +20,7 @@ impl FileSystemLogFileManager {
         Ok(Self { log_directory })
     }
 
-    fn get_paths(&self, codebase: &Codebase, run_id: &RunId, name: &str) -> Vec<PathBuf> {
+    fn get_paths(&self, codebase: &CodebaseName, run_id: &RunId, name: &str) -> Vec<PathBuf> {
         if name.contains('/') {
             return vec![];
         }
@@ -38,7 +38,7 @@ impl FileSystemLogFileManager {
 impl LogFileManager for FileSystemLogFileManager {
     async fn has_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<bool, Error> {
@@ -50,7 +50,7 @@ impl LogFileManager for FileSystemLogFileManager {
 
     async fn get_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<Box<dyn Read + Send + Sync>, Error> {
@@ -71,7 +71,7 @@ impl LogFileManager for FileSystemLogFileManager {
 
     async fn import_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         orig_path: &str,
         mtime: Option<DateTime<Utc>>,
@@ -190,7 +190,7 @@ impl LogFileManager for FileSystemLogFileManager {
 
     async fn get_ctime(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<DateTime<Utc>, Error> {
@@ -206,7 +206,7 @@ impl LogFileManager for FileSystemLogFileManager {
 
     async fn delete_log(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         run_id: &RunId,
         name: &str,
     ) -> Result<(), Error> {
@@ -267,7 +267,7 @@ mod tests {
         let (_td, mgr) = setup();
         assert_eq!(
             mgr.has_log(
-                &Codebase::new("codebase").unwrap(),
+                &CodebaseName::new("codebase").unwrap(),
                 &RunId::new("run-1").unwrap(),
                 "build.log"
             )
@@ -282,7 +282,7 @@ mod tests {
         let (_td, mgr) = setup();
         let result = mgr
             .get_log(
-                &Codebase::new("codebase").unwrap(),
+                &CodebaseName::new("codebase").unwrap(),
                 &RunId::new("run-1").unwrap(),
                 "build.log",
             )
@@ -300,7 +300,7 @@ mod tests {
         std::fs::write(&source_path, "some log content\n").unwrap();
 
         mgr.import_log(
-            &Codebase::new("codebase").unwrap(),
+            &CodebaseName::new("codebase").unwrap(),
             &RunId::new("run-1").unwrap(),
             source_path.to_str().unwrap(),
             None,
@@ -311,7 +311,7 @@ mod tests {
 
         assert_eq!(
             mgr.has_log(
-                &Codebase::new("codebase").unwrap(),
+                &CodebaseName::new("codebase").unwrap(),
                 &RunId::new("run-1").unwrap(),
                 "build.log"
             )
@@ -330,7 +330,7 @@ mod tests {
         std::fs::write(&source_path, "log line 1\nlog line 2\n").unwrap();
 
         mgr.import_log(
-            &Codebase::new("codebase").unwrap(),
+            &CodebaseName::new("codebase").unwrap(),
             &RunId::new("run-1").unwrap(),
             source_path.to_str().unwrap(),
             None,
@@ -341,7 +341,7 @@ mod tests {
 
         let mut reader = mgr
             .get_log(
-                &Codebase::new("codebase").unwrap(),
+                &CodebaseName::new("codebase").unwrap(),
                 &RunId::new("run-1").unwrap(),
                 "build.log",
             )
@@ -361,7 +361,7 @@ mod tests {
         std::fs::write(&source_path, "content").unwrap();
 
         mgr.import_log(
-            &Codebase::new("codebase").unwrap(),
+            &CodebaseName::new("codebase").unwrap(),
             &RunId::new("run-1").unwrap(),
             source_path.to_str().unwrap(),
             None,
@@ -372,7 +372,7 @@ mod tests {
 
         assert_eq!(
             mgr.has_log(
-                &Codebase::new("codebase").unwrap(),
+                &CodebaseName::new("codebase").unwrap(),
                 &RunId::new("run-1").unwrap(),
                 "renamed.log"
             )
@@ -382,7 +382,7 @@ mod tests {
         );
         assert_eq!(
             mgr.has_log(
-                &Codebase::new("codebase").unwrap(),
+                &CodebaseName::new("codebase").unwrap(),
                 &RunId::new("run-1").unwrap(),
                 "original.log"
             )
@@ -402,7 +402,7 @@ mod tests {
 
         let mtime = chrono::DateTime::from_timestamp(1700000000, 0).unwrap();
         mgr.import_log(
-            &Codebase::new("codebase").unwrap(),
+            &CodebaseName::new("codebase").unwrap(),
             &RunId::new("run-1").unwrap(),
             source_path.to_str().unwrap(),
             Some(mtime),
@@ -413,7 +413,7 @@ mod tests {
 
         assert_eq!(
             mgr.has_log(
-                &Codebase::new("codebase").unwrap(),
+                &CodebaseName::new("codebase").unwrap(),
                 &RunId::new("run-1").unwrap(),
                 "build.log"
             )
@@ -432,7 +432,7 @@ mod tests {
         std::fs::write(&source_path, "content").unwrap();
 
         mgr.import_log(
-            &Codebase::new("codebase").unwrap(),
+            &CodebaseName::new("codebase").unwrap(),
             &RunId::new("run-1").unwrap(),
             source_path.to_str().unwrap(),
             None,
@@ -443,7 +443,7 @@ mod tests {
 
         let ctime = mgr
             .get_ctime(
-                &Codebase::new("codebase").unwrap(),
+                &CodebaseName::new("codebase").unwrap(),
                 &RunId::new("run-1").unwrap(),
                 "build.log",
             )
@@ -461,7 +461,7 @@ mod tests {
         let (_td, mgr) = setup();
         let result = mgr
             .get_ctime(
-                &Codebase::new("codebase").unwrap(),
+                &CodebaseName::new("codebase").unwrap(),
                 &RunId::new("run-1").unwrap(),
                 "build.log",
             )
@@ -480,7 +480,7 @@ mod tests {
         std::fs::write(&source2, "content2").unwrap();
 
         mgr.import_log(
-            &Codebase::new("codebase-a").unwrap(),
+            &CodebaseName::new("codebase-a").unwrap(),
             &RunId::new("run-1").unwrap(),
             source1.to_str().unwrap(),
             None,
@@ -489,7 +489,7 @@ mod tests {
         .await
         .unwrap();
         mgr.import_log(
-            &Codebase::new("codebase-a").unwrap(),
+            &CodebaseName::new("codebase-a").unwrap(),
             &RunId::new("run-1").unwrap(),
             source2.to_str().unwrap(),
             None,
@@ -498,7 +498,7 @@ mod tests {
         .await
         .unwrap();
         mgr.import_log(
-            &Codebase::new("codebase-b").unwrap(),
+            &CodebaseName::new("codebase-b").unwrap(),
             &RunId::new("run-2").unwrap(),
             source1.to_str().unwrap(),
             None,
@@ -534,11 +534,11 @@ mod tests {
         let (_td, mgr) = setup();
         // Codebase and run id can't contain '/' at all; the log name is
         // checked by the manager.
-        assert!(Codebase::new("code/base").is_err());
+        assert!(CodebaseName::new("code/base").is_err());
         assert!(RunId::new("run/1").is_err());
         assert_eq!(
             mgr.has_log(
-                &Codebase::new("codebase").unwrap(),
+                &CodebaseName::new("codebase").unwrap(),
                 &RunId::new("run-1").unwrap(),
                 "build/log"
             )

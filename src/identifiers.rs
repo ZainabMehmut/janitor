@@ -216,7 +216,7 @@ macro_rules! identifier {
 
 identifier!(
     /// Name of a codebase.
-    Codebase,
+    CodebaseName,
     "codebase name",
     is_valid_name
 );
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn test_codebase_valid() {
         for name in ["foo", "a0", "0ad", "libfoo-perl", "g++", "foo.bar"] {
-            assert_eq!(Codebase::new(name).unwrap().as_str(), name);
+            assert_eq!(CodebaseName::new(name).unwrap().as_str(), name);
         }
     }
 
@@ -267,7 +267,7 @@ mod tests {
             "foo\0", "foo\n",
         ] {
             assert_eq!(
-                Codebase::new(name),
+                CodebaseName::new(name),
                 Err(InvalidIdentifier {
                     kind: "codebase name",
                     value: name.to_string()
@@ -310,10 +310,10 @@ mod tests {
     #[test]
     fn test_deserialize_validates() {
         assert_eq!(
-            serde_json::from_str::<Codebase>("\"foo\"").unwrap(),
-            Codebase::new("foo").unwrap()
+            serde_json::from_str::<CodebaseName>("\"foo\"").unwrap(),
+            CodebaseName::new("foo").unwrap()
         );
-        assert!(serde_json::from_str::<Codebase>("\"../foo\"").is_err());
+        assert!(serde_json::from_str::<CodebaseName>("\"../foo\"").is_err());
         assert!(serde_json::from_str::<RunId>("\"a/b\"").is_err());
     }
 

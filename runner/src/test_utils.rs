@@ -18,7 +18,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use janitor::database::{Database, DatabaseConfig};
-use janitor::{Codebase, RunId};
+use janitor::{CodebaseName, RunId};
 use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -216,7 +216,7 @@ pub struct MockLogFileManager;
 impl crate::logs::LogFileManager for MockLogFileManager {
     async fn has_log(
         &self,
-        _codebase: &Codebase,
+        _codebase: &CodebaseName,
         _run_id: &RunId,
         _name: &str,
     ) -> Result<bool, crate::logs::Error> {
@@ -225,7 +225,7 @@ impl crate::logs::LogFileManager for MockLogFileManager {
 
     async fn get_log(
         &self,
-        _codebase: &Codebase,
+        _codebase: &CodebaseName,
         _run_id: &RunId,
         _name: &str,
     ) -> Result<Box<dyn std::io::Read + Send + Sync>, crate::logs::Error> {
@@ -234,7 +234,7 @@ impl crate::logs::LogFileManager for MockLogFileManager {
 
     async fn import_log(
         &self,
-        _codebase: &Codebase,
+        _codebase: &CodebaseName,
         _run_id: &RunId,
         _orig_path: &str,
         _mtime: Option<chrono::DateTime<chrono::Utc>>,
@@ -245,7 +245,7 @@ impl crate::logs::LogFileManager for MockLogFileManager {
 
     async fn delete_log(
         &self,
-        _codebase: &Codebase,
+        _codebase: &CodebaseName,
         _run_id: &RunId,
         _name: &str,
     ) -> Result<(), crate::logs::Error> {
@@ -258,7 +258,7 @@ impl crate::logs::LogFileManager for MockLogFileManager {
 
     async fn get_ctime(
         &self,
-        _codebase: &Codebase,
+        _codebase: &CodebaseName,
         _run_id: &RunId,
         _name: &str,
     ) -> Result<chrono::DateTime<chrono::Utc>, crate::logs::Error> {

@@ -1,4 +1,4 @@
-use janitor::{Campaign, ChangeSetId, Codebase, RunId};
+use janitor::{Campaign, ChangeSetId, CodebaseName, RunId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -37,7 +37,7 @@ pub struct ProcessingRunResponse {
     /// Information about the run itself
     pub run: RunInfo,
     /// URL or identifier of the codebase being processed
-    pub codebase: Option<Codebase>,
+    pub codebase: Option<CodebaseName>,
     /// Name of the campaign this run belongs to
     pub campaign: Option<Campaign>,
 }
@@ -75,7 +75,7 @@ pub struct WorkerAssignment {
     /// Name of the campaign to execute
     pub campaign: Campaign,
     /// URL or identifier of the codebase to work on
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Command to execute for the codemod
     pub command: String,
     /// Version control system information (format depends on VCS type)
@@ -104,7 +104,7 @@ pub struct ResumeInfo {
     /// Name of the campaign being resumed
     pub campaign: Campaign,
     /// URL or identifier of the codebase
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Command that was being executed
     pub command: String,
     /// Result from the previous codemod execution
@@ -181,7 +181,7 @@ pub struct QueueItemDetails {
     /// Unique identifier for this queue item
     pub id: String,
     /// URL or identifier of the codebase to process
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Campaign this item belongs to
     pub campaign: Campaign,
     /// Priority level (higher values processed first)

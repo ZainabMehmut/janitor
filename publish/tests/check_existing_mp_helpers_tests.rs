@@ -24,7 +24,7 @@ use janitor::{
     test_utils::{TestDatabase, TestDatabaseConfig},
     test_with_database,
 };
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, CodebaseName, RunId};
 use janitor_publish::state::{
     get_last_effective_run, get_merge_proposal_run, get_run, guess_proposal_info_from_revision,
 };
@@ -336,7 +336,7 @@ test_with_database! {
 
         let last = get_last_effective_run(
             test_db.pool(),
-            &Codebase::new("cb-1").unwrap(),
+            &CodebaseName::new("cb-1").unwrap(),
             &Campaign::new("lintian-fixes").unwrap(),
         )
             .await
@@ -451,7 +451,7 @@ test_with_database! {
         .await;
         let last = get_last_effective_run(
             test_db.pool(),
-            &Codebase::new("cb-1").unwrap(),
+            &CodebaseName::new("cb-1").unwrap(),
             &Campaign::new("lintian-fixes").unwrap(),
         )
             .await
@@ -521,7 +521,7 @@ test_with_database! {
 
         let last = get_last_effective_run(
             test_db.pool(),
-            &Codebase::new("cb-1").unwrap(),
+            &CodebaseName::new("cb-1").unwrap(),
             &Campaign::new("fresh-releases").unwrap(),
         )
             .await
@@ -653,7 +653,7 @@ test_with_database! {
 
         let policy = get_publish_policy(
             test_db.pool(),
-            &Codebase::new("cb-1").unwrap(),
+            &CodebaseName::new("cb-1").unwrap(),
             &Campaign::new("lintian-fixes").unwrap(),
         )
             .await
@@ -677,7 +677,7 @@ test_with_database! {
         setup_test_database(test_db.pool()).await.unwrap();
         let policy = get_publish_policy(
             test_db.pool(),
-            &Codebase::new("nope").unwrap(),
+            &CodebaseName::new("nope").unwrap(),
             &Campaign::new("lintian-fixes").unwrap(),
         )
             .await

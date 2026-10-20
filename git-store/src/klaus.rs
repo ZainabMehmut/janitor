@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 
 use crate::error::{GitStoreError, Result};
 use crate::web::AppState;
-use janitor::Codebase;
+use janitor::CodebaseName;
 
 /// Cap on request body we buffer for the WSGI call.
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
@@ -50,7 +50,7 @@ pub fn is_git_client_request(req: &Request) -> bool {
 /// Render `/git/<codebase>/<sub_path>` via klaus.
 pub async fn handle_klaus(
     State(state): State<AppState>,
-    axum::extract::Path((codebase, sub_path)): axum::extract::Path<(Codebase, String)>,
+    axum::extract::Path((codebase, sub_path)): axum::extract::Path<(CodebaseName, String)>,
     req: Request,
 ) -> Result<Response> {
     debug!("klaus request: {} {}", codebase, sub_path);
@@ -109,7 +109,7 @@ static KLAUS: PyOnceLock<(Py<PyAny>, Py<PyAny>)> = PyOnceLock::new();
 /// Build a WSGI environ dict for `repo_path`, call the klaus Flask app
 /// via Python, and return (status, headers, body).
 fn invoke_klaus(
-    codebase: &Codebase,
+    codebase: &CodebaseName,
     repo_path: &Path,
     method: &str,
     path_info: &str,

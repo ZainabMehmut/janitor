@@ -3,7 +3,7 @@
 use crate::{BuilderResult, JanitorResult};
 use breezyshim::RevisionId;
 use chrono::{DateTime, Duration, Utc};
-use janitor::{Campaign, ChangeSetId, Codebase, RunId};
+use janitor::{Campaign, ChangeSetId, CodebaseName, RunId};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::types::PgInterval;
@@ -27,7 +27,7 @@ struct QueueRowJoined {
     refresh: Option<bool>,
     requester: Option<String>,
     change_set: Option<ChangeSetId>,
-    codebase: Codebase,
+    codebase: CodebaseName,
     vcs_type: Option<String>,
     branch_url: Option<String>,
     subpath: Option<String>,
@@ -693,7 +693,7 @@ INSERT INTO run (
     /// Get the next available queue item for assignment.
     pub async fn next_queue_item(
         &self,
-        codebase: Option<&Codebase>,
+        codebase: Option<&CodebaseName>,
         campaign: Option<&Campaign>,
         exclude_hosts: &[String],
         assigned_queue_items: &[i64],
@@ -819,7 +819,7 @@ INSERT INTO run (
     /// Get queue position for a specific codebase and campaign.
     pub async fn get_queue_position(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         campaign: &Campaign,
     ) -> Result<Option<(i32, std::time::Duration)>, sqlx::Error> {
         // `queue_positions.wait_time` is a Postgres INTERVAL (not
@@ -849,14 +849,14 @@ INSERT INTO run (
         &self,
         run_id: &RunId,
         publish_status: &str,
-    ) -> Result<Option<(RunId, Codebase, Campaign)>, sqlx::Error> {
+    ) -> Result<Option<(RunId, CodebaseName, Campaign)>, sqlx::Error> {
         // `publish_status` is a Postgres ENUM and `suite` is a custom
         // domain -- cast both explicitly so sqlx's text-based encode
         // and decode paths succeed.
         #[derive(sqlx::FromRow)]
         struct UpdatedRow {
             id: RunId,
-            codebase: Codebase,
+            codebase: CodebaseName,
             suite: Campaign,
         }
         let row: Option<UpdatedRow> = sqlx::query_as(
@@ -1246,7 +1246,7 @@ INSERT INTO run (
     /// and queue items already claimed by another worker.
     pub async fn next_queue_item_with_rate_limiting(
         &self,
-        codebase: Option<&Codebase>,
+        codebase: Option<&CodebaseName>,
         campaign: Option<&Campaign>,
         avoid_hosts: &[String],
     ) -> Result<Option<QueueAssignment>, sqlx::Error> {
@@ -1264,7 +1264,7 @@ INSERT INTO run (
     /// value + historical success rate) as the primary sort key.
     pub async fn next_queue_item_with_scoring(
         &self,
-        codebase: Option<&Codebase>,
+        codebase: Option<&CodebaseName>,
         campaign: Option<&Campaign>,
         exclude_hosts: &[String],
         assigned_queue_items: &[i64],
@@ -1376,7 +1376,7 @@ INSERT INTO run (
     /// Calculate queue position for a specific queue item or codebase/campaign combination.
     pub async fn calculate_queue_position(
         &self,
-        codebase: Option<&Codebase>,
+        codebase: Option<&CodebaseName>,
         campaign: Option<&Campaign>,
         queue_id: Option<i64>,
     ) -> Result<Option<i64>, sqlx::Error> {
@@ -1595,7 +1595,7 @@ INSERT INTO run (
             let codebase = match candidate
                 .get("codebase")
                 .and_then(|v| v.as_str())
-                .map(Codebase::new)
+                .map(CodebaseName::new)
             {
                 Some(Ok(cb)) => cb,
                 Some(Err(e)) => {
@@ -1684,7 +1684,7 @@ INSERT INTO run (
             .execute(&mut *tx)
             .await?;
 
-        let candidate_info: Option<(Campaign, Codebase)> =
+        let candidate_info: Option<(Campaign, CodebaseName)> =
             sqlx::query_as("DELETE FROM candidate WHERE id = $1 RETURNING suite, codebase")
                 .bind(candidate_id)
                 .fetch_optional(&mut *tx)
@@ -1709,7 +1709,7 @@ INSERT INTO run (
     pub async fn get_resume_info(
         &self,
         run_id: &RunId,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         campaign: &Campaign,
     ) -> Result<Option<crate::ResultResume>, sqlx::Error> {
         // Look for a previous run on the same codebase and campaign that might be resumable
@@ -1735,7 +1735,7 @@ INSERT INTO run (
     /// Get codebase configuration from database.
     pub async fn get_codebase_config(
         &self,
-        codebase_name: &Codebase,
+        codebase_name: &CodebaseName,
     ) -> Result<Option<CodebaseConfig>, sqlx::Error> {
         // codebase.vcs_type is a postgres enum; cast to text so it
         // decodes into a String.
@@ -1785,7 +1785,7 @@ INSERT INTO run (
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct CodebaseRow {
     /// Name of the codebase.
-    pub name: Option<Codebase>,
+    pub name: Option<CodebaseName>,
     /// URL of the branch, including any branch parameters.
     pub branch_url: Option<String>,
     /// URL of the repository.
@@ -1808,7 +1808,7 @@ pub struct CodebaseRow {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CodebaseUpload {
     /// Name of the codebase.
-    pub name: Option<Codebase>,
+    pub name: Option<CodebaseName>,
     /// URL of the branch, including any branch parameters.
     pub branch_url: Option<String>,
     /// URL of the repository; used when `branch_url` is absent.
@@ -1833,7 +1833,7 @@ pub struct CandidateRow {
     /// Candidate id.
     pub id: i32,
     /// Name of the codebase.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Campaign (stored as `suite`).
     pub campaign: Campaign,
     /// Command to run.
@@ -1884,7 +1884,7 @@ impl From<DebianBuildRow> for BuilderResult {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct CodebaseConfig {
     /// Name of the codebase.
-    pub name: Codebase,
+    pub name: CodebaseName,
     /// URL of the branch.
     pub branch_url: Option<String>,
     /// Type of version control system.

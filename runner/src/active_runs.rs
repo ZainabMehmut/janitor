@@ -237,7 +237,7 @@ mod tests {
             command: "echo test".to_string(),
             backchannel: Backchannel::default(),
             vcs_info: VcsInfo::default(),
-            codebase: janitor::Codebase::new("test-codebase").unwrap(),
+            codebase: janitor::CodebaseName::new("test-codebase").unwrap(),
             instigated_context: None,
             resume_from: None,
         }

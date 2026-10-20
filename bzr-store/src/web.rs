@@ -16,7 +16,7 @@ use axum::{
 };
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use janitor::{Campaign, Codebase};
+use janitor::{Campaign, CodebaseName};
 use serde::{Deserialize, Serialize};
 use tera::{Context, Tera};
 use tokio::fs;
@@ -370,7 +370,7 @@ pub fn create_public_app(state: AppState, client_max_size: usize) -> Router {
 /// `/{campaign}/{role}/.bzr/smart`.
 async fn bzr_smart_sub_dispatcher(
     State(state): State<AppState>,
-    Path((codebase, sub_path)): Path<(Codebase, String)>,
+    Path((codebase, sub_path)): Path<(CodebaseName, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
@@ -540,7 +540,7 @@ async fn list_repositories_handler(State(state): State<AppState>) -> Result<Resp
 /// repository for `codebase` exists on disk.
 async fn create_repository_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
 ) -> Result<Json<RepositoryCreatedResponse>> {
     let repo_path = RepositoryPath::codebase_only(codebase);
     let path = state
@@ -559,7 +559,7 @@ async fn create_repository_handler(
 /// `GET /{codebase}/info` — admin repository metadata.
 async fn repository_info_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
 ) -> Result<Json<serde_json::Value>> {
     let repo_path = RepositoryPath::codebase_only(codebase);
     let info = state
@@ -575,7 +575,7 @@ async fn repository_info_handler(
 /// unified diff between two revids in text/x-diff.
 async fn diff_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
     Query(query): Query<DiffQuery>,
 ) -> Result<Response> {
     let repo_path = RepositoryPath::codebase_only(codebase);
@@ -591,7 +591,7 @@ async fn diff_handler(
 /// range info. Matches `py/janitor/bzr_store.py::bzr_revision_info_request`.
 async fn revision_info_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
     Query(query): Query<RevisionInfoQuery>,
 ) -> Result<Json<Vec<RevisionInfo>>> {
     let repo_path = RepositoryPath::codebase_only(codebase);
@@ -609,7 +609,7 @@ async fn revision_info_handler(
 /// urlencoded with a `url` field.
 async fn configure_remote_handler(
     State(state): State<AppState>,
-    Path((codebase, remote)): Path<(Codebase, String)>,
+    Path((codebase, remote)): Path<(CodebaseName, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<RemoteConfiguredResponse>> {
@@ -672,7 +672,7 @@ fn extract_remote_url(headers: &HeaderMap, body: &Bytes) -> Result<String> {
 /// `parent_location` config entry per branch.
 async fn list_remotes_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<Codebase>,
+    Path(codebase): Path<CodebaseName>,
 ) -> Result<Json<RemotesListResponse>> {
     let repo_path = RepositoryPath::codebase_only(codebase);
     let fs_path = state.config.repository_path.join(&repo_path.codebase);

@@ -2,7 +2,7 @@
 
 use crate::error::JanitorError;
 use crate::schedule::do_schedule;
-use crate::{Campaign, Codebase, RunId};
+use crate::{Campaign, CodebaseName, RunId};
 use chrono::{DateTime, Utc};
 use log::{error, info};
 use reqwest::Client;
@@ -81,7 +81,7 @@ pub async fn store_review(
         #[derive(sqlx::FromRow)]
         struct RunInfo {
             suite: Campaign,
-            codebase: Codebase,
+            codebase: CodebaseName,
         }
 
         let run = sqlx::query_as::<_, RunInfo>("SELECT suite, codebase FROM run WHERE id = $1")

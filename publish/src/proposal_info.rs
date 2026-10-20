@@ -2,7 +2,7 @@ use breezyshim::forge::MergeProposal;
 use breezyshim::RevisionId;
 use chrono::{DateTime, Utc};
 use janitor::publish::MergeProposalStatus;
-use janitor::{Campaign, Codebase};
+use janitor::{Campaign, CodebaseName};
 use redis::AsyncCommands;
 use sqlx::PgPool;
 
@@ -29,7 +29,7 @@ pub struct ProposalInfo {
     /// `String` made every `check_existing_mp` call on such rows
     /// 500 with `decoding column "codebase": unexpected null`,
     /// preventing that proposal from ever getting refreshed.
-    pub codebase: Option<Codebase>,
+    pub codebase: Option<CodebaseName>,
     /// When the publisher last persisted forge state for this MP.
     /// Used by `check_existing_mp` to skip the expensive per-MP
     /// forge fetches when nothing has changed since the last scan.
@@ -184,7 +184,7 @@ impl ProposalInfoManager {
         mp: &MergeProposal,
         status: MergeProposalStatus,
         revision: Option<&RevisionId>,
-        codebase: Option<&Codebase>,
+        codebase: Option<&CodebaseName>,
         target_branch_url: &url::Url,
         campaign: Option<&Campaign>,
         can_be_merged: Option<bool>,
@@ -358,7 +358,7 @@ impl ProposalInfoManager {
     /// List of proposal info for the codebase
     pub async fn get_proposals_for_codebase(
         &self,
-        codebase: &Codebase,
+        codebase: &CodebaseName,
         status_filter: Option<&str>,
     ) -> Result<Vec<ProposalInfo>, sqlx::Error> {
         const BASE: &str = "SELECT rate_limit_bucket, revision, status, target_branch_url, \
@@ -452,7 +452,7 @@ mod tests {
             revision: Some("abc123".to_string()),
             target_branch_url: Some("https://github.com/test/repo".to_string()),
             rate_limit_bucket: Some("default".to_string()),
-            codebase: Some(Codebase::new("test-codebase").unwrap()),
+            codebase: Some(CodebaseName::new("test-codebase").unwrap()),
             last_scanned: None,
         };
 

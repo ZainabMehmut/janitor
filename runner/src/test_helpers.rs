@@ -253,7 +253,7 @@ mod tests {
                 subpath: Some("".to_string()),
                 code: "success".to_string(),
                 transient: None,
-                codebase: janitor::Codebase::new("finish-run-codebase").unwrap(),
+                codebase: janitor::CodebaseName::new("finish-run-codebase").unwrap(),
                 campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
                 description: Some("ok".to_string()),
                 codemod: Some(serde_json::json!({"changes": 2})),

@@ -71,7 +71,7 @@ impl UploadProcessor {
         &self,
         mut multipart: Multipart,
         run_id: &janitor::RunId,
-        codebase: &janitor::Codebase,
+        codebase: &janitor::CodebaseName,
     ) -> Result<UploadedWorkerResult, UploadError> {
         let mut worker_result: Option<WorkerResult> = None;
         let mut log_files = Vec::new();

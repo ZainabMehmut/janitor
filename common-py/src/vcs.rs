@@ -1,6 +1,6 @@
 use breezyshim::RevisionId;
 
-use janitor::Codebase;
+use janitor::CodebaseName;
 use pyo3::basic::CompareOp;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -41,12 +41,12 @@ pub struct VcsManager(Arc<dyn janitor::vcs::VcsManager>);
 
 #[pymethods]
 impl VcsManager {
-    fn get_branch_url(&self, codebase: Codebase, branch_name: &str) -> String {
+    fn get_branch_url(&self, codebase: CodebaseName, branch_name: &str) -> String {
         let url = self.0.get_branch_url(&codebase, branch_name);
         url.to_string()
     }
 
-    fn get_repository_url(&self, codebase: Codebase) -> String {
+    fn get_repository_url(&self, codebase: CodebaseName) -> String {
         let url = self.0.get_repository_url(&codebase);
         url.to_string()
     }
@@ -58,7 +58,7 @@ impl VcsManager {
     fn get_diff<'a>(
         &self,
         py: Python<'a>,
-        codebase: Codebase,
+        codebase: CodebaseName,
         old_revid: RevisionId,
         new_revid: RevisionId,
     ) -> PyResult<Bound<'a, PyAny>> {
@@ -72,7 +72,7 @@ impl VcsManager {
     fn get_revision_info<'a>(
         &self,
         py: Python<'a>,
-        codebase: Codebase,
+        codebase: CodebaseName,
         old_revid: RevisionId,
         new_revid: RevisionId,
     ) -> PyResult<Bound<'a, PyAny>> {
@@ -88,7 +88,7 @@ impl VcsManager {
 
     fn get_repository(
         &self,
-        codebase: Codebase,
+        codebase: CodebaseName,
     ) -> PyResult<Option<breezyshim::repository::GenericRepository>> {
         self.0
             .get_repository(&codebase)
@@ -97,7 +97,7 @@ impl VcsManager {
 
     fn get_branch(
         &self,
-        codebase: Codebase,
+        codebase: CodebaseName,
         branch_name: String,
     ) -> PyResult<Option<breezyshim::branch::GenericBranch>> {
         self.0
@@ -154,7 +154,7 @@ impl RemoteGitVcsManager {
 
     pub fn get_diff_url(
         &self,
-        codebase: Codebase,
+        codebase: CodebaseName,
         old_revid: RevisionId,
         new_revid: RevisionId,
     ) -> PyResult<String> {
@@ -229,7 +229,7 @@ impl RemoteBzrVcsManager {
 
     pub fn get_diff_url(
         &self,
-        codebase: Codebase,
+        codebase: CodebaseName,
         old_revid: RevisionId,
         new_revid: RevisionId,
     ) -> PyResult<String> {

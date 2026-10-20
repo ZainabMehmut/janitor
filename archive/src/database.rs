@@ -7,7 +7,7 @@ use tracing::debug;
 
 // Import shared database utilities
 use janitor::database::{Database as SharedDatabase, DatabaseError};
-use janitor::{ChangeSetId, Codebase, RunId};
+use janitor::{ChangeSetId, CodebaseName, RunId};
 
 use crate::error::{ArchiveError, ArchiveResult};
 use crate::scanner::BuildInfo;
@@ -27,7 +27,7 @@ pub struct BuildRecord {
     /// `debian_build.run_id`, used for artifact retrieval.
     pub run_id: RunId,
     /// `run.codebase`.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// `debian_build.distribution` (the build target).
     pub suite: String,
     /// `debian_build.source` (used as `package` in the projection too).

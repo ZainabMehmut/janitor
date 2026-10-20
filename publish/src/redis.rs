@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use janitor::redis::{PubSubMessage, RedisManager};
-use janitor::{Campaign, Codebase, RunId};
+use janitor::{Campaign, CodebaseName, RunId};
 use log::{debug, error, info};
 use redis::aio::ConnectionManager;
 use tokio::sync::mpsc;
@@ -85,7 +85,7 @@ impl RedisPublisher {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PublishEvent {
     /// The codebase that was published.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// The campaign/suite that was published.
     pub campaign: Campaign,
     /// The publish mode used.
@@ -124,7 +124,7 @@ pub struct MergeProposalEvent {
     /// Status of the merge proposal.
     pub status: String,
     /// The codebase this proposal belongs to.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// The campaign/suite this proposal belongs to.
     pub campaign: Campaign,
     /// The target branch URL.
@@ -153,7 +153,7 @@ pub struct PublishStatusMessage {
     /// New publish_status value. The publisher acts only on `"approved"`.
     pub publish_status: String,
     /// Codebase the run belongs to.
-    pub codebase: Codebase,
+    pub codebase: CodebaseName,
     /// Campaign (run.suite) the run belongs to.
     pub campaign: Campaign,
 }
