@@ -114,7 +114,7 @@ pub fn parse_email<F: std::io::Read>(mut file: F) -> Option<String> {
         }
     }
 
-    for part in mail.subparts {
+    for part in mail.parts() {
         let body = match part.get_body() {
             Ok(body) => body,
             Err(e) => {
