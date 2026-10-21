@@ -3551,6 +3551,8 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
+ "deb822-lossless",
+ "debversion",
  "http-body-util",
  "janitor",
  "nix",
@@ -3558,6 +3560,7 @@ dependencies = [
  "redis 1.7.0",
  "serde",
  "serde_json",
+ "serial_test 3.5.0",
  "silver-platter",
  "sqlx",
  "tempfile",

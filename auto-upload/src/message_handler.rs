@@ -3,6 +3,7 @@
 use tracing::{debug, info, warn};
 
 use crate::artifacts::ArtifactProcessor;
+use crate::database::DatabaseClient;
 use crate::error::Result;
 use crate::process::upload_build_result;
 use crate::redis_client::BuildResultMessage;
@@ -10,14 +11,20 @@ use crate::upload::UploadConfig;
 
 /// Dispatches build result messages to [`upload_build_result`].
 pub struct MessageHandler {
+    db_client: DatabaseClient,
     artifact_processor: ArtifactProcessor,
     upload_config: UploadConfig,
 }
 
 impl MessageHandler {
-    /// Open the artifact store; upload settings are moved in.
-    pub async fn new(artifact_location: &str, upload_config: UploadConfig) -> Result<Self> {
+    /// Open the database and artifact store; upload settings are moved in.
+    pub async fn new(
+        database_url: &str,
+        artifact_location: &str,
+        upload_config: UploadConfig,
+    ) -> Result<Self> {
         Ok(Self {
+            db_client: DatabaseClient::new(database_url).await?,
             artifact_processor: ArtifactProcessor::new(artifact_location).await?,
             upload_config,
         })
@@ -37,7 +44,14 @@ impl MessageHandler {
             return Ok(());
         }
 
-        match upload_build_result(log_id, &self.artifact_processor, &self.upload_config).await {
+        match upload_build_result(
+            log_id,
+            self.db_client.pool(),
+            &self.artifact_processor,
+            &self.upload_config,
+        )
+        .await
+        {
             Ok(()) => Ok(()),
             Err(e) => {
                 warn!(%log_id, error = %e, "upload failed");

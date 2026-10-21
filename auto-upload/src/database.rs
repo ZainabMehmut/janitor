@@ -1,7 +1,4 @@
-//! Database access for backfill.
-//!
-//! One `SELECT DISTINCT ON` over `debian_build`, optionally filtered by
-//! distribution.
+//! Database access: the `debian_build` rows for backfill and for one run.
 
 use janitor::RunId;
 use sqlx::PgPool;
@@ -25,6 +22,27 @@ pub struct DebianBuild {
     pub run_id: RunId,
 }
 
+/// The `debian_build` row recorded for a run.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct RunBuild {
+    /// Source package name.
+    pub source: String,
+    /// Version of the built package.
+    pub version: debversion::Version,
+    /// Distribution the package was built for.
+    pub distribution: String,
+}
+
+/// Look up the `debian_build` row for `run_id`.
+pub async fn get_run_build(pool: &PgPool, run_id: &RunId) -> Result<Option<RunBuild>> {
+    Ok(
+        sqlx::query_as("SELECT source, version, distribution FROM debian_build WHERE run_id = $1")
+            .bind(run_id)
+            .fetch_optional(pool)
+            .await?,
+    )
+}
+
 impl DatabaseClient {
     /// Connect with a small pool (backfill is single-threaded).
     pub async fn new(database_url: &str) -> Result<Self> {
@@ -39,7 +57,8 @@ impl DatabaseClient {
         Ok(Self { shared_db })
     }
 
-    fn pool(&self) -> &PgPool {
+    /// The connection pool.
+    pub fn pool(&self) -> &PgPool {
         self.shared_db.pool()
     }
 

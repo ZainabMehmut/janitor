@@ -49,9 +49,13 @@ impl BackfillProcessor {
         };
 
         for build in &builds {
-            if let Err(e) =
-                upload_build_result(&build.run_id, &self.artifact_processor, &self.upload_config)
-                    .await
+            if let Err(e) = upload_build_result(
+                &build.run_id,
+                self.db_client.pool(),
+                &self.artifact_processor,
+                &self.upload_config,
+            )
+            .await
             {
                 summary.failed_uploads += 1;
                 error!(

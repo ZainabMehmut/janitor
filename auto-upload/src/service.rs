@@ -38,16 +38,10 @@ pub async fn run(
         .artifact_location()
         .ok_or(UploadError::MissingConfig("artifact_location"))?
         .to_string();
-    let database_url = if run_backfill {
-        Some(
-            config
-                .database_location()
-                .ok_or(UploadError::MissingConfig("database_location"))?
-                .to_string(),
-        )
-    } else {
-        None
-    };
+    let database_url = config
+        .database_location()
+        .ok_or(UploadError::MissingConfig("database_location"))?
+        .to_string();
 
     let web_task = {
         let listen_addr = listen_addr.to_string();
@@ -57,12 +51,15 @@ pub async fn run(
     };
 
     let redis_task = tokio::spawn({
+        let database_url = database_url.clone();
         let artifact_location = artifact_location.clone();
         let upload_config = upload_config.clone();
-        async move { listen_to_runner(&redis_url, &artifact_location, upload_config).await }
+        async move {
+            listen_to_runner(&redis_url, &database_url, &artifact_location, upload_config).await
+        }
     });
 
-    if let Some(database_url) = database_url {
+    if run_backfill {
         tokio::spawn(async move {
             match run_backfill_task(&database_url, &artifact_location, upload_config).await {
                 Ok(summary) => info!("backfill finished: {}", summary),
@@ -110,11 +107,13 @@ fn join_result(
 /// [`MessageHandler`]. On transient errors, wait five seconds and retry.
 async fn listen_to_runner(
     redis_url: &str,
+    database_url: &str,
     artifact_location: &str,
     upload_config: UploadConfig,
 ) -> Result<()> {
     let redis_client = RedisClient::new(redis_url).await?;
-    let message_handler = Arc::new(MessageHandler::new(artifact_location, upload_config).await?);
+    let message_handler =
+        Arc::new(MessageHandler::new(database_url, artifact_location, upload_config).await?);
 
     loop {
         info!("Starting Redis subscription");
