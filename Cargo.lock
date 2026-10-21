@@ -3674,6 +3674,7 @@ dependencies = [
  "reqwest 0.13.5",
  "select",
  "serde_json",
+ "url",
 ]
 
 [[package]]

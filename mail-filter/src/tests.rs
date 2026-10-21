@@ -288,3 +288,14 @@ fn test_parse_json_ld_missing_url() {
     let result = parse_json_ld(&json);
     assert_eq!(result, None);
 }
+
+#[test]
+fn test_parse_email_rejects_url_with_newline() {
+    let email = concat!(
+        "From: a@example.com\r\nContent-Type: multipart/alternative; boundary=b\r\n\r\n",
+        "--b\r\nContent-Type: text/html\r\n\r\n<html><script type=\"application/ld+json\">",
+        r#"{"@context":"https://schema.org","@type":"EmailMessage","action":{"@type":"ViewAction","url":"https://example.com/pull/1\nFORGED"}}"#,
+        "</script></html>\r\n--b--\r\n"
+    );
+    assert_eq!(None, parse_email(std::io::Cursor::new(email)));
+}

@@ -93,6 +93,15 @@ pub fn parse_html_body(contents: &str) -> Option<String> {
     }
 }
 
+/// Accept a found URL only if it parses and holds no control characters.
+fn checked_url(url: String) -> Option<String> {
+    if url.chars().any(|c| c.is_control()) || url::Url::parse(&url).is_err() {
+        log::warn!("Ignoring invalid merge proposal URL: {:?}", url);
+        return None;
+    }
+    Some(url)
+}
+
 /// Parse an email file to extract a merge proposal URL.
 ///
 /// Returns `None` if the file cannot be read, the email cannot be parsed,
@@ -120,8 +129,8 @@ pub fn parse_email<F: std::io::Read>(mut file: F) -> Option<String> {
             "text/plain" => parse_plain_text_body(&body),
             _ => continue,
         };
-        if parsed.is_some() {
-            return parsed;
+        if let Some(url) = parsed {
+            return checked_url(url);
         }
     }
 
