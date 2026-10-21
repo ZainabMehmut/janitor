@@ -232,7 +232,7 @@ impl PeriodicServices {
                                     let redis_guard = redis_mgr.lock().await;
                                     let publisher = redis_guard.publisher();
                                     let event = ArchiveEvent::PeriodicRepublish {
-                                        campaign: String::new(),
+                                        campaign: None,
                                         interval_type: "periodic".to_string(),
                                     };
                                     if let Err(e) = publisher.publish(&event).await {

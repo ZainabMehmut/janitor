@@ -6,6 +6,7 @@ pub mod config;
 pub mod database;
 pub mod debdiff;
 pub mod error;
+pub mod identifiers;
 pub mod logging;
 pub mod logs;
 #[cfg(feature = "otlp")]
@@ -29,5 +30,4 @@ pub mod utils;
 pub mod vcs;
 pub mod worker_auth;
 
-/// The type of a run ID.
-pub type RunId = String;
+pub use identifiers::{Campaign, ChangeSetId, CodebaseName, InvalidIdentifier, PublishId, RunId};

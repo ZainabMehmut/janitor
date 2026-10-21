@@ -1,4 +1,5 @@
 use crate::io::Readable;
+use janitor::RunId;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyTimeoutError, PyValueError};
 use pyo3::prelude::*;
@@ -59,12 +60,11 @@ impl ArtifactManager {
     fn store_artifacts<'a>(
         &self,
         py: Python<'a>,
-        run_id: &str,
+        run_id: RunId,
         local_path: &str,
         names: Option<Vec<String>>,
     ) -> PyResult<Bound<'a, PyAny>> {
         let local_path = std::path::PathBuf::from(local_path);
-        let run_id = run_id.to_string();
         let z = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             z.store_artifacts(&run_id, &local_path, names.as_deref())
@@ -77,11 +77,10 @@ impl ArtifactManager {
     fn get_artifact<'a>(
         &self,
         py: Python<'a>,
-        run_id: &str,
+        run_id: RunId,
         filename: &str,
         timeout: Option<u64>,
     ) -> PyResult<Bound<'a, PyAny>> {
-        let run_id = run_id.to_string();
         let filename = filename.to_string();
         let z = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -97,13 +96,12 @@ impl ArtifactManager {
         })
     }
 
-    fn public_artifact_url(&self, run_id: &str, filename: &str) -> String {
-        self.0.public_artifact_url(run_id, filename).to_string()
+    fn public_artifact_url(&self, run_id: RunId, filename: &str) -> String {
+        self.0.public_artifact_url(&run_id, filename).to_string()
     }
 
     #[pyo3(signature = (run_id, ))]
-    fn delete_artifacts<'a>(&self, py: Python<'a>, run_id: &str) -> PyResult<Bound<'a, PyAny>> {
-        let run_id = run_id.to_string();
+    fn delete_artifacts<'a>(&self, py: Python<'a>, run_id: RunId) -> PyResult<Bound<'a, PyAny>> {
         let z = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             z.delete_artifacts(&run_id)
@@ -116,12 +114,11 @@ impl ArtifactManager {
     fn retrieve_artifacts<'a>(
         &self,
         py: Python<'a>,
-        run_id: &str,
+        run_id: RunId,
         local_path: &str,
         filter_fn: Option<Py<PyAny>>,
         timeout: Option<u64>,
     ) -> PyResult<Bound<'a, PyAny>> {
-        let run_id = run_id.to_string();
         let local_path = std::path::PathBuf::from(local_path);
         let z = self.0.clone();
         let filter_fn: Option<Box<dyn Fn(&str) -> bool + Sync + Send>> = filter_fn.map(|f| {
@@ -231,11 +228,10 @@ fn store_artifacts_with_backup<'a>(
     manager: &ArtifactManager,
     backup_manager: Option<&ArtifactManager>,
     from_dir: &str,
-    run_id: &str,
+    run_id: RunId,
     names: Option<Vec<String>>,
 ) -> PyResult<Bound<'a, PyAny>> {
     let from_dir = std::path::PathBuf::from(from_dir);
-    let run_id = run_id.to_string();
     let z = manager.0.clone();
     let y = backup_manager.as_ref().map(|x| x.0.clone());
     pyo3_async_runtimes::tokio::future_into_py(py, async move {

@@ -34,6 +34,7 @@ use axum::{
 use breezyshim::bazaar::smart;
 use breezyshim::repository::Repository;
 use breezyshim::transport::Transport;
+use janitor::{Campaign, CodebaseName};
 use tracing::{debug, info, warn};
 
 use crate::error::{BzrError, Result};
@@ -159,8 +160,8 @@ fn handle_exchange(
 /// `allow_writes` semantics.
 pub async fn smart_protocol_dispatch(
     state: AppState,
-    codebase: String,
-    campaign: Option<String>,
+    codebase: CodebaseName,
+    campaign: Option<Campaign>,
     role: Option<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -173,11 +174,11 @@ pub async fn smart_protocol_dispatch(
     if !state.database.validate_codebase(&codebase).await? {
         warn!("unknown codebase: {}", codebase);
         return Err(BzrError::PathNotFound {
-            path: codebase.clone(),
+            path: codebase.into_string(),
         });
     }
 
-    if let Some(c) = campaign.as_deref() {
+    if let Some(c) = campaign.as_ref() {
         if state.janitor_config.get_campaign(c).is_none() {
             warn!("unknown campaign: {}", c);
             return Err(BzrError::PathNotFound {
@@ -218,7 +219,7 @@ pub async fn smart_protocol_dispatch(
 /// `POST /:codebase/.bzr/smart`
 pub async fn smart_protocol_codebase_handler(
     State(state): State<AppState>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<CodebaseName>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
@@ -228,7 +229,7 @@ pub async fn smart_protocol_codebase_handler(
 /// `POST /:codebase/:campaign/.bzr/smart`
 pub async fn smart_protocol_campaign_handler(
     State(state): State<AppState>,
-    Path((codebase, campaign)): Path<(String, String)>,
+    Path((codebase, campaign)): Path<(CodebaseName, Campaign)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
@@ -238,7 +239,7 @@ pub async fn smart_protocol_campaign_handler(
 /// `POST /:codebase/:campaign/:role/.bzr/smart`
 pub async fn smart_protocol_role_handler(
     State(state): State<AppState>,
-    Path((codebase, campaign, role)): Path<(String, String, String)>,
+    Path((codebase, campaign, role)): Path<(CodebaseName, Campaign, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {

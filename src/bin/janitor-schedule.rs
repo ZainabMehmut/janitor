@@ -1,4 +1,5 @@
 use clap::Parser;
+use janitor::{Campaign, CodebaseName};
 
 #[derive(Parser)]
 struct Args {
@@ -16,10 +17,10 @@ struct Args {
 
     #[clap(long)]
     /// Restrict to a specific campaign.
-    campaign: Option<String>,
+    campaign: Option<Campaign>,
 
     /// Codebase to process.
-    codebases: Vec<String>,
+    codebases: Vec<CodebaseName>,
 
     #[clap(long)]
     /// Bucket to use.
@@ -56,9 +57,9 @@ async fn main() -> Result<(), i32> {
         if args.codebases.is_empty() {
             None
         } else {
-            Some(args.codebases.iter().map(|x| x.as_str()).collect())
+            Some(args.codebases.as_slice())
         },
-        args.campaign.as_deref(),
+        args.campaign.as_ref(),
     )
     .await
     .map_err(|e| {

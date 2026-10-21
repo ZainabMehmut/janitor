@@ -69,3 +69,12 @@ async def test_get_log_manager_filesystem():
             await lm.import_log("mypkg", "run-id", f.name, basename="build.log")
         with await lm.get_log("mypkg", "run-id", "build.log") as logf:
             assert logf.read() == b"foo bar\n"
+
+
+async def test_invalid_identifiers_rejected():
+    with tempfile.TemporaryDirectory() as td:
+        async with FileSystemLogFileManager(td) as lm:
+            with pytest.raises(ValueError):
+                await lm.has_log("../etc", "run-id", "foo.log")
+            with pytest.raises(ValueError):
+                await lm.has_log("mypkg", "run/../id", "foo.log")

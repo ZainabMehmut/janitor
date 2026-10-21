@@ -16,6 +16,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::{ArchiveError, ArchiveResult};
 use janitor::artifacts::{get_artifact_manager, ArtifactManager};
+use janitor::{CodebaseName, RunId};
 
 /// Build information retrieved from database.
 ///
@@ -36,8 +37,8 @@ use janitor::artifacts::{get_artifact_manager, ArtifactManager};
 #[allow(missing_docs)]
 pub struct BuildInfo {
     pub id: String,
-    pub run_id: String,
-    pub codebase: String,
+    pub run_id: RunId,
+    pub codebase: CodebaseName,
     pub source_package: String,
     pub suite: String,
     pub architecture: String,
@@ -174,14 +175,14 @@ impl PackageScanner {
         Ok(contents)
     }
 
-    fn contents_cache_path(&self, run_id: &str, arch: &str) -> Option<PathBuf> {
+    fn contents_cache_path(&self, run_id: &RunId, arch: &str) -> Option<PathBuf> {
         let cache = self.cache_directory.as_ref()?;
         Some(cache.join(format!("contents-{}", arch)).join(run_id))
     }
 
     async fn write_contents_cache(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         arch: &str,
         contents: &[(String, Vec<String>)],
     ) {
@@ -204,7 +205,7 @@ impl PackageScanner {
     /// (arch, run_id) and hold the pre-rewrite scan output.
     async fn load_or_scan_packages(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         arch: Option<&str>,
     ) -> ArchiveResult<Vec<u8>> {
         if let Some(cache_path) = self.packages_cache_path(run_id, arch) {
@@ -239,7 +240,7 @@ impl PackageScanner {
         Ok(raw)
     }
 
-    fn packages_cache_path(&self, run_id: &str, arch: Option<&str>) -> Option<PathBuf> {
+    fn packages_cache_path(&self, run_id: &RunId, arch: Option<&str>) -> Option<PathBuf> {
         let cache = self.cache_directory.as_ref()?;
         let arch = arch?;
         Some(cache.join(format!("binary-{}", arch)).join(run_id))
@@ -268,7 +269,7 @@ impl PackageScanner {
         }
     }
 
-    async fn load_or_scan_sources(&self, run_id: &str) -> ArchiveResult<Vec<u8>> {
+    async fn load_or_scan_sources(&self, run_id: &RunId) -> ArchiveResult<Vec<u8>> {
         if let Some(cache_path) = self.sources_cache_path(run_id) {
             if let Ok(bytes) = tokio::fs::read(&cache_path).await {
                 debug!(
@@ -293,7 +294,7 @@ impl PackageScanner {
         Ok(raw)
     }
 
-    fn sources_cache_path(&self, run_id: &str) -> Option<PathBuf> {
+    fn sources_cache_path(&self, run_id: &RunId) -> Option<PathBuf> {
         let cache = self.cache_directory.as_ref()?;
         Some(cache.join("source").join(run_id))
     }
@@ -304,7 +305,7 @@ impl PackageScanner {
     /// lifetime. Dropping the returned handle cleans the tree;
     /// keeping it alive across `dpkg-scanpackages` invocations is
     /// required.
-    async fn download_build_artifacts(&self, build_id: &str) -> ArchiveResult<TempDir> {
+    async fn download_build_artifacts(&self, build_id: &RunId) -> ArchiveResult<TempDir> {
         let artifact_dir = tempfile::Builder::new()
             .prefix(crate::TMP_PREFIX)
             .tempdir_in(&self.root_path)
@@ -327,7 +328,7 @@ impl PackageScanner {
             .await
             .map_err(|e| match e {
                 janitor::artifacts::Error::ArtifactsMissing => ArchiveError::ArtifactsMissing {
-                    build_id: build_id.to_string(),
+                    build_id: build_id.clone(),
                     message: "No artifacts found for build".to_string(),
                 },
                 janitor::artifacts::Error::ServiceUnavailable => ArchiveError::ArtifactRetrieval(
@@ -353,16 +354,16 @@ impl PackageScanner {
 /// `<suite>/pkg/<package>/<run_id>/<basename>`.
 pub(crate) fn pool_filename(
     suite_name: &str,
-    codebase: &str,
-    run_id: &str,
+    package: &str,
+    run_id: &RunId,
     basename: &str,
 ) -> String {
-    format!("{}/pkg/{}/{}/{}", suite_name, codebase, run_id, basename)
+    format!("{}/pkg/{}/{}/{}", suite_name, package, run_id, basename)
 }
 
 /// Build the archive-pool directory path for a source package.
-pub(crate) fn pool_directory(suite_name: &str, codebase: &str, run_id: &str) -> String {
-    format!("{}/pkg/{}/{}", suite_name, codebase, run_id)
+pub(crate) fn pool_directory(suite_name: &str, package: &str, run_id: &RunId) -> String {
+    format!("{}/pkg/{}/{}", suite_name, package, run_id)
 }
 
 /// File listings of the `.deb`s in `dir` whose architecture is `arch`
@@ -539,6 +540,7 @@ fn handle_log_line(line: &[u8]) {
 
 #[cfg(test)]
 mod tests {
+    use janitor::{CodebaseName, RunId};
 
     #[tokio::test]
     async fn test_scan_packages() {
@@ -574,7 +576,12 @@ mod tests {
     /// breaks package downloads.
     #[test]
     fn pool_filename_layout_is_stable() {
-        let got = super::pool_filename("unstable", "hello", "abc-123", "hello_2.10-3_amd64.deb");
+        let got = super::pool_filename(
+            "unstable",
+            "hello",
+            &RunId::new("abc-123").unwrap(),
+            "hello_2.10-3_amd64.deb",
+        );
         assert_eq!(got, "unstable/pkg/hello/abc-123/hello_2.10-3_amd64.deb");
     }
 
@@ -582,7 +589,7 @@ mod tests {
     /// `<suite>/pkg/<package>/<run_id>`.
     #[test]
     fn pool_directory_layout_is_stable() {
-        let got = super::pool_directory("unstable", "hello", "abc-123");
+        let got = super::pool_directory("unstable", "hello", &RunId::new("abc-123").unwrap());
         assert_eq!(got, "unstable/pkg/hello/abc-123");
     }
 
@@ -647,12 +654,19 @@ mod tests {
 
         let expected_pkg = cache.path().join("binary-amd64").join("run-1");
         assert_eq!(
-            scanner.packages_cache_path("run-1", Some("amd64")).unwrap(),
+            scanner
+                .packages_cache_path(&RunId::new("run-1").unwrap(), Some("amd64"))
+                .unwrap(),
             expected_pkg
         );
 
         let expected_src = cache.path().join("source").join("run-1");
-        assert_eq!(scanner.sources_cache_path("run-1").unwrap(), expected_src);
+        assert_eq!(
+            scanner
+                .sources_cache_path(&RunId::new("run-1").unwrap())
+                .unwrap(),
+            expected_src
+        );
     }
 
     /// Without a cache directory the cache-path helpers return
@@ -665,9 +679,11 @@ mod tests {
             .await
             .unwrap();
         assert!(scanner
-            .packages_cache_path("run-1", Some("amd64"))
+            .packages_cache_path(&RunId::new("run-1").unwrap(), Some("amd64"))
             .is_none());
-        assert!(scanner.sources_cache_path("run-1").is_none());
+        assert!(scanner
+            .sources_cache_path(&RunId::new("run-1").unwrap())
+            .is_none());
     }
 
     /// When no arch is supplied, packages_cache_path must return
@@ -684,7 +700,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(scanner.packages_cache_path("run-1", None).is_none());
+        assert!(scanner
+            .packages_cache_path(&RunId::new("run-1").unwrap(), None)
+            .is_none());
     }
 
     /// Suite/source names may contain dashes; the layout must
@@ -695,7 +713,7 @@ mod tests {
         let got = super::pool_filename(
             "lintian-fixes",
             "libpackage-name",
-            "run-2026-01-01",
+            &RunId::new("run-2026-01-01").unwrap(),
             "libpackage-name_1.0.0-1_amd64.deb",
         );
         assert_eq!(
@@ -843,8 +861,8 @@ mod tests {
         .unwrap();
         let build = BuildInfo {
             id: "run-1/hello".to_string(),
-            run_id: "run-1".to_string(),
-            codebase: "hello".to_string(),
+            run_id: RunId::new("run-1").unwrap(),
+            codebase: CodebaseName::new("hello").unwrap(),
             source_package: "hello".to_string(),
             suite: "unstable".to_string(),
             architecture: "amd64".to_string(),
@@ -912,8 +930,8 @@ mod tests {
         let scanner = super::PackageScanner::new(&store_url).await.unwrap();
         let build = BuildInfo {
             id: "run-1/hello".to_string(),
-            run_id: "run-1".to_string(),
-            codebase: "hello".to_string(),
+            run_id: RunId::new("run-1").unwrap(),
+            codebase: CodebaseName::new("hello").unwrap(),
             source_package: "hello".to_string(),
             suite: "unstable".to_string(),
             architecture: "amd64".to_string(),
@@ -950,8 +968,8 @@ mod tests {
         let scanner = super::PackageScanner::new(&store_url).await.unwrap();
         let build = BuildInfo {
             id: "run-missing/hello".to_string(),
-            run_id: "run-missing".to_string(),
-            codebase: "hello".to_string(),
+            run_id: RunId::new("run-missing").unwrap(),
+            codebase: CodebaseName::new("hello").unwrap(),
             source_package: "hello".to_string(),
             suite: "unstable".to_string(),
             architecture: "amd64".to_string(),

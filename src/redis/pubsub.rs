@@ -1,6 +1,7 @@
 //! Redis pub/sub functionality
 
 use crate::error::JanitorError;
+use crate::{Campaign, CodebaseName, RunId};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
@@ -280,9 +281,9 @@ impl PatternSubscriber {
 /// Build result message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildResultMessage {
-    pub run_id: String,
-    pub codebase: String,
-    pub campaign: String,
+    pub run_id: RunId,
+    pub codebase: CodebaseName,
+    pub campaign: Campaign,
     pub status: String,
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
@@ -337,9 +338,9 @@ mod tests {
     #[test]
     fn test_message_serialization() {
         let msg = BuildResultMessage {
-            run_id: "test-123".to_string(),
-            codebase: "test/repo".to_string(),
-            campaign: "lintian-fixes".to_string(),
+            run_id: RunId::new("test-123").unwrap(),
+            codebase: CodebaseName::new("test-repo").unwrap(),
+            campaign: Campaign::new("lintian-fixes").unwrap(),
             status: "success".to_string(),
             timestamp: chrono::Utc::now(),
         };

@@ -2,6 +2,7 @@
 
 use crate::error::JanitorError;
 use crate::schedule::do_schedule;
+use crate::{Campaign, CodebaseName, RunId};
 use chrono::{DateTime, Utc};
 use log::{error, info};
 use reqwest::Client;
@@ -39,7 +40,7 @@ impl ReviewVerdict {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Review {
     /// The run ID this review is for
-    pub run_id: String,
+    pub run_id: RunId,
     /// Optional comment from the reviewer
     pub comment: Option<String>,
     /// The reviewer's identifier (username or email)
@@ -65,7 +66,7 @@ pub async fn store_review(
     conn: &PgPool,
     http_client: &Client,
     runner_url: &Url,
-    run_id: &str,
+    run_id: &RunId,
     verdict: ReviewVerdict,
     comment: Option<&str>,
     reviewer: &str,
@@ -79,8 +80,8 @@ pub async fn store_review(
         // Get run information for rescheduling
         #[derive(sqlx::FromRow)]
         struct RunInfo {
-            suite: String,
-            codebase: String,
+            suite: Campaign,
+            codebase: CodebaseName,
         }
 
         let run = sqlx::query_as::<_, RunInfo>("SELECT suite, codebase FROM run WHERE id = $1")
@@ -181,7 +182,10 @@ pub async fn store_review(
 }
 
 /// Get all reviews for a run
-pub async fn get_reviews_for_run(conn: &PgPool, run_id: &str) -> Result<Vec<Review>, JanitorError> {
+pub async fn get_reviews_for_run(
+    conn: &PgPool,
+    run_id: &RunId,
+) -> Result<Vec<Review>, JanitorError> {
     let reviews = sqlx::query_as::<_, Review>(
         r#"
         SELECT
@@ -215,7 +219,7 @@ pub struct ReviewStats {
 
 pub async fn get_review_stats_for_campaign(
     conn: &PgPool,
-    campaign: &str,
+    campaign: &Campaign,
 ) -> Result<ReviewStats, JanitorError> {
     #[derive(sqlx::FromRow)]
     struct StatsRow {

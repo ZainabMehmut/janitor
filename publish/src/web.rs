@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Json};
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use breezyshim::error::Error as BrzError;
+use janitor::{Campaign, ChangeSetId, CodebaseName, PublishId, RunId};
 use log::error;
 use sequoia_openpgp::armor;
 use sqlx::PgPool;
@@ -60,8 +61,8 @@ pub struct MergeProposalListEntry {
 /// optional codebase and campaign filters, and emits `[{url, status}]`.
 async fn fetch_merge_proposal_list(
     conn: &sqlx::PgPool,
-    codebase: Option<&str>,
-    campaign: Option<&str>,
+    codebase: Option<&CodebaseName>,
+    campaign: Option<&Campaign>,
 ) -> Result<Vec<MergeProposalListEntry>, sqlx::Error> {
     let mut query = String::from(
         "SELECT DISTINCT ON (merge_proposal.url) \
@@ -112,7 +113,7 @@ async fn fetch_merge_proposal_list(
 
 async fn get_merge_proposals_by_campaign(
     State(state): State<Arc<AppState>>,
-    Path(campaign): Path<String>,
+    Path(campaign): Path<Campaign>,
 ) -> impl IntoResponse {
     match fetch_merge_proposal_list(&state.conn, None, Some(&campaign)).await {
         Ok(rows) => (StatusCode::OK, Json(serde_json::to_value(rows).unwrap())),
@@ -132,7 +133,7 @@ async fn get_merge_proposals_by_campaign(
 
 async fn get_merge_proposals_by_codebase(
     State(state): State<Arc<AppState>>,
-    Path(codebase): Path<String>,
+    Path(codebase): Path<CodebaseName>,
 ) -> impl IntoResponse {
     match fetch_merge_proposal_list(&state.conn, Some(&codebase), None).await {
         Ok(rows) => (StatusCode::OK, Json(serde_json::to_value(rows).unwrap())),
@@ -167,12 +168,12 @@ async fn list_merge_proposals(State(state): State<Arc<AppState>>) -> impl IntoRe
 #[derive(serde::Serialize, sqlx::FromRow)]
 struct AbsorbedRun {
     mode: String,
-    change_set: Option<String>,
-    codebase: String,
+    change_set: Option<ChangeSetId>,
+    codebase: CodebaseName,
     delay: Option<i64>, // seconds
-    campaign: String,
+    campaign: Campaign,
     result: Option<serde_json::Value>,
-    id: String,
+    id: RunId,
     absorbed_at: Option<chrono::DateTime<chrono::Utc>>,
     merged_by: Option<String>,
     #[serde(rename = "merged-by-url")]
@@ -1011,8 +1012,8 @@ async fn delete_policy(
     }
 }
 
-async fn consider(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> impl IntoResponse {
-    async fn run(state: Arc<AppState>, id: String) {
+async fn consider(State(state): State<Arc<AppState>>, Path(id): Path<RunId>) -> impl IntoResponse {
+    async fn run(state: Arc<AppState>, id: RunId) {
         let (run, rate_limit_bucket, command, unpublished_branches) =
             match crate::state::iter_publish_ready(&state.conn, Some(&id)).await {
                 Ok(results) => match results.into_iter().next() {
@@ -1059,7 +1060,7 @@ async fn consider(State(state): State<Arc<AppState>>, Path(id): Path<String>) ->
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 /// Details about a publish operation.
 pub struct PublishDetails {
-    codebase: Option<String>,
+    codebase: Option<CodebaseName>,
     target_branch_url: Option<String>,
     branch_name: Option<String>,
     main_branch_revision: Option<String>,
@@ -1169,7 +1170,7 @@ struct PublishQuery {
 /// operator override.
 async fn publish(
     State(state): State<Arc<AppState>>,
-    Path((campaign, codebase)): Path<(String, String)>,
+    Path((campaign, codebase)): Path<(Campaign, CodebaseName)>,
     Query(query): Query<PublishQuery>,
     axum::extract::Form(form): axum::extract::Form<PublishForm>,
 ) -> impl IntoResponse {
@@ -1264,9 +1265,9 @@ async fn publish(
     // Spawn one publish_and_store per active (role, mode) pair.
     // Skip/build-only roles get recorded in publish_ids without
     // queuing any work.
-    let mut publish_ids: HashMap<String, String> = HashMap::new();
+    let mut publish_ids: HashMap<String, PublishId> = HashMap::new();
     for (role, mode_str) in branches {
-        let publish_id = uuid::Uuid::new_v4().to_string();
+        let publish_id = crate::new_publish_id();
         publish_ids.insert(role.clone(), publish_id.clone());
 
         log::info!(".. publishing for role {}: {}", role, mode_str);
@@ -1719,6 +1720,9 @@ async fn refresh_status(
             Err(crate::CheckMpError::Brz(msg)) => {
                 log::warn!("Forge call failed refreshing proposal {}: {}", url, msg);
             }
+            Err(crate::CheckMpError::InvalidIdentifier(e)) => {
+                log::error!("Invalid identifier refreshing proposal {}: {}", url, e);
+            }
         }
     }
 
@@ -1937,7 +1941,7 @@ struct BlockerBackoffDetails {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct BlockerChangeSetDetails {
-    change_set_id: String,
+    change_set_id: ChangeSetId,
     change_set_state: String,
 }
 
@@ -1971,9 +1975,9 @@ struct BlockerInfo {
 
 #[derive(sqlx::FromRow)]
 struct RunDetails {
-    id: String,
-    codebase: String,
-    campaign: String,
+    id: RunId,
+    codebase: CodebaseName,
+    campaign: Campaign,
     finish_time: chrono::DateTime<chrono::Utc>,
     run_command: String,
     publish_status: String,
@@ -1982,7 +1986,7 @@ struct RunDetails {
     policy_command: String,
     result_code: String,
     change_set_state: String,
-    change_set: String,
+    change_set: ChangeSetId,
     inactive: bool,
 }
 
@@ -2009,7 +2013,7 @@ struct RunDetails {
 /// (there's a TODO comment on it), so neither do we.
 async fn get_blockers(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(id): Path<RunId>,
 ) -> impl IntoResponse {
     let run_result = sqlx::query_as::<_, RunDetails>(
         r#"

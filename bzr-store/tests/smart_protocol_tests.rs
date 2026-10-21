@@ -365,3 +365,42 @@ test_with_database! {
         handle.abort();
     }
 }
+
+test_with_database! {
+    async fn test_public_invalid_identifiers_400(test_db: TestDatabase) {
+        setup_test_database(test_db.pool()).await.unwrap();
+        seed_codebase(test_db.pool(), "foo").await;
+
+        let tmp = TempDir::new().unwrap();
+        let cfg = build_config(tmp.path(), test_db_url(&test_db));
+        let (_admin, public) = create_applications(cfg, janitor_config_with_campaign())
+            .await
+            .unwrap();
+        let (addr, handle) = spawn_public(public).await;
+
+        let client = reqwest::Client::new();
+        for path in [
+            "/bzr/Ghost/.bzr/smart",
+            "/bzr/foo/..%2Fetc/.bzr/smart",
+            "/bzr/foo/Campaign/main/.bzr/smart",
+        ] {
+            let resp = client
+                .post(format!("http://{}{}", addr, path))
+                .body(b"hello".to_vec())
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 400, "{}", path);
+        }
+        for path in ["/bzr/Ghost", "/bzr/Ghost/changes"] {
+            let resp = client
+                .get(format!("http://{}{}", addr, path))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 400, "{}", path);
+        }
+
+        handle.abort();
+    }
+}

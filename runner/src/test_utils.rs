@@ -18,6 +18,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use janitor::database::{Database, DatabaseConfig};
+use janitor::{CodebaseName, RunId};
 use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -168,7 +169,7 @@ pub struct MockArtifactManager;
 impl janitor::artifacts::ArtifactManager for MockArtifactManager {
     async fn store_artifacts(
         &self,
-        _run_id: &str,
+        _run_id: &RunId,
         _local_path: &std::path::Path,
         _names: Option<&[String]>,
     ) -> Result<(), janitor::artifacts::Error> {
@@ -177,13 +178,13 @@ impl janitor::artifacts::ArtifactManager for MockArtifactManager {
 
     async fn get_artifact(
         &self,
-        _run_id: &str,
+        _run_id: &RunId,
         _filename: &str,
     ) -> Result<Box<dyn std::io::Read + Sync + Send>, janitor::artifacts::Error> {
         Ok(Box::new(std::io::Cursor::new(b"mock artifact data")))
     }
 
-    fn public_artifact_url(&self, run_id: &str, filename: &str) -> url::Url {
+    fn public_artifact_url(&self, run_id: &RunId, filename: &str) -> url::Url {
         format!("mock://artifacts/{}/{}", run_id, filename)
             .parse()
             .unwrap()
@@ -191,7 +192,7 @@ impl janitor::artifacts::ArtifactManager for MockArtifactManager {
 
     async fn retrieve_artifacts(
         &self,
-        _run_id: &str,
+        _run_id: &RunId,
         _local_path: &std::path::Path,
         _filter_fn: Option<&(dyn for<'a> Fn(&'a str) -> bool + Sync + Send)>,
     ) -> Result<(), janitor::artifacts::Error> {
@@ -202,7 +203,7 @@ impl janitor::artifacts::ArtifactManager for MockArtifactManager {
         Box::new(Vec::<String>::new().into_iter())
     }
 
-    async fn delete_artifacts(&self, _run_id: &str) -> Result<(), janitor::artifacts::Error> {
+    async fn delete_artifacts(&self, _run_id: &RunId) -> Result<(), janitor::artifacts::Error> {
         Ok(())
     }
 }
@@ -215,8 +216,8 @@ pub struct MockLogFileManager;
 impl crate::logs::LogFileManager for MockLogFileManager {
     async fn has_log(
         &self,
-        _codebase: &str,
-        _run_id: &str,
+        _codebase: &CodebaseName,
+        _run_id: &RunId,
         _name: &str,
     ) -> Result<bool, crate::logs::Error> {
         Ok(true)
@@ -224,8 +225,8 @@ impl crate::logs::LogFileManager for MockLogFileManager {
 
     async fn get_log(
         &self,
-        _codebase: &str,
-        _run_id: &str,
+        _codebase: &CodebaseName,
+        _run_id: &RunId,
         _name: &str,
     ) -> Result<Box<dyn std::io::Read + Send + Sync>, crate::logs::Error> {
         Ok(Box::new(std::io::Cursor::new(b"mock log content")))
@@ -233,8 +234,8 @@ impl crate::logs::LogFileManager for MockLogFileManager {
 
     async fn import_log(
         &self,
-        _codebase: &str,
-        _run_id: &str,
+        _codebase: &CodebaseName,
+        _run_id: &RunId,
         _orig_path: &str,
         _mtime: Option<chrono::DateTime<chrono::Utc>>,
         _basename: Option<&str>,
@@ -244,8 +245,8 @@ impl crate::logs::LogFileManager for MockLogFileManager {
 
     async fn delete_log(
         &self,
-        _codebase: &str,
-        _run_id: &str,
+        _codebase: &CodebaseName,
+        _run_id: &RunId,
         _name: &str,
     ) -> Result<(), crate::logs::Error> {
         Ok(())
@@ -257,8 +258,8 @@ impl crate::logs::LogFileManager for MockLogFileManager {
 
     async fn get_ctime(
         &self,
-        _codebase: &str,
-        _run_id: &str,
+        _codebase: &CodebaseName,
+        _run_id: &RunId,
         _name: &str,
     ) -> Result<chrono::DateTime<chrono::Utc>, crate::logs::Error> {
         Ok(chrono::Utc::now())
@@ -385,7 +386,7 @@ pub async fn create_test_app_state(
 /// [`TestConfigBuilder`], so tests can register campaigns and other
 /// config knobs the handlers read.
 pub async fn create_test_app_state_with_config(
-    mut config_builder: TestConfigBuilder,
+    config_builder: TestConfigBuilder,
 ) -> Result<Arc<AppState>, Box<dyn std::error::Error + Send + Sync>> {
     let test_db = TestDatabase::new().await?;
     // Load the production schema so write-path tests hit the same
@@ -408,6 +409,34 @@ pub async fn create_test_app_state_with_config(
         .await
         .map_err(|e| format!("Test redis PING failed: {}", e))?;
 
+    Ok(assemble_app_state(
+        runner_db_arc,
+        redis_client,
+        config_builder,
+    ))
+}
+
+/// Build an `AppState` whose database and Redis are never connected.
+///
+/// Handlers that reject a request before touching either (e.g. axum
+/// extractor validation) can be tested with this without any external
+/// services; anything that does reach the database or Redis fails.
+pub fn create_offline_test_app_state() -> Arc<AppState> {
+    let pool = PgPool::connect_lazy("postgresql://localhost:1/unused")
+        .expect("static database URL parses");
+    let redis_client = redis::Client::open("redis://127.0.0.1:1").expect("static redis URL parses");
+    assemble_app_state(
+        Arc::new(RunnerDatabase::new(pool)),
+        redis_client,
+        TestConfigBuilder::new(),
+    )
+}
+
+fn assemble_app_state(
+    runner_db_arc: Arc<RunnerDatabase>,
+    redis_client: redis::Client,
+    mut config_builder: TestConfigBuilder,
+) -> Arc<AppState> {
     let log_manager = Arc::new(MockLogFileManager);
     let artifact_manager: Arc<dyn janitor::artifacts::ArtifactManager> = config_builder
         .artifact_manager
@@ -453,7 +482,7 @@ pub async fn create_test_app_state_with_config(
     let public_vcs_managers =
         janitor::vcs::get_vcs_managers("http://localhost:9923/").expect("valid test VCS location");
 
-    Ok(Arc::new(AppState {
+    Arc::new(AppState {
         database: runner_db_arc,
         active_runs,
         vcs_manager,
@@ -473,7 +502,7 @@ pub async fn create_test_app_state_with_config(
         public_vcs_managers: Arc::new(public_vcs_managers),
         public_dep_server_url: None,
         avoid_hosts: Vec::new(),
-    }))
+    })
 }
 
 /// Build a test `AppState`, returning `Ok(None)` when the underlying

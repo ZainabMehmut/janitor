@@ -5,9 +5,6 @@ use std::collections::HashMap;
 /// The version of the janitor package
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Regex pattern for valid campaign names
-pub const CAMPAIGN_REGEX: &str = r"[a-z0-9-]+";
-
 /// Split environment variables from a command string.
 ///
 /// This function parses a command string that may start with environment variable
@@ -183,25 +180,6 @@ mod tests {
         assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
         // The shlex library quotes arguments containing = which is correct behavior
         assert!(cmd == "echo a=b" || cmd == "echo 'a=b'");
-    }
-
-    #[test]
-    fn test_campaign_regex_pattern() {
-        // Test that the regex pattern is valid
-        let regex = regex::Regex::new(&format!("^{}$", CAMPAIGN_REGEX)).unwrap();
-
-        // Valid campaign names
-        assert!(regex.is_match("lintian-fixes"));
-        assert!(regex.is_match("debian-janitor"));
-        assert!(regex.is_match("fresh-releases"));
-        assert!(regex.is_match("a"));
-        assert!(regex.is_match("test123"));
-
-        // Invalid campaign names
-        assert!(!regex.is_match("INVALID"));
-        assert!(!regex.is_match("invalid_name"));
-        assert!(!regex.is_match("invalid name"));
-        assert!(!regex.is_match(""));
     }
 
     #[test]

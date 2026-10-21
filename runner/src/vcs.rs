@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::metrics::MetricsCollector;
+use janitor::CodebaseName;
 
 /// VCS integration for the runner module.
 /// This provides a higher-level interface that coordinates with queue management,
@@ -58,7 +59,7 @@ impl RunnerVcsManager {
     pub async fn open_branch_with_metrics(
         &self,
         vcs_type: VcsType,
-        codebase: &str,
+        codebase: &CodebaseName,
         branch_name: &str,
     ) -> Result<Option<breezyshim::branch::GenericBranch>, BranchOpenFailure> {
         let start_time = std::time::Instant::now();
@@ -102,7 +103,7 @@ impl RunnerVcsManager {
     pub async fn get_diff_with_metrics(
         &self,
         vcs_type: VcsType,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &breezyshim::RevisionId,
         new_revid: &breezyshim::RevisionId,
     ) -> Result<Vec<u8>, VcsError> {
@@ -129,7 +130,7 @@ impl RunnerVcsManager {
     pub async fn get_revision_info_with_metrics(
         &self,
         vcs_type: VcsType,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &breezyshim::RevisionId,
         new_revid: &breezyshim::RevisionId,
     ) -> Result<Vec<RevisionInfo>, VcsError> {
@@ -270,7 +271,7 @@ pub trait VcsCoordinator: Send + Sync {
     async fn is_codebase_accessible(
         &self,
         vcs_type: VcsType,
-        codebase: &str,
+        codebase: &CodebaseName,
         branch: &str,
     ) -> Result<bool, VcsError>;
 
@@ -278,7 +279,7 @@ pub trait VcsCoordinator: Send + Sync {
     async fn prefetch_codebase(
         &self,
         vcs_type: VcsType,
-        codebase: &str,
+        codebase: &CodebaseName,
         branch: &str,
     ) -> Result<(), VcsError>;
 
@@ -286,7 +287,7 @@ pub trait VcsCoordinator: Send + Sync {
     async fn estimate_access_time(
         &self,
         vcs_type: VcsType,
-        codebase: &str,
+        codebase: &CodebaseName,
     ) -> Result<Duration, VcsError>;
 }
 
@@ -295,7 +296,7 @@ impl VcsCoordinator for RunnerVcsManager {
     async fn is_codebase_accessible(
         &self,
         vcs_type: VcsType,
-        codebase: &str,
+        codebase: &CodebaseName,
         branch: &str,
     ) -> Result<bool, VcsError> {
         match self
@@ -319,7 +320,7 @@ impl VcsCoordinator for RunnerVcsManager {
     async fn prefetch_codebase(
         &self,
         vcs_type: VcsType,
-        codebase: &str,
+        codebase: &CodebaseName,
         branch: &str,
     ) -> Result<(), VcsError> {
         // For now, just open the branch to warm any caches
@@ -331,7 +332,7 @@ impl VcsCoordinator for RunnerVcsManager {
     async fn estimate_access_time(
         &self,
         vcs_type: VcsType,
-        codebase: &str,
+        codebase: &CodebaseName,
     ) -> Result<Duration, VcsError> {
         let start = std::time::Instant::now();
 
@@ -411,7 +412,11 @@ mod tests {
         let runner_manager = RunnerVcsManager::new(HashMap::new());
 
         let result = runner_manager
-            .open_branch_with_metrics(VcsType::Git, "test-codebase", "main")
+            .open_branch_with_metrics(
+                VcsType::Git,
+                &CodebaseName::new("test-codebase").unwrap(),
+                "main",
+            )
             .await;
 
         match result {

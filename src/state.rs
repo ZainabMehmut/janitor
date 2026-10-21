@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::{Campaign, ChangeSetId, CodebaseName, RunId};
 use breezyshim::RevisionId;
 use log::warn;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, Postgres};
@@ -26,7 +27,7 @@ pub async fn create_pool(config: &Config) -> Result<Pool<Postgres>, sqlx::Error>
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Run {
-    pub id: String,
+    pub id: RunId,
     pub command: String,
     pub description: Option<String>,
     pub result_code: String,
@@ -34,7 +35,7 @@ pub struct Run {
     pub revision: Option<RevisionId>,
     pub context: Option<String>,
     pub result: Option<serde_json::Value>,
-    pub suite: String,
+    pub suite: Campaign,
     pub instigated_context: Option<String>,
     pub vcs_type: String,
     pub branch_url: String,
@@ -48,11 +49,11 @@ pub struct Run {
     pub result_branches: Option<Vec<(String, String, Option<RevisionId>, Option<RevisionId>)>>,
     pub result_tags: Option<Vec<(String, String)>>,
     pub target_branch_url: Option<String>,
-    pub change_set: String,
+    pub change_set: ChangeSetId,
     pub failure_details: Option<serde_json::Value>,
     pub failure_transient: Option<bool>,
     pub failure_stage: Option<String>,
-    pub codebase: String,
+    pub codebase: CodebaseName,
     pub start_time: chrono::DateTime<chrono::Utc>,
     pub finish_time: chrono::DateTime<chrono::Utc>,
     pub value: Option<i32>,
@@ -94,18 +95,18 @@ impl Run {
 /// codebase table).
 pub async fn has_cotenants(
     conn: &PgPool,
-    codebase: &str,
+    codebase: &CodebaseName,
     url: &url::Url,
 ) -> Result<Option<bool>, sqlx::Error> {
     #[derive(Debug, Clone, sqlx::FromRow)]
-    struct Codebase {
+    struct CodebaseRow {
         pub name: String,
     }
     let url = breezyshim::urlutils::split_segment_parameters(url)
         .0
         .to_string();
 
-    let rows: Vec<Codebase> =
+    let rows: Vec<CodebaseRow> =
         sqlx::query_as("SELECT name FROM codebase where branch_url = $1 or url = $1")
             .bind(url.trim_end_matches('/'))
             .fetch_all(conn)
@@ -120,7 +121,7 @@ pub async fn has_cotenants(
             );
             None
         }
-        1 => Some(rows[0].name != codebase),
+        1 => Some(rows[0].name != codebase.as_str()),
         _ => Some(true),
     })
 }
@@ -129,7 +130,7 @@ pub async fn has_cotenants(
 /// `codebase`, per the `publish_ready` view.
 pub async fn iter_publishable_suites(
     conn: &PgPool,
-    codebase: &str,
+    codebase: &CodebaseName,
 ) -> Result<Vec<String>, sqlx::Error> {
     let rows: Vec<(String,)> =
         sqlx::query_as("SELECT DISTINCT suite FROM publish_ready WHERE codebase = $1")
@@ -147,7 +148,7 @@ mod tests {
 
     fn make_run() -> Run {
         Run {
-            id: "run-123".to_string(),
+            id: RunId::new("run-123").unwrap(),
             command: "lintian-brush".to_string(),
             description: Some("Fixed lintian issues".to_string()),
             result_code: "success".to_string(),
@@ -155,7 +156,7 @@ mod tests {
             revision: Some(RevisionId::from(b"new-rev".to_vec())),
             context: Some("context-data".to_string()),
             result: Some(serde_json::json!({"applied": 3})),
-            suite: "lintian-fixes".to_string(),
+            suite: Campaign::new("lintian-fixes").unwrap(),
             instigated_context: None,
             vcs_type: "git".to_string(),
             branch_url: "https://salsa.debian.org/foo/bar".to_string(),
@@ -177,11 +178,11 @@ mod tests {
             ]),
             result_tags: Some(vec![("v1.0".to_string(), "tag-ref".to_string())]),
             target_branch_url: Some("https://salsa.debian.org/foo/bar".to_string()),
-            change_set: "cs-1".to_string(),
+            change_set: ChangeSetId::new("cs-1").unwrap(),
             failure_details: None,
             failure_transient: None,
             failure_stage: None,
-            codebase: "mycodebase".to_string(),
+            codebase: CodebaseName::new("mycodebase").unwrap(),
             start_time: chrono::Utc.with_ymd_and_hms(2025, 1, 1, 10, 0, 0).unwrap(),
             finish_time: chrono::Utc.with_ymd_and_hms(2025, 1, 1, 10, 5, 0).unwrap(),
             value: Some(30),
@@ -233,7 +234,7 @@ mod tests {
         assert_eq!(run1, run2);
 
         // Different id = not equal
-        run2.id = "run-456".to_string();
+        run2.id = RunId::new("run-456").unwrap();
         assert_ne!(run1, run2);
     }
 

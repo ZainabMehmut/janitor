@@ -27,20 +27,20 @@ impl MessageHandler {
     pub async fn handle_message(&self, message: BuildResultMessage) -> Result<()> {
         let log_id = &message.log_id;
         info!(
-            log_id,
+            %log_id,
             target = message.target.name.as_deref().unwrap_or(""),
             "received"
         );
 
         if !should_process_message(&self.upload_config, &message) {
-            debug!(log_id, "skipped by filters");
+            debug!(%log_id, "skipped by filters");
             return Ok(());
         }
 
         match upload_build_result(log_id, &self.artifact_processor, &self.upload_config).await {
             Ok(()) => Ok(()),
             Err(e) => {
-                warn!(log_id, error = %e, "upload failed");
+                warn!(%log_id, error = %e, "upload failed");
                 Err(e)
             }
         }
@@ -107,7 +107,7 @@ mod tests {
         distribution: Option<&str>,
     ) -> BuildResultMessage {
         BuildResultMessage {
-            log_id: "test-123".to_string(),
+            log_id: janitor::RunId::new("test-123").unwrap(),
             code: code.map(str::to_string),
             target: BuildTarget {
                 name: target.map(str::to_string),

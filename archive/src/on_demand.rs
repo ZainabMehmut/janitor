@@ -27,6 +27,7 @@ use apt_repository::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::StreamExt;
+use janitor::{Campaign, ChangeSetId, CodebaseName, InvalidIdentifier, RunId};
 use tracing::{debug, info, warn};
 
 use crate::database::{BuildManager, BuildRecord};
@@ -56,6 +57,46 @@ pub fn parse_kind(s: &str) -> OnDemandKind {
     }
 }
 
+/// A parsed on-demand `(kind, id)` pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnDemandTarget {
+    /// A single run's outputs.
+    Run(RunId),
+    /// A changeset's outputs.
+    ChangeSet(ChangeSetId),
+    /// A campaign's latest changeset for a codebase (or source package).
+    Campaign(Campaign, CodebaseName),
+}
+
+impl OnDemandTarget {
+    /// Parse the `kind` and `id` path segments.
+    pub fn parse(kind: &str, id: &str) -> Result<Self, InvalidIdentifier> {
+        Ok(match parse_kind(kind) {
+            OnDemandKind::Run => Self::Run(id.parse()?),
+            OnDemandKind::ChangeSet => Self::ChangeSet(id.parse()?),
+            OnDemandKind::Campaign => Self::Campaign(kind.parse()?, id.parse()?),
+        })
+    }
+
+    /// The `kind` path segment.
+    pub fn kind(&self) -> &str {
+        match self {
+            Self::Run(_) => "run",
+            Self::ChangeSet(_) => "cs",
+            Self::Campaign(campaign, _) => campaign.as_str(),
+        }
+    }
+
+    /// The `id` path segment.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Run(run_id) => run_id.as_str(),
+            Self::ChangeSet(cs) => cs.as_str(),
+            Self::Campaign(_, codebase) => codebase.as_str(),
+        }
+    }
+}
+
 /// Resolve the components a campaign publishes into, via
 /// `campaign_config.debian_build.base_distribution ->
 ///  distribution.component`.
@@ -66,7 +107,7 @@ pub fn parse_kind(s: &str) -> OnDemandKind {
 /// share the lookup.
 pub(crate) fn components_for_campaign(
     cfg: &janitor::config::Config,
-    campaign_name: &str,
+    campaign_name: &Campaign,
 ) -> Option<Vec<String>> {
     let campaign = cfg.get_campaign(campaign_name)?;
     if !campaign.has_debian_build() {
@@ -81,7 +122,7 @@ pub(crate) fn components_for_campaign(
     }
 }
 
-/// Materialize a list of builds for a given `(kind, id)` tuple.
+/// Materialize a list of builds for an on-demand target.
 ///
 /// Returns the build records, the most-recent `finish_time` across
 /// all contributing runs (used to decide whether a previously
@@ -91,11 +132,10 @@ pub(crate) fn components_for_campaign(
 /// the campaign's components for the fallback `["main"]`.
 pub async fn lookup_builds(
     db: &BuildManager,
-    kind: &str,
-    id: &str,
-) -> ArchiveResult<(Vec<BuildRecord>, Option<DateTime<Utc>>, Option<String>)> {
-    match parse_kind(kind) {
-        OnDemandKind::Run => {
+    target: &OnDemandTarget,
+) -> ArchiveResult<(Vec<BuildRecord>, Option<DateTime<Utc>>, Option<Campaign>)> {
+    match target {
+        OnDemandTarget::Run(id) => {
             // Look up (suite, finish_time) for the run. The suite
             // field is used to look up `campaign_config` for
             // components; without it the caller falls back to
@@ -103,7 +143,7 @@ pub async fn lookup_builds(
             // decode into DateTime<Utc> (run.finish_time is stored
             // as TIMESTAMP without zone, same pattern as the
             // ChangeSet branch below).
-            let row: Option<(String, Option<DateTime<Utc>>)> = sqlx::query_as(
+            let row: Option<(Campaign, Option<DateTime<Utc>>)> = sqlx::query_as(
                 "SELECT suite::text AS suite, \
                         (finish_time AT TIME ZONE 'UTC') AS finish_time \
                  FROM run WHERE id = $1",
@@ -118,10 +158,10 @@ pub async fn lookup_builds(
             let builds = db.get_builds_for_run(id).await?;
             Ok((builds, max_finish_time, Some(campaign)))
         }
-        OnDemandKind::ChangeSet => {
+        OnDemandTarget::ChangeSet(id) => {
             // Look up (campaign, max(finish_time)) by change_set,
             // then load builds for that changeset.
-            let campaign: Option<String> =
+            let campaign: Option<Campaign> =
                 sqlx::query_scalar("SELECT campaign FROM change_set WHERE id = $1")
                     .bind(id)
                     .fetch_optional(db.pool())
@@ -145,12 +185,11 @@ pub async fn lookup_builds(
             let builds = db.get_builds_for_changeset(id).await?;
             Ok((builds, max_finish_time, campaign))
         }
-        OnDemandKind::Campaign => {
-            // In this flow, `id` is actually the codebase and
-            // `kind` is the campaign name. Look up the most-recent
+        OnDemandTarget::Campaign(campaign, id) => {
+            // Look up the most-recent
             // working/ready/publishing/done change_set for that
             // pair, then load builds for that changeset.
-            let cs_id: Option<String> = sqlx::query_scalar(
+            let cs_id: Option<ChangeSetId> = sqlx::query_scalar(
                 "SELECT run.change_set \
                  FROM run \
                  INNER JOIN change_set ON change_set.id = run.change_set \
@@ -160,7 +199,7 @@ pub async fn lookup_builds(
                  ORDER BY run.finish_time DESC \
                  LIMIT 1",
             )
-            .bind(kind)
+            .bind(campaign)
             .bind(id)
             .fetch_optional(db.pool())
             .await
@@ -182,7 +221,7 @@ pub async fn lookup_builds(
                             id
                         )));
                     }
-                    return Ok((Vec::new(), None, Some(kind.to_string())));
+                    return Ok((Vec::new(), None, Some(campaign.clone())));
                 }
             };
             let max_finish_time: Option<DateTime<Utc>> = sqlx::query_scalar(
@@ -194,7 +233,7 @@ pub async fn lookup_builds(
             .map_err(ArchiveError::Database)?
             .flatten();
             let builds = db.get_builds_for_changeset(&cs_id).await?;
-            Ok((builds, max_finish_time, Some(kind.to_string())))
+            Ok((builds, max_finish_time, Some(campaign.clone())))
         }
     }
 }
@@ -333,8 +372,8 @@ fn on_demand_repository(
         .map_err(|e: AptRepositoryError| ArchiveError::RepositoryGeneration(e.to_string()))
 }
 
-/// Refresh (or lazily generate) the dists tree for the given
-/// `(kind, id)` under `dists_dir`. Returns `Ok(())` even if nothing
+/// Refresh (or lazily generate) the dists tree for `target` under
+/// `dists_dir/{kind}/{id}`. Returns `Ok(())` even if nothing
 /// needed to be regenerated -- the caller is expected to then serve
 /// the requested static file from the populated directory.
 ///
@@ -350,15 +389,15 @@ pub async fn refresh_on_demand_dists(
     origin: &str,
     components: &[String],
     arches: &[String],
-    kind: &str,
-    id: &str,
+    target: &OnDemandTarget,
     gpg: Option<&crate::config::GpgConfig>,
     runtime_config: Option<&janitor::config::Config>,
 ) -> ArchiveResult<()> {
+    let (kind, id) = (target.kind(), target.id());
     let base_path = dists_dir.join(kind).join(id);
     let release_path = base_path.join("Release");
 
-    let (builds, max_finish_time, campaign_name) = lookup_builds(db, kind, id).await?;
+    let (builds, max_finish_time, campaign_name) = lookup_builds(db, target).await?;
 
     if is_fresh(&release_path, max_finish_time).await {
         debug!("On-demand dists for {}/{} still fresh, skipping", kind, id);
@@ -372,17 +411,17 @@ pub async fn refresh_on_demand_dists(
     info!("Generating on-demand dists for {}/{}", kind, id);
 
     let suite_name = format!("{}/{}", kind, id);
-    let description = match parse_kind(kind) {
-        OnDemandKind::Run => format!("Run {}", id),
-        OnDemandKind::ChangeSet => format!("Change set {}", id),
-        OnDemandKind::Campaign => format!("Campaign {} for {}", kind, id),
+    let description = match target {
+        OnDemandTarget::Run(_) => format!("Run {}", id),
+        OnDemandTarget::ChangeSet(_) => format!("Change set {}", id),
+        OnDemandTarget::Campaign(..) => format!("Campaign {} for {}", kind, id),
     };
 
     // Prefer the campaign's target distribution components when we
     // can resolve them. Falls back to the caller-supplied
     // components list otherwise.
     let resolved_components: Vec<String> = campaign_name
-        .as_deref()
+        .as_ref()
         .and_then(|name| runtime_config.and_then(|rt| components_for_campaign(rt, name)))
         .unwrap_or_else(|| components.to_vec());
 
@@ -451,6 +490,37 @@ mod tests {
         assert_eq!(parse_kind("lintian-fixes"), OnDemandKind::Campaign);
         assert_eq!(parse_kind("fresh-releases"), OnDemandKind::Campaign);
         assert_eq!(parse_kind(""), OnDemandKind::Campaign);
+    }
+
+    #[test]
+    fn test_on_demand_target_parse() {
+        assert_eq!(
+            OnDemandTarget::parse("run", "run-1").unwrap(),
+            OnDemandTarget::Run(RunId::new("run-1").unwrap())
+        );
+        assert_eq!(
+            OnDemandTarget::parse("cs", "cs-1").unwrap(),
+            OnDemandTarget::ChangeSet(ChangeSetId::new("cs-1").unwrap())
+        );
+        let target = OnDemandTarget::parse("lintian-fixes", "hello").unwrap();
+        assert_eq!(
+            target,
+            OnDemandTarget::Campaign(
+                Campaign::new("lintian-fixes").unwrap(),
+                CodebaseName::new("hello").unwrap()
+            )
+        );
+        assert_eq!((target.kind(), target.id()), ("lintian-fixes", "hello"));
+    }
+
+    #[test]
+    fn test_on_demand_target_parse_rejects_invalid_ids() {
+        assert!(OnDemandTarget::parse("run", "..").is_err());
+        assert!(OnDemandTarget::parse("run", "").is_err());
+        assert!(OnDemandTarget::parse("cs", "..").is_err());
+        assert!(OnDemandTarget::parse("cs", "a.b").is_err());
+        assert!(OnDemandTarget::parse("lintian-fixes", "..").is_err());
+        assert!(OnDemandTarget::parse("Lintian", "hello").is_err());
     }
 
     #[tokio::test]
@@ -571,7 +641,8 @@ mod tests {
             "#,
         )
         .unwrap();
-        let components = super::components_for_campaign(&cfg, "lintian-fixes").unwrap();
+        let components =
+            super::components_for_campaign(&cfg, &Campaign::new("lintian-fixes").unwrap()).unwrap();
         assert_eq!(components, vec!["main", "contrib", "non-free"]);
     }
 
@@ -581,7 +652,7 @@ mod tests {
     #[test]
     fn components_for_campaign_missing_campaign_returns_none() {
         let cfg = janitor::config::read_string(r#""#).unwrap();
-        assert!(super::components_for_campaign(&cfg, "nope").is_none());
+        assert!(super::components_for_campaign(&cfg, &Campaign::new("nope").unwrap()).is_none());
     }
 
     /// Campaign present but no `debian_build` block -> None so the
@@ -589,7 +660,7 @@ mod tests {
     #[test]
     fn components_for_campaign_no_debian_build_returns_none() {
         let cfg = janitor::config::read_string(r#"campaign { name: "generic" }"#).unwrap();
-        assert!(super::components_for_campaign(&cfg, "generic").is_none());
+        assert!(super::components_for_campaign(&cfg, &Campaign::new("generic").unwrap()).is_none());
     }
 
     /// Campaign has debian_build but the base_distribution isn't
@@ -605,7 +676,10 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert!(super::components_for_campaign(&cfg, "lintian-fixes").is_none());
+        assert!(
+            super::components_for_campaign(&cfg, &Campaign::new("lintian-fixes").unwrap())
+                .is_none()
+        );
     }
 
     /// Distribution has an empty component list -> None (rather
@@ -623,6 +697,9 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert!(super::components_for_campaign(&cfg, "lintian-fixes").is_none());
+        assert!(
+            super::components_for_campaign(&cfg, &Campaign::new("lintian-fixes").unwrap())
+                .is_none()
+        );
     }
 }

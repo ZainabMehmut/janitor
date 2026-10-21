@@ -7,7 +7,7 @@ use janitor::{schema::setup_test_database, test_with_database};
 use janitor_archive::config::ArchiveConfig;
 use janitor_archive::database::ArchiveDatabase;
 use janitor_archive::error::ArchiveError;
-use janitor_archive::on_demand::lookup_builds;
+use janitor_archive::on_demand::{lookup_builds, OnDemandTarget};
 use janitor_archive::repository::{RepositoryGenerationConfig, RepositoryGenerator};
 use janitor_archive::scanner::PackageScanner;
 use janitor_archive::web::ArchiveWebService;
@@ -40,7 +40,8 @@ test_with_database! {
         setup_test_database(test_db.pool()).await.unwrap();
         let db = ArchiveDatabase::new(test_db.pool().clone());
 
-        let err = lookup_builds(&db, "run", "no-such-run-id")
+        let target = OnDemandTarget::parse("run", "no-such-run-id").unwrap();
+        let err = lookup_builds(&db, &target)
             .await
             .expect_err("lookup_builds must error on unknown run id");
         assert!(matches!(err, ArchiveError::NotFound(_)), "got: {:?}", err);
@@ -59,5 +60,20 @@ test_with_database! {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+test_with_database! {
+    async fn get_dists_run_invalid_id_responds_400(test_db: TestDatabase) {
+        setup_test_database(test_db.pool()).await.unwrap();
+        let (app, _tmp) = build_app(test_db.pool().clone()).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/dists/run/bad.id/Release")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

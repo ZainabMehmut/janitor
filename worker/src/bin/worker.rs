@@ -33,11 +33,11 @@ struct Args {
 
     /// Request run for specified codebase
     #[clap(long)]
-    codebase: Option<String>,
+    codebase: Option<janitor::CodebaseName>,
 
     /// Request run for specified campaign
     #[clap(long)]
-    campaign: Option<String>,
+    campaign: Option<janitor::Campaign>,
 
     /// Address to listen on
     #[clap(long, default_value = "0.0.0.0")]
@@ -223,8 +223,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &node_name,
                 jenkins_build_url.as_ref(),
                 args.prometheus.as_ref(),
-                args.codebase.as_deref(),
-                args.campaign.as_deref(),
+                args.codebase.as_ref(),
+                args.campaign.as_ref(),
                 args.tee,
                 Some(&args.output_directory),
                 state.clone(),

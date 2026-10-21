@@ -2,6 +2,7 @@
 
 use crate::error::{GitStoreError, Result};
 use git2::{Repository, RepositoryInitOptions};
+use janitor::CodebaseName;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -17,12 +18,12 @@ impl RepositoryManager {
     }
 
     /// Get the path for a repository
-    pub fn repo_path(&self, codebase: &str) -> PathBuf {
+    pub fn repo_path(&self, codebase: &CodebaseName) -> PathBuf {
         self.base_path.join(codebase)
     }
 
     /// Open a repository, creating it if it doesn't exist
-    pub fn open_or_create(&self, codebase: &str) -> Result<Repository> {
+    pub fn open_or_create(&self, codebase: &CodebaseName) -> Result<Repository> {
         let repo_path = self.repo_path(codebase);
 
         match Repository::open(&repo_path) {
@@ -49,7 +50,7 @@ impl RepositoryManager {
     }
 
     /// Check if a repository exists
-    pub fn exists(&self, codebase: &str) -> bool {
+    pub fn exists(&self, codebase: &CodebaseName) -> bool {
         let repo_path = self.repo_path(codebase);
         Repository::open(&repo_path).is_ok()
     }
@@ -72,7 +73,7 @@ impl RepositoryManager {
     }
 
     /// Write remote URL + default fetch refspec.
-    pub fn set_remote(&self, codebase: &str, name: &str, url: &str) -> Result<()> {
+    pub fn set_remote(&self, codebase: &CodebaseName, name: &str, url: &str) -> Result<()> {
         let repo = self.open_or_create(codebase)?;
 
         if repo.find_remote(name).is_ok() {
@@ -136,13 +137,14 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let manager = RepositoryManager::new(temp_dir.path().to_path_buf());
 
-        assert!(!manager.exists("test-repo"));
+        let codebase = CodebaseName::new("test-repo").unwrap();
+        assert!(!manager.exists(&codebase));
 
-        let repo = manager.open_or_create("test-repo").unwrap();
+        let repo = manager.open_or_create(&codebase).unwrap();
         assert!(repo.is_bare());
-        assert!(manager.exists("test-repo"));
+        assert!(manager.exists(&codebase));
 
-        let _repo2 = manager.open_or_create("test-repo").unwrap();
+        let _repo2 = manager.open_or_create(&codebase).unwrap();
     }
 
     #[test]
@@ -154,8 +156,12 @@ mod tests {
 
         assert_eq!(manager.list_repositories().unwrap(), Vec::<String>::new());
 
-        manager.open_or_create("gamma").unwrap();
-        manager.open_or_create("alpha").unwrap();
+        manager
+            .open_or_create(&CodebaseName::new("gamma").unwrap())
+            .unwrap();
+        manager
+            .open_or_create(&CodebaseName::new("alpha").unwrap())
+            .unwrap();
         std::fs::create_dir(temp_dir.path().join("beta")).unwrap();
 
         assert_eq!(

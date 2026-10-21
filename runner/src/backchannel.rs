@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use janitor::RunId;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -71,7 +72,7 @@ pub trait Backchannel {
     async fn kill(&self) -> Result<(), Error>;
 
     /// Signal the worker to terminate gracefully.
-    async fn terminate(&self, _log_id: &str) -> Result<(), Error> {
+    async fn terminate(&self, _log_id: &RunId) -> Result<(), Error> {
         // Default implementation falls back to kill
         self.kill().await
     }
@@ -80,10 +81,10 @@ pub trait Backchannel {
     /// Get the contents of a specific log file from the worker.
     async fn get_log_file(&self, name: &str) -> Result<Vec<u8>, Error>;
     /// Check if the worker is still alive and processing the expected log.
-    async fn ping(&self, log_id: &str) -> Result<(), Error>;
+    async fn ping(&self, log_id: &RunId) -> Result<(), Error>;
 
     /// Get detailed health status from the worker.
-    async fn get_health_status(&self, expected_log_id: &str) -> Result<HealthStatus, Error> {
+    async fn get_health_status(&self, expected_log_id: &RunId) -> Result<HealthStatus, Error> {
         // Default implementation using ping
         match self.ping(expected_log_id).await {
             Ok(()) => Ok(HealthStatus {
@@ -157,7 +158,7 @@ impl Backchannel for JenkinsBackchannel {
         }
     }
 
-    async fn terminate(&self, _log_id: &str) -> Result<(), Error> {
+    async fn terminate(&self, _log_id: &RunId) -> Result<(), Error> {
         // For Jenkins, terminate is the same as kill (stop)
         self.kill().await
     }
@@ -185,7 +186,7 @@ impl Backchannel for JenkinsBackchannel {
             .to_vec())
     }
 
-    async fn ping(&self, expected_log_id: &str) -> Result<(), Error> {
+    async fn ping(&self, expected_log_id: &RunId) -> Result<(), Error> {
         let session = reqwest::Client::new();
         let job = match self.get_job(session).await {
             Ok(job) => job,
@@ -205,7 +206,7 @@ impl Backchannel for JenkinsBackchannel {
         Ok(())
     }
 
-    async fn get_health_status(&self, _expected_log_id: &str) -> Result<HealthStatus, Error> {
+    async fn get_health_status(&self, _expected_log_id: &RunId) -> Result<HealthStatus, Error> {
         let session = reqwest::Client::new();
         let job = match self.get_job(session).await {
             Ok(job) => job,
@@ -313,7 +314,7 @@ impl Backchannel for PollingBackchannel {
         Ok(())
     }
 
-    async fn terminate(&self, log_id: &str) -> Result<(), Error> {
+    async fn terminate(&self, log_id: &RunId) -> Result<(), Error> {
         let session = reqwest::Client::new();
         let url = self
             .my_url
@@ -390,7 +391,7 @@ impl Backchannel for PollingBackchannel {
             .to_vec())
     }
 
-    async fn ping(&self, expected_log_id: &str) -> Result<(), Error> {
+    async fn ping(&self, expected_log_id: &RunId) -> Result<(), Error> {
         let session = reqwest::Client::new();
 
         let log_id = match self.get_log_id(session).await {
@@ -405,7 +406,7 @@ impl Backchannel for PollingBackchannel {
             }
         };
 
-        if log_id != expected_log_id {
+        if log_id != expected_log_id.as_str() {
             return Err(Error::FatalFailure(format!(
                 "Worker started processing new run {} rather than {}",
                 log_id, expected_log_id
@@ -415,7 +416,7 @@ impl Backchannel for PollingBackchannel {
         Ok(())
     }
 
-    async fn get_health_status(&self, expected_log_id: &str) -> Result<HealthStatus, Error> {
+    async fn get_health_status(&self, expected_log_id: &RunId) -> Result<HealthStatus, Error> {
         let session = reqwest::Client::new();
 
         // Try to get detailed status first
@@ -442,7 +443,7 @@ impl Backchannel for PollingBackchannel {
 
             let final_status = match status.as_deref() {
                 Some("processing") | Some("building") | Some("running") => {
-                    if current_log_id.as_ref() == Some(&expected_log_id.to_string()) {
+                    if current_log_id.as_deref() == Some(expected_log_id.as_str()) {
                         "running".to_string()
                     } else {
                         "different-run".to_string()
@@ -450,7 +451,7 @@ impl Backchannel for PollingBackchannel {
                 }
                 Some(s) => s.to_string(),
                 None => {
-                    if alive && current_log_id.as_ref() == Some(&expected_log_id.to_string()) {
+                    if alive && current_log_id.as_deref() == Some(expected_log_id.as_str()) {
                         "running".to_string()
                     } else if alive {
                         "different-run".to_string()
@@ -472,7 +473,7 @@ impl Backchannel for PollingBackchannel {
         // Fall back to basic ping-based health check
         match self.get_log_id(session).await {
             Ok(log_id) => {
-                let alive = log_id == expected_log_id;
+                let alive = log_id == expected_log_id.as_str();
                 Ok(HealthStatus {
                     alive,
                     current_run_id: Some(log_id),

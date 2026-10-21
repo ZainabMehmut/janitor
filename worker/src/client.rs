@@ -1,6 +1,7 @@
 use crate::get_build_arch;
 use backoff::ExponentialBackoff;
 use janitor::api::worker::{Assignment, Metadata};
+use janitor::{Campaign, CodebaseName, RunId};
 use reqwest::multipart::{Form, Part};
 use reqwest::{Error as ReqwestError, Response, StatusCode, Url};
 use std::error::Error;
@@ -31,8 +32,8 @@ pub async fn get_assignment_raw(
     base_url: &Url,
     node_name: &str,
     jenkins_build_url: Option<&Url>,
-    codebase: Option<&str>,
-    campaign: Option<&str>,
+    codebase: Option<&CodebaseName>,
+    campaign: Option<&Campaign>,
 ) -> Result<serde_json::Value, AssignmentError> {
     let assign_url = base_url
         .join("active-runs")
@@ -155,8 +156,8 @@ pub async fn get_assignment(
     base_url: &Url,
     node_name: &str,
     jenkins_build_url: Option<&Url>,
-    codebase: Option<&str>,
-    campaign: Option<&str>,
+    codebase: Option<&CodebaseName>,
+    campaign: Option<&Campaign>,
 ) -> Result<Assignment, AssignmentError> {
     let assignment = get_assignment_raw(
         session,
@@ -266,8 +267,8 @@ impl Client {
         my_url: Option<&Url>,
         node_name: &str,
         jenkins_build_url: Option<&Url>,
-        codebase: Option<&str>,
-        campaign: Option<&str>,
+        codebase: Option<&CodebaseName>,
+        campaign: Option<&Campaign>,
     ) -> Result<Assignment, AssignmentError> {
         get_assignment(
             &self.client,
@@ -287,8 +288,8 @@ impl Client {
         my_url: Option<&Url>,
         node_name: &str,
         jenkins_build_url: Option<&Url>,
-        codebase: Option<&str>,
-        campaign: Option<&str>,
+        codebase: Option<&CodebaseName>,
+        campaign: Option<&Campaign>,
     ) -> Result<serde_json::Value, AssignmentError> {
         get_assignment_raw(
             &self.client,
@@ -305,7 +306,7 @@ impl Client {
 
     pub async fn upload_results(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         metadata: &Metadata,
         output_directory: Option<&Path>,
     ) -> Result<serde_json::Value, UploadFailure> {
@@ -387,7 +388,7 @@ pub async fn upload_results(
     client: &reqwest::Client,
     credentials: &Credentials,
     base_url: &Url,
-    run_id: &str,
+    run_id: &RunId,
     metadata: &Metadata,
     output_directory: Option<&Path>,
 ) -> Result<serde_json::Value, UploadFailure> {
@@ -500,7 +501,7 @@ pub async fn upload_results(
     }).await
 }
 
-pub async fn abort_run(client: &Client, run_id: &str, metadata: &Metadata, description: &str) {
+pub async fn abort_run(client: &Client, run_id: &RunId, metadata: &Metadata, description: &str) {
     let mut metadata: Metadata = metadata.clone();
     metadata.code = Some("aborted".to_string());
     metadata.description = Some(description.to_string());
@@ -565,7 +566,7 @@ mod tests {
     }
 
     async fn mock_finish(
-        AxumPath(_run_id): AxumPath<String>,
+        AxumPath(_run_id): AxumPath<RunId>,
         State(state): State<MockState>,
         _body: axum::body::Bytes,
     ) -> impl IntoResponse {
@@ -602,7 +603,7 @@ mod tests {
             &reqwest::Client::new(),
             &Credentials::None,
             &base_url,
-            "run-1",
+            &RunId::new("run-1").unwrap(),
             &metadata,
             None,
         )
@@ -630,7 +631,7 @@ mod tests {
                 &reqwest::Client::new(),
                 &Credentials::None,
                 &base_url,
-                "run-2",
+                &RunId::new("run-2").unwrap(),
                 &metadata,
                 None,
             ),
@@ -668,7 +669,7 @@ mod tests {
                 &reqwest::Client::new(),
                 &Credentials::None,
                 &base_url,
-                "run-3",
+                &RunId::new("run-3").unwrap(),
                 &metadata,
                 None,
             ),

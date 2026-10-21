@@ -169,7 +169,7 @@ async fn get_artifacts(State(state): State<Arc<RwLock<AppState>>>, headers: Head
 
 async fn get_log_id(State(state): State<Arc<RwLock<AppState>>>) -> Response {
     match state.read().unwrap().assignment.as_ref() {
-        Some(a) => a.id.clone().into_response(),
+        Some(a) => a.id.to_string().into_response(),
         None => (StatusCode::NOT_FOUND, "no run in progress").into_response(),
     }
 }
@@ -332,10 +332,10 @@ mod tests {
 
         if let Ok(mut state) = state.write() {
             state.assignment = Some(Assignment {
-                id: "test".to_string(),
+                id: janitor::RunId::new("test").unwrap(),
                 queue_id: 1,
-                campaign: "lintian-fixes".to_string(),
-                codebase: "foo".to_string(),
+                campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
+                codebase: janitor::CodebaseName::new("foo").unwrap(),
                 force_build: true,
                 branch: janitor::api::worker::Branch {
                     cached_url: None,
@@ -397,10 +397,10 @@ mod tests {
         let state = Arc::new(RwLock::new(AppState::default()));
         if let Ok(mut state) = state.write() {
             state.assignment = Some(Assignment {
-                id: "test".to_string(),
+                id: janitor::RunId::new("test").unwrap(),
                 queue_id: 1,
-                campaign: "lintian-fixes".to_string(),
-                codebase: "foo".to_string(),
+                campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
+                codebase: janitor::CodebaseName::new("foo").unwrap(),
                 force_build: true,
                 branch: janitor::api::worker::Branch {
                     cached_url: None,
@@ -840,10 +840,10 @@ mod tests {
 
         if let Ok(mut state) = state.write() {
             state.assignment = Some(Assignment {
-                id: "test".to_string(),
+                id: janitor::RunId::new("test").unwrap(),
                 queue_id: 1,
-                campaign: "lintian-fixes".to_string(),
-                codebase: "foo".to_string(),
+                campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
+                codebase: janitor::CodebaseName::new("foo").unwrap(),
                 force_build: true,
                 branch: janitor::api::worker::Branch {
                     cached_url: None,

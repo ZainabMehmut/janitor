@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use janitor::redis::{PubSubMessage, RedisManager};
+use janitor::{Campaign, CodebaseName, RunId};
 use log::{debug, error, info};
 use redis::aio::ConnectionManager;
 use tokio::sync::mpsc;
@@ -84,9 +85,9 @@ impl RedisPublisher {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PublishEvent {
     /// The codebase that was published.
-    pub codebase: String,
+    pub codebase: CodebaseName,
     /// The campaign/suite that was published.
-    pub campaign: String,
+    pub campaign: Campaign,
     /// The publish mode used.
     pub mode: String,
     /// The result code of the publish operation.
@@ -123,9 +124,9 @@ pub struct MergeProposalEvent {
     /// Status of the merge proposal.
     pub status: String,
     /// The codebase this proposal belongs to.
-    pub codebase: String,
+    pub codebase: CodebaseName,
     /// The campaign/suite this proposal belongs to.
-    pub campaign: String,
+    pub campaign: Campaign,
     /// The target branch URL.
     pub target_branch_url: String,
     /// Optional target branch web URL.
@@ -148,13 +149,13 @@ impl PubSubMessage for MergeProposalEvent {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PublishStatusMessage {
     /// Run id the status applies to.
-    pub run_id: String,
+    pub run_id: RunId,
     /// New publish_status value. The publisher acts only on `"approved"`.
     pub publish_status: String,
     /// Codebase the run belongs to.
-    pub codebase: String,
+    pub codebase: CodebaseName,
     /// Campaign (run.suite) the run belongs to.
-    pub campaign: String,
+    pub campaign: Campaign,
 }
 
 impl PubSubMessage for PublishStatusMessage {
@@ -422,6 +423,17 @@ mod tests {
         assert_eq!(message.campaign, "lintian-fixes");
     }
 
+    #[test]
+    fn test_publish_status_message_rejects_invalid_identifiers() {
+        let json = r#"{
+            "run_id": "run-1",
+            "publish_status": "approved",
+            "codebase": "../cb-1",
+            "campaign": "lintian-fixes"
+        }"#;
+        assert!(serde_json::from_str::<PublishStatusMessage>(json).is_err());
+    }
+
     test_with_database! {
         async fn test_approved_run_target_ignores_codebase_branch_url(test_db: TestDatabase) {
             let pool = test_db.pool();
@@ -445,7 +457,8 @@ mod tests {
 
             let mut targets = Vec::new();
             for run_id in ["run-target", "run-plain"] {
-                let run = crate::state::get_run(pool, run_id).await.unwrap().unwrap();
+                let run_id = RunId::new(run_id).unwrap();
+                let run = crate::state::get_run(pool, &run_id).await.unwrap().unwrap();
                 targets.push(approved_run_target(&run).unwrap().to_string());
             }
             assert_eq!(

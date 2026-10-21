@@ -7,6 +7,7 @@ use tracing::debug;
 
 // Import shared database utilities
 use janitor::database::{Database as SharedDatabase, DatabaseError};
+use janitor::{ChangeSetId, CodebaseName, RunId};
 
 use crate::error::{ArchiveError, ArchiveResult};
 use crate::scanner::BuildInfo;
@@ -24,9 +25,9 @@ pub struct BuildRecord {
     /// Synthetic `<run_id>/<source>` key -- unique across the table.
     pub id: String,
     /// `debian_build.run_id`, used for artifact retrieval.
-    pub run_id: String,
+    pub run_id: RunId,
     /// `run.codebase`.
-    pub codebase: String,
+    pub codebase: CodebaseName,
     /// `debian_build.distribution` (the build target).
     pub suite: String,
     /// `debian_build.source` (used as `package` in the projection too).
@@ -146,7 +147,7 @@ impl ArchiveDatabase {
     /// Get builds for a specific changeset.
     pub async fn get_builds_for_changeset(
         &self,
-        changeset_id: &str,
+        changeset_id: &ChangeSetId,
     ) -> ArchiveResult<Vec<BuildRecord>> {
         debug!("Querying builds for changeset: {}", changeset_id);
 
@@ -183,7 +184,7 @@ impl ArchiveDatabase {
     }
 
     /// Get builds for a specific run.
-    pub async fn get_builds_for_run(&self, run_id: &str) -> ArchiveResult<Vec<BuildRecord>> {
+    pub async fn get_builds_for_run(&self, run_id: &RunId) -> ArchiveResult<Vec<BuildRecord>> {
         debug!("Querying builds for run: {}", run_id);
 
         // See `get_builds_for_suite` for the schema rationale.

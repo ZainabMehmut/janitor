@@ -14,6 +14,7 @@ use janitor::config::Campaign;
 use janitor::publish::{MergeProposalStatus, Mode};
 use janitor::state::Run;
 use janitor::vcs::{VcsManager, VcsType};
+use janitor::{CodebaseName, PublishId, RunId};
 use reqwest::header::HeaderMap;
 use serde::ser::SerializeStruct;
 use std::collections::HashMap;
@@ -49,6 +50,11 @@ use rate_limiter::RateLimiter;
 pub use crate::redis::RedisConnectionManager;
 // Import pyo3 for PyErr
 use pyo3::{exceptions::PyRuntimeError, PyErr};
+
+/// Generate a fresh publish id.
+pub fn new_publish_id() -> PublishId {
+    PublishId::new(uuid::Uuid::new_v4().to_string()).expect("a UUID is a valid publish id")
+}
 
 /// Calculate the next time to try publishing based on previous attempts.
 ///
@@ -386,8 +392,8 @@ impl std::error::Error for DebdiffError {
 /// The debdiff as a byte vector, or an error
 pub fn get_debdiff(
     differ_url: &url::Url,
-    unchanged_id: Option<&str>,
-    log_id: &str,
+    unchanged_id: Option<&RunId>,
+    log_id: &RunId,
 ) -> Result<Vec<u8>, DebdiffError> {
     // The differ's /debdiff/{old_id}/{new_id} route has no representation
     // for "no control run" - an empty or missing old_id segment doesn't
@@ -440,19 +446,19 @@ pub fn get_debdiff(
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct PublishOneRequest {
     /// The campaign name.
-    pub campaign: String,
+    pub campaign: janitor::Campaign,
     /// The URL of the target branch.
     pub target_branch_url: url::Url,
     /// The role of the publisher.
     pub role: String,
-    /// The ID of the log.
-    pub log_id: String,
+    /// The ID of the run being published.
+    pub log_id: RunId,
     /// Optional list of reviewers.
     pub reviewers: Option<Vec<String>>,
     /// The revision ID of the change.
     pub revision_id: RevisionId,
     /// The ID of the unchanged run.
-    pub unchanged_id: Option<String>,
+    pub unchanged_id: Option<RunId>,
     /// Whether to require a binary diff.
     #[serde(rename = "require-binary-diff")]
     pub require_binary_diff: bool,
@@ -871,15 +877,15 @@ impl PublishWorker {
     #[allow(clippy::too_many_arguments)]
     pub async fn publish_one(
         &self,
-        campaign: &str,
-        codebase: &str,
+        campaign: &janitor::Campaign,
+        codebase: &CodebaseName,
         command: &str,
         target_branch_url: &url::Url,
         mode: Mode,
         role: &str,
         revision: &RevisionId,
-        log_id: &str,
-        unchanged_id: Option<&str>,
+        log_id: &RunId,
+        unchanged_id: Option<&RunId>,
         derived_branch_name: &str,
         rate_limit_bucket: Option<&str>,
         vcs_manager: &dyn VcsManager,
@@ -900,7 +906,7 @@ impl PublishWorker {
             vcs_manager.get_branch_url(codebase, &format!("{}/{}", campaign, role));
 
         let request = PublishOneRequest {
-            campaign: campaign.to_owned(),
+            campaign: campaign.clone(),
             command: command.to_owned(),
             codemod_result: codemod_result.clone(),
             target_branch_url: target_branch_url.clone(),
@@ -909,8 +915,8 @@ impl PublishWorker {
             derived_branch_name: derived_branch_name.to_owned(),
             mode,
             role: role.to_owned(),
-            log_id: log_id.to_owned(),
-            unchanged_id: unchanged_id.map(str::to_owned),
+            log_id: log_id.clone(),
+            unchanged_id: unchanged_id.cloned(),
             require_binary_diff,
             allow_create_proposal,
             external_url: self.external_url.clone(),
@@ -1001,8 +1007,8 @@ impl PublishWorker {
                             .to_string(),
                         web_url: result.proposal_web_url.as_ref().map(|u| u.to_string()),
                         status: "open".to_string(),
-                        codebase: codebase.to_string(),
-                        campaign: campaign.to_string(),
+                        codebase: codebase.clone(),
+                        campaign: campaign.clone(),
                         target_branch_url: result.target_branch_url.to_string(),
                         target_branch_web_url: result
                             .target_branch_web_url
@@ -1092,7 +1098,7 @@ pub async fn derived_branch_name(
 /// * `None`: no rows matched, so we can't tell.
 async fn has_cotenants(
     conn: &sqlx::PgPool,
-    codebase: &str,
+    codebase: &CodebaseName,
     branch_url: &str,
 ) -> Result<Option<bool>, sqlx::Error> {
     let url = match url::Url::parse(branch_url) {
@@ -1102,7 +1108,7 @@ async fn has_cotenants(
         Err(_) => branch_url.to_string(),
     };
 
-    let rows: Vec<(String,)> =
+    let rows: Vec<(CodebaseName,)> =
         sqlx::query_as("SELECT name FROM codebase WHERE branch_url = $1 OR url = $1")
             .bind(url.trim_end_matches('/'))
             .fetch_all(conn)
@@ -1117,7 +1123,7 @@ async fn has_cotenants(
             );
             None
         }
-        1 => Some(rows[0].0 != codebase),
+        1 => Some(&rows[0].0 != codebase),
         _ => Some(true),
     })
 }
@@ -1414,9 +1420,9 @@ pub async fn abandon_mp(
     proposal_info_manager: &mut proposal_info::ProposalInfoManager,
     mp: &breezyshim::forge::MergeProposal,
     revision: &RevisionId,
-    codebase: Option<&str>,
+    codebase: Option<&CodebaseName>,
     target_branch_url: &str,
-    campaign: Option<&str>,
+    campaign: Option<&janitor::Campaign>,
     can_be_merged: Option<bool>,
     rate_limit_bucket: Option<&str>,
     comment: Option<&str>,
@@ -1440,7 +1446,7 @@ pub async fn abandon_mp(
                     e
                 )))
             })?,
-            campaign.unwrap_or(""),
+            campaign,
             can_be_merged,
             rate_limit_bucket,
         )
@@ -1515,9 +1521,9 @@ pub async fn close_applied_mp(
     proposal_info_manager: &mut proposal_info::ProposalInfoManager,
     mp: &breezyshim::forge::MergeProposal,
     revision: &RevisionId,
-    codebase: Option<&str>,
+    codebase: Option<&CodebaseName>,
     target_branch_url: &str,
-    campaign: Option<&str>,
+    campaign: Option<&janitor::Campaign>,
     can_be_merged: Option<bool>,
     rate_limit_bucket: Option<&str>,
     comment: Option<&str>,
@@ -1537,7 +1543,7 @@ pub async fn close_applied_mp(
                     e
                 )))
             })?,
-            campaign.unwrap_or(""),
+            campaign,
             can_be_merged,
             rate_limit_bucket,
         )
@@ -1731,13 +1737,13 @@ mod tests {
     #[test]
     fn test_publish_one_request_serde() {
         let request = PublishOneRequest {
-            campaign: "lintian-fixes".to_string(),
+            campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
             target_branch_url: url::Url::parse("https://salsa.debian.org/foo/bar").unwrap(),
             role: "main".to_string(),
-            log_id: "log-123".to_string(),
+            log_id: RunId::new("log-123").unwrap(),
             reviewers: Some(vec!["alice".to_string()]),
             revision_id: breezyshim::RevisionId::from(b"rev-1".to_vec()),
-            unchanged_id: Some("unchanged-456".to_string()),
+            unchanged_id: Some(RunId::new("unchanged-456").unwrap()),
             require_binary_diff: true,
             differ_url: url::Url::parse("https://differ.example.com").unwrap(),
             derived_branch_name: "lintian-fixes".to_string(),
@@ -1838,7 +1844,7 @@ mod tests {
         // for a codebase's first-ever run, not a differ failure, so it
         // gets its own variant rather than an empty MissingRun id.
         let differ_url = url::Url::parse("http://127.0.0.1:1").unwrap();
-        let err = get_debdiff(&differ_url, None, "log-123").unwrap_err();
+        let err = get_debdiff(&differ_url, None, &RunId::new("log-123").unwrap()).unwrap_err();
         assert!(matches!(err, DebdiffError::NoUnchangedRun));
         assert_eq!(err.to_string(), "No unchanged run to compare against yet");
     }
@@ -2475,6 +2481,8 @@ pub enum CheckMpError {
     Database(sqlx::Error),
     /// A breezyshim/forge call failed in a way we couldn't classify.
     Brz(String),
+    /// A campaign or codebase name from the configuration is invalid.
+    InvalidIdentifier(janitor::InvalidIdentifier),
 }
 
 impl From<BrzError> for CheckMpError {
@@ -2484,6 +2492,12 @@ impl From<BrzError> for CheckMpError {
             BrzError::ForgeLoginRequired => CheckMpError::ForgeLoginRequired,
             other => CheckMpError::Brz(other.to_string()),
         }
+    }
+}
+
+impl From<janitor::InvalidIdentifier> for CheckMpError {
+    fn from(e: janitor::InvalidIdentifier) -> Self {
+        CheckMpError::InvalidIdentifier(e)
     }
 }
 
@@ -2506,6 +2520,7 @@ impl std::fmt::Display for CheckMpError {
             CheckMpError::ForgeLoginRequired => write!(f, "Forge login required"),
             CheckMpError::Database(e) => write!(f, "Database error: {}", e),
             CheckMpError::Brz(msg) => write!(f, "Forge error: {}", msg),
+            CheckMpError::InvalidIdentifier(e) => write!(f, "{}", e),
         }
     }
 }
@@ -2595,7 +2610,7 @@ pub async fn publish_from_policy(
         return Ok(None);
     }
 
-    let publish_id = uuid::Uuid::new_v4().to_string();
+    let publish_id = new_publish_id();
     if matches!(mode, Mode::BuildOnly | Mode::Skip) {
         return Ok(None);
     }
@@ -2707,8 +2722,8 @@ pub async fn publish_from_policy(
 
     // unchanged_run: most recent successful last_runs row at this
     // role's base revision. Python uses last_runs, not run.
-    let unchanged_run: Option<(String, String)> = if let Some(br) = base_revision.as_ref() {
-        sqlx::query_as::<_, (String, String)>(
+    let unchanged_run: Option<(RunId, String)> = if let Some(br) = base_revision.as_ref() {
+        sqlx::query_as::<_, (RunId, String)>(
             "SELECT id, result_code FROM last_runs \
              WHERE codebase = $1 AND revision = $2 AND result_code = 'success'",
         )
@@ -2780,7 +2795,7 @@ pub async fn publish_from_policy(
             role,
             &revision,
             &run.id,
-            unchanged_run.as_ref().map(|(id, _)| id.as_str()),
+            unchanged_run.as_ref().map(|(id, _)| id),
             &derived_name,
             rate_limit_bucket,
             vcs_manager,
@@ -2959,7 +2974,7 @@ pub async fn publish_and_store(
     redis_manager: Option<&Arc<janitor::redis::RedisManager>>,
     campaign_config: &Campaign,
     publish_worker: &PublishWorker,
-    publish_id: &str,
+    publish_id: &PublishId,
     run: &janitor::state::Run,
     mode: Mode,
     role: &str,
@@ -2999,9 +3014,9 @@ pub async fn publish_and_store(
     // main-branch revision. Used as `unchanged_id` so the publisher
     // can diff against the pre-codemod tree. Matches the inline SQL
     // in py/janitor/publish.py::publish_and_store.
-    let unchanged_run_id: Option<String> = if let Some(main_rev) = run.main_branch_revision.as_ref()
+    let unchanged_run_id: Option<RunId> = if let Some(main_rev) = run.main_branch_revision.as_ref()
     {
-        sqlx::query_scalar::<_, String>(
+        sqlx::query_scalar::<_, RunId>(
             "SELECT id FROM run \
                  WHERE codebase = $1 AND revision = $2 AND result_code = 'success' \
                  ORDER BY finish_time DESC LIMIT 1",
@@ -3052,7 +3067,7 @@ pub async fn publish_and_store(
             role,
             &revision,
             &run.id,
-            unchanged_run_id.as_deref(),
+            unchanged_run_id.as_ref(),
             &derived_name,
             rate_limit_bucket,
             vcs_manager,
@@ -3230,7 +3245,7 @@ async fn check_existing_mp(
     let old_proposal_info = proposal_info_manager.get_proposal_info(&mp_url).await?;
 
     let (mut codebase, mut rate_limit_bucket) = if let Some(info) = &old_proposal_info {
-        // info.codebase is now Option<String> - the merge_proposal
+        // info.codebase is Option<CodebaseName> - the merge_proposal
         // row's codebase can be NULL for forge-discovered proposals
         // we haven't matched to a candidate yet. Pass through as-is;
         // the guess-from-revision pass below will populate it.
@@ -3492,9 +3507,9 @@ async fn check_existing_mp(
         // the local codebase so sqlx binds NULL - schema allows it
         // (`codebase text references codebase(name) on delete set null`).
         // Python passes Optional[str] here for the same reason.
-        let codebase_for_update: Option<&str> = codebase.as_deref();
+        let codebase_for_update: Option<&CodebaseName> = codebase.as_ref();
         let mp_run = crate::state::get_merge_proposal_run(conn, &mp_url).await?;
-        let campaign_for_update = mp_run.as_ref().map(|r| r.campaign.as_str()).unwrap_or("");
+        let campaign_for_update = mp_run.as_ref().map(|r| &r.campaign);
         let target_url_for_update = match &target_branch_url {
             Some(u) => u.clone(),
             None => {
@@ -3559,13 +3574,14 @@ async fn check_existing_mp(
     // through with a synthetic mp_run so the republish path can act.
     // Without those we cannot proceed and raise NoRunForMergeProposal.
     if mp_run.is_none() {
-        let cb = codebase.as_deref();
+        let cb = codebase.as_ref();
         let branch = source_branch_name.as_deref();
         match (cb, branch) {
             (Some(cb), Some(branch_name)) => {
                 if let Some((campaign_name, role)) =
                     config.find_campaign_by_branch_name(branch_name)
                 {
+                    let campaign_name = janitor::Campaign::new(campaign_name)?;
                     log::warn!(
                         "Recovered orphaned merge proposal {} (codebase={}, campaign={})",
                         mp_url,
@@ -3573,11 +3589,11 @@ async fn check_existing_mp(
                         campaign_name
                     );
                     let last_run =
-                        crate::state::get_last_effective_run(conn, cb, campaign_name).await?;
+                        crate::state::get_last_effective_run(conn, cb, &campaign_name).await?;
                     if last_run.is_none() {
                         match janitor::schedule::do_schedule(
                             conn,
-                            campaign_name,
+                            &campaign_name,
                             cb,
                             "update-existing-mp",
                             None,
@@ -3640,16 +3656,16 @@ async fn check_existing_mp(
                     };
                     log::warn!("Going ahead with dummy old run for {}", mp_url);
                     mp_run = Some(crate::state::MergeProposalRun {
-                        id: String::new(),
-                        campaign: campaign_name.to_string(),
+                        id: None,
+                        campaign: campaign_name,
                         branch_url: synth_branch_url,
                         command: String::new(),
                         value: 0,
                         role: role.to_string(),
                         remote_branch_name: String::new(),
                         revision: synth_revision,
-                        codebase: cb.to_string(),
-                        change_set: String::new(),
+                        codebase: cb.clone(),
+                        change_set: None,
                     });
                 } else {
                     return Err(CheckMpError::NoRunForMergeProposal(mp_url.clone()));
@@ -3747,9 +3763,9 @@ async fn check_existing_mp(
                 &mut proposal_info_manager,
                 mp,
                 rev,
-                Some(mp_run.codebase.as_str()),
+                Some(&mp_run.codebase),
                 &target.to_string(),
-                Some(mp_run.campaign.as_str()),
+                Some(&mp_run.campaign),
                 can_be_merged,
                 rate_limit_bucket.as_deref(),
                 Some(
@@ -3843,9 +3859,9 @@ async fn check_existing_mp(
                 &mut proposal_info_manager,
                 mp,
                 rev,
-                Some(mp_run.codebase.as_str()),
+                Some(&mp_run.codebase),
                 &target.to_string(),
-                Some(mp_run.campaign.as_str()),
+                Some(&mp_run.campaign),
                 can_be_merged,
                 rate_limit_bucket.as_deref(),
                 Some("This merge proposal will be closed, since only trivial changes are left."),
@@ -3872,7 +3888,7 @@ async fn check_existing_mp(
             Some(t) => t,
             None => {
                 log::warn!(
-                    "{}: merge proposal run {} had role {} but it is gone now ({})",
+                    "{}: merge proposal run {:?} had role {} but it is gone now ({})",
                     mp_url,
                     mp_run.id,
                     mp_run.role,
@@ -3938,9 +3954,9 @@ async fn check_existing_mp(
                         &mut proposal_info_manager,
                         mp,
                         rev,
-                        Some(mp_run.codebase.as_str()),
+                        Some(&mp_run.codebase),
                         &target.to_string(),
-                        Some(mp_run.campaign.as_str()),
+                        Some(&mp_run.campaign),
                         can_be_merged,
                         rate_limit_bucket.as_deref(),
                         Some(&comment),
@@ -3982,10 +3998,10 @@ async fn check_existing_mp(
     }
 
     // New run available: republish the proposal.
-    if last_run.id != mp_run.id {
+    if mp_run.id.as_ref() != Some(&last_run.id) {
         if last_run_revision.as_ref().map(|r| r.to_string()) == Some(mp_run.revision.to_string()) {
             log::warn!(
-                "{} ({}): old run ({}/{}) has same revision as new run ({}/{}): {:?}",
+                "{} ({}): old run ({:?}/{}) has same revision as new run ({}/{}): {:?}",
                 mp_url,
                 mp_run.codebase,
                 mp_run.id,
@@ -3997,9 +4013,9 @@ async fn check_existing_mp(
             return Ok(false);
         }
 
-        let publish_id = uuid::Uuid::new_v4().to_string();
+        let publish_id = new_publish_id();
         log::info!(
-            "{} ({}) needs to be updated ({} -> {}).",
+            "{} ({}) needs to be updated ({:?} -> {}).",
             mp_url,
             mp_run.codebase,
             mp_run.id,
@@ -4048,9 +4064,9 @@ async fn check_existing_mp(
 
         // unchanged_run_id: most recent successful run on the same
         // codebase + main_branch_revision.
-        let unchanged_run_id: Option<String> =
+        let unchanged_run_id: Option<RunId> =
             if let Some(main_rev) = last_run.main_branch_revision.as_ref() {
-                sqlx::query_scalar::<_, String>(
+                sqlx::query_scalar::<_, RunId>(
                     "SELECT id FROM run \
                      WHERE codebase = $1 AND revision = $2 AND result_code = 'success' \
                      ORDER BY finish_time DESC LIMIT 1",
@@ -4123,7 +4139,7 @@ async fn check_existing_mp(
                 &mp_run.role,
                 &last_run_revision_value,
                 &last_run.id,
-                unchanged_run_id.as_deref(),
+                unchanged_run_id.as_ref(),
                 &derived_name,
                 rate_limit_bucket.as_deref(),
                 vcs_manager_for_publish,
@@ -4162,7 +4178,7 @@ async fn check_existing_mp(
                     "success",
                     &description,
                     publish_result.proposal_url(),
-                    Some(publish_id.as_str()),
+                    Some(&publish_id),
                     Some("publisher (regular refresh)"),
                     Some(&last_run.id),
                 )
@@ -4198,9 +4214,9 @@ async fn check_existing_mp(
                             &mut proposal_info_manager,
                             mp,
                             rev,
-                            codebase.as_deref(),
+                            codebase.as_ref(),
                             target_branch_url_for_publish.as_str(),
-                            Some(mp_run.campaign.as_str()),
+                            Some(&mp_run.campaign),
                             can_be_merged,
                             rate_limit_bucket.as_deref(),
                             Some(
@@ -4261,7 +4277,7 @@ async fn check_existing_mp(
                     &code,
                     &description,
                     Some(&mp_url),
-                    Some(publish_id.as_str()),
+                    Some(&publish_id),
                     Some("publisher (regular refresh)"),
                     Some(&last_run.id),
                 )
@@ -4283,7 +4299,7 @@ async fn check_existing_mp(
             &mp_run.campaign,
             &mp_run.codebase,
             "update-existing-mp",
-            Some(&mp_run.change_set),
+            mp_run.change_set.as_ref(),
             None,
             true,
             Some("publisher (merge conflict)"),
@@ -4323,9 +4339,9 @@ async fn abandon_or_close_mp_async(
     proposal_info_manager: &mut proposal_info::ProposalInfoManager,
     mp: &breezyshim::forge::MergeProposal,
     revision: &RevisionId,
-    codebase: Option<&str>,
+    codebase: Option<&CodebaseName>,
     target_branch_url: &str,
-    campaign: Option<&str>,
+    campaign: Option<&janitor::Campaign>,
     can_be_merged: Option<bool>,
     rate_limit_bucket: Option<&str>,
     comment: Option<&str>,
@@ -4738,6 +4754,11 @@ async fn check_existing(
             }
             Err(CheckMpError::Brz(msg)) => {
                 log::warn!("Forge call failed checking merge proposal: {}", msg);
+                false
+            }
+            Err(CheckMpError::InvalidIdentifier(e)) => {
+                log::error!("Invalid identifier checking merge proposal: {}", e);
+                unexpected += 1;
                 false
             }
         };
@@ -5194,8 +5215,8 @@ async fn get_publish_attempt_count(
 /// level so each row comes back as `(role, mode, frequency_days)`.
 pub async fn get_publish_policy(
     conn: &sqlx::PgPool,
-    codebase: &str,
-    campaign: &str,
+    codebase: &CodebaseName,
+    campaign: &janitor::Campaign,
 ) -> Result<
     Option<(
         HashMap<String, (String, Option<i32>)>,

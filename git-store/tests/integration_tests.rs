@@ -1598,3 +1598,73 @@ db_test! {
         handle.abort();
     }
 }
+
+db_test! {
+    async fn test_admin_invalid_codebase_400(test_db: TestDatabase) {
+        setup_test_database(test_db.pool()).await.unwrap();
+        let tmp = TempDir::new().unwrap();
+        let state = build_state(&tmp, &test_db, AppRole::Admin).await;
+        let app = web::create_admin_app(state, 0);
+        let (addr, handle) = spawn(app).await;
+
+        let client = reqwest::Client::new();
+        for path in [
+            "/Upper/diff?old=a&new=b",
+            "/under_score/revision-info?old=a&new=b",
+            "/x/log?new=0000000000000000000000000000000000000000",
+            "/..%2F..%2Fetc/info/refs?service=git-upload-pack",
+        ] {
+            let resp = client
+                .get(format!("http://{}{}", addr, path))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 400, "{}", path);
+        }
+        let resp = client
+            .post(format!("http://{}/Bad/remotes/upstream", addr))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body("url=https%3A%2F%2Fexample.com%2Fr.git")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+
+        handle.abort();
+    }
+}
+
+db_test! {
+    async fn test_public_invalid_codebase_400(test_db: TestDatabase) {
+        setup_test_database(test_db.pool()).await.unwrap();
+        let tmp = TempDir::new().unwrap();
+        let state = build_state(&tmp, &test_db, AppRole::Public).await;
+        let app = web::create_public_app(state, 0);
+        let (addr, handle) = spawn(app).await;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!(
+                "http://{}/git/Ghost/info/refs?service=git-upload-pack",
+                addr
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+
+        // klaus browsing is validated before touching the filesystem.
+        for path in ["/git/Ghost/", "/git/Ghost/tree/master/"] {
+            let resp = client
+                .get(format!("http://{}{}", addr, path))
+                .header("User-Agent", "Mozilla/5.0 (test)")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 400, "{}", path);
+        }
+        assert!(!tmp.path().join("Ghost").exists());
+
+        handle.abort();
+    }
+}

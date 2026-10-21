@@ -3,6 +3,7 @@
 use crate::database::RunnerDatabase;
 use crate::ActiveRun;
 use chrono::{DateTime, Duration, Utc};
+use janitor::RunId;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{interval, sleep};
@@ -165,11 +166,11 @@ pub struct Watchdog {
     database: Arc<RunnerDatabase>,
     active_runs: crate::active_runs::ActiveRunStore,
     config: WatchdogConfig,
-    health_failures: HashMap<String, u32>,
+    health_failures: HashMap<RunId, u32>,
     /// First time each run was seen reporting `idle` since its last
     /// non-idle poll. Used to bound how long we'll wait for a queued
     /// Jenkins build / freshly-assigned worker to actually start.
-    idle_since: HashMap<String, DateTime<Utc>>,
+    idle_since: HashMap<RunId, DateTime<Utc>>,
 }
 
 impl Watchdog {
@@ -339,7 +340,7 @@ impl Watchdog {
                         // Additional check: if run is completed but still in active list,
                         // this might indicate a cleanup issue
                         if health.status == "completed"
-                            && health.current_run_id.as_ref() != Some(&run.log_id)
+                            && health.current_run_id.as_deref() != Some(run.log_id.as_str())
                         {
                             log::warn!("Worker reports completion of different run ({:?}) than expected ({})", 
                                      health.current_run_id, run.log_id);
@@ -398,8 +399,12 @@ impl Watchdog {
                         // 3) The reported run is NOT in active-runs
                         //    -- genuine drift / lost assignment. Kill
                         //    the stale side.
-                        let other_run = match health.current_run_id.as_ref() {
-                            Some(other) => self.active_runs.get(other).await,
+                        let other_run = match health.current_run_id.as_deref().map(RunId::new) {
+                            Some(Ok(other)) => self.active_runs.get(&other).await,
+                            Some(Err(e)) => {
+                                log::warn!("Worker {} reports {}", run.worker_name, e);
+                                None
+                            }
                             None => None,
                         };
                         match other_run {
@@ -628,7 +633,7 @@ impl Watchdog {
     /// Manually terminate a specific run.
     pub async fn kill_run(
         &mut self,
-        run_id: &str,
+        run_id: &RunId,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(run) = self.active_runs.get(run_id).await {
             self.terminate_run(&run, TerminationReason::ManualKill)
@@ -682,7 +687,7 @@ impl Watchdog {
     /// Force a health check on a specific run.
     pub async fn check_run_health(
         &mut self,
-        run_id: &str,
+        run_id: &RunId,
     ) -> Result<Option<RunHealthStatus>, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(run) = self.active_runs.get(run_id).await {
             let now = Utc::now();
@@ -749,7 +754,7 @@ pub struct WatchdogStats {
 #[derive(Debug, Clone)]
 pub struct RunHealthStatus {
     /// The log ID of the run.
-    pub log_id: String,
+    pub log_id: RunId,
     /// Name of the worker processing this run.
     pub worker_name: String,
     /// When the run started.
@@ -787,12 +792,12 @@ fn compute_run_deadline_secs(config: &WatchdogConfig, estimate_secs: u64) -> u64
 /// without spinning up a `RunnerDatabase` / `ActiveRunStore` /
 /// backchannel.
 fn check_idle_timeout(
-    idle_since: &mut HashMap<String, DateTime<Utc>>,
-    log_id: &str,
+    idle_since: &mut HashMap<RunId, DateTime<Utc>>,
+    log_id: &RunId,
     now: DateTime<Utc>,
     timeout_secs: u64,
 ) -> Option<TerminationReason> {
-    let first_seen = *idle_since.entry(log_id.to_string()).or_insert(now);
+    let first_seen = *idle_since.entry(log_id.clone()).or_insert(now);
     let elapsed = now - first_seen;
     let timeout = Duration::seconds(timeout_secs as i64);
     if elapsed >= timeout {
@@ -820,6 +825,10 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
+    fn rid(s: &str) -> RunId {
+        RunId::new(s).unwrap()
+    }
+
     fn t(secs_from_epoch: i64) -> DateTime<Utc> {
         Utc.timestamp_opt(secs_from_epoch, 0).unwrap()
     }
@@ -829,7 +838,7 @@ mod tests {
     #[test]
     fn test_check_idle_timeout_first_reading_returns_none() {
         let mut map = HashMap::new();
-        let res = check_idle_timeout(&mut map, "run-a", t(1000), 900);
+        let res = check_idle_timeout(&mut map, &rid("run-a"), t(1000), 900);
         assert!(res.is_none());
         assert_eq!(map.get("run-a"), Some(&t(1000)));
     }
@@ -839,8 +848,8 @@ mod tests {
     #[test]
     fn test_check_idle_timeout_within_window_returns_none() {
         let mut map = HashMap::new();
-        let _ = check_idle_timeout(&mut map, "run-a", t(1000), 900);
-        let res = check_idle_timeout(&mut map, "run-a", t(1500), 900);
+        let _ = check_idle_timeout(&mut map, &rid("run-a"), t(1000), 900);
+        let res = check_idle_timeout(&mut map, &rid("run-a"), t(1500), 900);
         assert!(res.is_none());
         assert_eq!(map.get("run-a"), Some(&t(1000)));
     }
@@ -850,8 +859,8 @@ mod tests {
     #[test]
     fn test_check_idle_timeout_past_window_returns_failure_and_clears() {
         let mut map = HashMap::new();
-        let _ = check_idle_timeout(&mut map, "run-a", t(1000), 900);
-        let res = check_idle_timeout(&mut map, "run-a", t(1900), 900);
+        let _ = check_idle_timeout(&mut map, &rid("run-a"), t(1000), 900);
+        let res = check_idle_timeout(&mut map, &rid("run-a"), t(1900), 900);
         match res {
             Some(TerminationReason::HealthCheckFailed) => {}
             other => panic!("expected HealthCheckFailed past window, got {:?}", other),
@@ -868,8 +877,8 @@ mod tests {
     #[test]
     fn test_check_idle_timeout_boundary_is_inclusive() {
         let mut map = HashMap::new();
-        let _ = check_idle_timeout(&mut map, "run-a", t(1000), 900);
-        let res = check_idle_timeout(&mut map, "run-a", t(1900), 900);
+        let _ = check_idle_timeout(&mut map, &rid("run-a"), t(1000), 900);
+        let res = check_idle_timeout(&mut map, &rid("run-a"), t(1900), 900);
         assert!(matches!(res, Some(TerminationReason::HealthCheckFailed)));
     }
 
@@ -879,10 +888,10 @@ mod tests {
     #[test]
     fn test_check_idle_timeout_resets_after_firing() {
         let mut map = HashMap::new();
-        let _ = check_idle_timeout(&mut map, "run-a", t(1000), 900);
-        let _ = check_idle_timeout(&mut map, "run-a", t(1900), 900); // fires
-                                                                     // Restart timer.
-        let res = check_idle_timeout(&mut map, "run-a", t(1901), 900);
+        let _ = check_idle_timeout(&mut map, &rid("run-a"), t(1000), 900);
+        let _ = check_idle_timeout(&mut map, &rid("run-a"), t(1900), 900); // fires
+                                                                           // Restart timer.
+        let res = check_idle_timeout(&mut map, &rid("run-a"), t(1901), 900);
         assert!(
             res.is_none(),
             "first idle reading after a fire must restart the timer"
@@ -895,12 +904,12 @@ mod tests {
     #[test]
     fn test_check_idle_timeout_runs_are_independent() {
         let mut map = HashMap::new();
-        let _ = check_idle_timeout(&mut map, "run-a", t(1000), 900);
-        let _ = check_idle_timeout(&mut map, "run-b", t(1500), 900);
+        let _ = check_idle_timeout(&mut map, &rid("run-a"), t(1000), 900);
+        let _ = check_idle_timeout(&mut map, &rid("run-b"), t(1500), 900);
         // run-a fires.
-        let _ = check_idle_timeout(&mut map, "run-a", t(1900), 900);
+        let _ = check_idle_timeout(&mut map, &rid("run-a"), t(1900), 900);
         // run-b is still within its own window.
-        let res = check_idle_timeout(&mut map, "run-b", t(1900), 900);
+        let res = check_idle_timeout(&mut map, &rid("run-b"), t(1900), 900);
         assert!(res.is_none());
         assert_eq!(map.get("run-b"), Some(&t(1500)));
     }

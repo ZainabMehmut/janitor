@@ -24,6 +24,7 @@ use janitor::{
     test_utils::{TestDatabase, TestDatabaseConfig},
     test_with_database,
 };
+use janitor::{Campaign, CodebaseName, RunId};
 use janitor_publish::state::{
     get_last_effective_run, get_merge_proposal_run, get_run, guess_proposal_info_from_revision,
 };
@@ -254,7 +255,7 @@ test_with_database! {
         let url = "https://example.invalid/mp/1".parse().unwrap();
         let mp_run = get_merge_proposal_run(test_db.pool(), &url).await.unwrap();
         let mp_run = mp_run.expect("get_merge_proposal_run returned None");
-        assert_eq!(mp_run.id, "run-1");
+        assert_eq!(mp_run.id, Some(RunId::new("run-1").unwrap()));
         assert_eq!(mp_run.campaign, "lintian-fixes");
         assert_eq!(mp_run.codebase, "cb-1");
         assert_eq!(mp_run.role, "main");
@@ -333,7 +334,11 @@ test_with_database! {
         )
         .await;
 
-        let last = get_last_effective_run(test_db.pool(), "cb-1", "lintian-fixes")
+        let last = get_last_effective_run(
+            test_db.pool(),
+            &CodebaseName::new("cb-1").unwrap(),
+            &Campaign::new("lintian-fixes").unwrap(),
+        )
             .await
             .unwrap()
             .expect("get_last_effective_run returned None");
@@ -444,7 +449,11 @@ test_with_database! {
             Some("rev-tip"),
         )
         .await;
-        let last = get_last_effective_run(test_db.pool(), "cb-1", "lintian-fixes")
+        let last = get_last_effective_run(
+            test_db.pool(),
+            &CodebaseName::new("cb-1").unwrap(),
+            &Campaign::new("lintian-fixes").unwrap(),
+        )
             .await
             .unwrap()
             .expect("get_last_effective_run returned None");
@@ -510,7 +519,11 @@ test_with_database! {
         )
         .await;
 
-        let last = get_last_effective_run(test_db.pool(), "cb-1", "fresh-releases")
+        let last = get_last_effective_run(
+            test_db.pool(),
+            &CodebaseName::new("cb-1").unwrap(),
+            &Campaign::new("fresh-releases").unwrap(),
+        )
             .await
             .unwrap()
             .expect("get_last_effective_run returned None");
@@ -568,7 +581,7 @@ test_with_database! {
         )
         .await;
 
-        let run = get_run(test_db.pool(), "run-1")
+        let run = get_run(test_db.pool(), &RunId::new("run-1").unwrap())
             .await
             .unwrap()
             .expect("get_run returned None for existing run");
@@ -588,7 +601,7 @@ test_with_database! {
 test_with_database! {
     async fn test_get_run_returns_none_for_missing_id(test_db: TestDatabase) {
         setup_test_database(test_db.pool()).await.unwrap();
-        let run = get_run(test_db.pool(), "does-not-exist").await.unwrap();
+        let run = get_run(test_db.pool(), &RunId::new("does-not-exist").unwrap()).await.unwrap();
         assert!(run.is_none());
     }
 }
@@ -638,7 +651,11 @@ test_with_database! {
         .await
         .unwrap();
 
-        let policy = get_publish_policy(test_db.pool(), "cb-1", "lintian-fixes")
+        let policy = get_publish_policy(
+            test_db.pool(),
+            &CodebaseName::new("cb-1").unwrap(),
+            &Campaign::new("lintian-fixes").unwrap(),
+        )
             .await
             .unwrap()
             .expect("get_publish_policy returned None");
@@ -658,7 +675,11 @@ test_with_database! {
 test_with_database! {
     async fn test_get_publish_policy_returns_none_for_missing_candidate(test_db: TestDatabase) {
         setup_test_database(test_db.pool()).await.unwrap();
-        let policy = get_publish_policy(test_db.pool(), "nope", "lintian-fixes")
+        let policy = get_publish_policy(
+            test_db.pool(),
+            &CodebaseName::new("nope").unwrap(),
+            &Campaign::new("lintian-fixes").unwrap(),
+        )
             .await
             .unwrap();
         assert!(policy.is_none());

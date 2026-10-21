@@ -2,6 +2,7 @@ use crate::database::RunnerDatabase;
 use breezyshim::branch::{Branch, GenericBranch};
 use breezyshim::error::Error as BrzError;
 use breezyshim::forge::get_forge;
+use janitor::{Campaign, CodebaseName, RunId};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
@@ -17,11 +18,11 @@ use std::fmt;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResumeInfo {
     /// ID of the run to resume from.
-    pub run_id: String,
+    pub run_id: RunId,
     /// Campaign (schema column: `suite`) that produced the run.
-    pub campaign: String,
+    pub campaign: Campaign,
     /// Codebase the run targeted.
-    pub codebase: String,
+    pub codebase: CodebaseName,
     /// Remote branch name from the `main` role of the resumed run's
     /// result branches, if any. May be empty for legacy runs.
     pub branch_name: String,
@@ -88,16 +89,16 @@ impl ResumeService {
     /// `publish_status` is `rejected`.
     pub async fn check_resume_result(
         &self,
-        campaign: &str,
+        campaign: &Campaign,
         resume_revision: &str,
     ) -> Result<Option<ResumeInfo>, ResumeError> {
         // `publish_status` is a Postgres ENUM; cast to text so sqlx
         // decodes it as Option<String>.
         #[derive(sqlx::FromRow)]
         struct ResumeRow {
-            id: String,
-            campaign: String,
-            codebase: String,
+            id: RunId,
+            campaign: Campaign,
+            codebase: CodebaseName,
             result_code: String,
             revision: Option<String>,
             publish_status: Option<String>,
@@ -185,8 +186,8 @@ impl ResumeService {
     /// Set resume information for a run
     pub async fn set_resume_from(
         &self,
-        run_id: &str,
-        resume_from_id: &str,
+        run_id: &RunId,
+        resume_from_id: &RunId,
     ) -> Result<(), ResumeError> {
         sqlx::query(
             r#"
@@ -206,15 +207,15 @@ impl ResumeService {
     /// Check if a run can be resumed from another run
     pub async fn can_resume_from(
         &self,
-        run_id: &str,
-        potential_resume_id: &str,
+        run_id: &RunId,
+        potential_resume_id: &RunId,
     ) -> Result<bool, ResumeError> {
         #[derive(sqlx::FromRow)]
         struct RunPair {
-            current_campaign: String,
-            current_codebase: String,
-            resume_campaign: String,
-            resume_codebase: String,
+            current_campaign: Campaign,
+            current_codebase: CodebaseName,
+            resume_campaign: Campaign,
+            resume_codebase: CodebaseName,
             resume_result: String,
         }
         let row: Option<RunPair> = sqlx::query_as(
@@ -243,7 +244,7 @@ impl ResumeService {
     }
 
     /// Get all runs that resume from a specific run
-    pub async fn get_resume_descendants(&self, run_id: &str) -> Result<Vec<String>, ResumeError> {
+    pub async fn get_resume_descendants(&self, run_id: &RunId) -> Result<Vec<RunId>, ResumeError> {
         Ok(sqlx::query_scalar(
             r#"
             WITH RECURSIVE resume_tree AS (
@@ -267,7 +268,7 @@ impl ResumeService {
     }
 
     /// Get the resume chain for a run (all the runs it transitively resumes from)
-    pub async fn get_resume_chain(&self, run_id: &str) -> Result<Vec<String>, ResumeError> {
+    pub async fn get_resume_chain(&self, run_id: &RunId) -> Result<Vec<RunId>, ResumeError> {
         Ok(sqlx::query_scalar(
             r#"
             WITH RECURSIVE resume_chain AS (
@@ -292,7 +293,7 @@ impl ResumeService {
 
     /// Validate that resume relationships are consistent
     pub async fn validate_resume_consistency(&self) -> Result<Vec<String>, ResumeError> {
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(RunId, Option<RunId>)> = sqlx::query_as(
             r#"
             SELECT r1.id, r1.resume_from
             FROM run r1
@@ -352,7 +353,7 @@ pub enum ResumeLookup {
 pub fn open_resume_branch(
     main_branch: &GenericBranch,
     campaign_branch_name: &str,
-    codebase: &str,
+    codebase: &CodebaseName,
 ) -> ResumeLookup {
     use silver_platter::vcs::BranchOpenError;
 
@@ -448,9 +449,9 @@ mod tests {
     #[tokio::test]
     async fn test_resume_info_serialization() {
         let resume_info = ResumeInfo {
-            run_id: "test-run-1".to_string(),
-            campaign: "test-campaign".to_string(),
-            codebase: "https://example.com/repo".to_string(),
+            run_id: RunId::new("test-run-1").unwrap(),
+            campaign: Campaign::new("test-campaign").unwrap(),
+            codebase: CodebaseName::new("example-repo").unwrap(),
             branch_name: "test-branch".to_string(),
             result_code: "success".to_string(),
             revision: Some("abc123".to_string()),

@@ -6,6 +6,7 @@
 
 use breezyshim::RevisionId;
 use chrono::{DateTime, Utc};
+use janitor::{Campaign, ChangeSetId, CodebaseName, RunId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -370,26 +371,21 @@ pub fn is_log_filename(name: &str) -> bool {
 /// # Returns
 /// The vendor name, or None if it could not be determined
 pub fn dpkg_vendor() -> Option<String> {
-    query_vendor("dpkg-vendor")
-}
-
-#[cfg(feature = "debian")]
-fn query_vendor(program: &str) -> Option<String> {
-    let output = match std::process::Command::new(program)
+    std::process::Command::new("dpkg-vendor")
         .arg("--query")
         .arg("vendor")
         .output()
-    {
-        Ok(output) => output,
-        Err(e) => {
-            log::warn!("Failed to run {}: {}", program, e);
-            return None;
-        }
-    };
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .map(|output| {
+            if output.status.success() {
+                Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|_| {
+            log::warn!("Failed to determine dpkg vendor");
+            Some(String::new())
+        })
 }
 
 #[cfg(feature = "debian")]
@@ -443,7 +439,7 @@ pub fn gather_logs(output_directory: &std::path::Path) -> impl Iterator<Item = s
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JanitorResult {
     /// Unique identifier for the log.
-    pub log_id: String,
+    pub log_id: RunId,
     /// URL of the branch that was processed.
     pub branch_url: String,
     /// Optional subpath within the repository.
@@ -453,9 +449,9 @@ pub struct JanitorResult {
     /// Whether the result is transient.
     pub transient: Option<bool>,
     /// Name of the codebase.
-    pub codebase: String,
+    pub codebase: CodebaseName,
     /// Name of the campaign.
-    pub campaign: String,
+    pub campaign: Campaign,
     /// Human-readable description of the result.
     pub description: Option<String>,
     /// Result of the codemod.
@@ -476,7 +472,7 @@ pub struct JanitorResult {
     pub main_branch_revision: Option<RevisionId>,
 
     /// Optional changeset ID.
-    pub change_set: Option<String>,
+    pub change_set: Option<ChangeSetId>,
 
     /// Optional tags with revision IDs.
     pub tags: Option<Vec<(String, Option<RevisionId>)>>,
@@ -576,7 +572,7 @@ impl JanitorResult {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ResultResume {
     /// ID of the run to resume.
-    pub run_id: String,
+    pub run_id: RunId,
 }
 
 /// Target information for a result.
@@ -696,7 +692,7 @@ pub struct WorkerResult {
     /// Whether the result is transient.
     pub transient: Option<bool>,
     /// Codebase name.
-    pub codebase: Option<String>,
+    pub codebase: Option<CodebaseName>,
 }
 
 /// Information about an active run.
@@ -709,7 +705,7 @@ pub struct ActiveRun {
     /// Queue ID.
     pub queue_id: i64,
     /// Unique log ID.
-    pub log_id: String,
+    pub log_id: RunId,
     /// Start time.
     pub start_time: DateTime<Utc>,
     /// Optional finish time.
@@ -718,9 +714,9 @@ pub struct ActiveRun {
     #[serde(with = "serde_with::As::<Option<serde_with::DurationSeconds<f64>>>")]
     pub estimated_duration: Option<Duration>,
     /// Campaign name.
-    pub campaign: String,
+    pub campaign: Campaign,
     /// Optional change set.
-    pub change_set: Option<String>,
+    pub change_set: Option<ChangeSetId>,
     /// Command being executed.
     pub command: String,
     /// Backchannel for communication.
@@ -728,11 +724,11 @@ pub struct ActiveRun {
     /// VCS information.
     pub vcs_info: VcsInfo,
     /// Codebase name.
-    pub codebase: String,
+    pub codebase: CodebaseName,
     /// Instigated context.
     pub instigated_context: Option<serde_json::Value>,
     /// Optional resume from run ID.
-    pub resume_from: Option<String>,
+    pub resume_from: Option<RunId>,
 }
 
 impl ActiveRun {
@@ -931,7 +927,7 @@ impl Default for Backchannel {
 
 impl Backchannel {
     /// Ping the worker.
-    pub async fn ping(&self, expected_log_id: &str) -> Result<(), PingError> {
+    pub async fn ping(&self, expected_log_id: &RunId) -> Result<(), PingError> {
         match self {
             Backchannel::None {} => {
                 // No ping available
@@ -1030,7 +1026,7 @@ impl Backchannel {
                             match response.text().await {
                                 Ok(log_id) => {
                                     let log_id = log_id.trim();
-                                    if log_id != expected_log_id {
+                                    if log_id != expected_log_id.as_str() {
                                         Err(PingError::Fatal(format!(
                                             "Worker started processing new run {} rather than {}",
                                             log_id, expected_log_id
@@ -1067,7 +1063,7 @@ impl Backchannel {
     /// Get health status from the worker.
     pub async fn get_health_status(
         &self,
-        expected_log_id: &str,
+        expected_log_id: &RunId,
     ) -> Result<crate::HealthStatus, crate::BackchannelError> {
         match self {
             Backchannel::None {} => Err(crate::BackchannelError::WorkerUnreachable(
@@ -1091,7 +1087,7 @@ impl Backchannel {
     }
 
     /// Terminate the worker gracefully.
-    pub async fn terminate(&self, log_id: &str) -> Result<(), crate::BackchannelError> {
+    pub async fn terminate(&self, log_id: &RunId) -> Result<(), crate::BackchannelError> {
         match self {
             Backchannel::None {} => Err(crate::BackchannelError::WorkerUnreachable(
                 "No backchannel available for termination".to_string(),
@@ -1641,15 +1637,15 @@ pub struct QueueItem {
     #[serde(with = "serde_with::As::<Option<serde_with::DurationSeconds<f64>>>")]
     pub estimated_duration: Option<Duration>,
     /// Campaign name.
-    pub campaign: String,
+    pub campaign: Campaign,
     /// Whether to refresh the run.
     pub refresh: bool,
     /// Who requested this run.
     pub requester: Option<String>,
     /// Optional change set identifier.
-    pub change_set: Option<String>,
+    pub change_set: Option<ChangeSetId>,
     /// Name of the codebase.
-    pub codebase: String,
+    pub codebase: CodebaseName,
 }
 
 impl QueueItem {
@@ -2086,16 +2082,16 @@ mod tests {
             worker_name: "test-worker".to_string(),
             worker_link: None,
             queue_id: 123,
-            log_id: "log-456".to_string(),
+            log_id: RunId::new("log-456").unwrap(),
             start_time: Utc::now(),
             finish_time: None,
             estimated_duration: Some(Duration::from_secs(300)),
-            campaign: "test-campaign".to_string(),
+            campaign: Campaign::new("test-campaign").unwrap(),
             change_set: None,
             command: "test command".to_string(),
             backchannel: Backchannel::default(),
             vcs_info,
-            codebase: "test-codebase".to_string(),
+            codebase: CodebaseName::new("test-codebase").unwrap(),
             instigated_context: None,
             resume_from: None,
         };
@@ -2248,10 +2244,10 @@ mod tests {
         assert!(!is_log_filename("foo.log.notlog"));
     }
 
-    #[cfg(feature = "debian")]
     #[test]
-    fn test_query_vendor_missing_binary() {
-        assert_eq!(query_vendor("/nonexistent/dpkg-vendor"), None);
+    fn test_dpkg_vendor() {
+        let vendor = dpkg_vendor();
+        assert!(vendor.is_some());
     }
 
     #[test]
@@ -2412,13 +2408,13 @@ mod tests {
     #[test]
     fn test_janitor_result_serde() {
         let result = JanitorResult {
-            log_id: "log-123".to_string(),
+            log_id: RunId::new("log-123").unwrap(),
             branch_url: "https://example.com/repo".to_string(),
             subpath: Some("debian/".to_string()),
             code: "success".to_string(),
             transient: Some(false),
-            codebase: "mycodebase".to_string(),
-            campaign: "lintian-fixes".to_string(),
+            codebase: CodebaseName::new("mycodebase").unwrap(),
+            campaign: Campaign::new("lintian-fixes").unwrap(),
             description: Some("Fixed 3 lintian issues".to_string()),
             codemod: Some(serde_json::json!({"applied": 3})),
             value: Some(30),
@@ -2427,7 +2423,7 @@ mod tests {
             finish_time: chrono::Utc::now(),
             revision: Some(breezyshim::RevisionId::from(b"rev-1".to_vec())),
             main_branch_revision: Some(breezyshim::RevisionId::from(b"rev-0".to_vec())),
-            change_set: Some("cs-1".to_string()),
+            change_set: Some(ChangeSetId::new("cs-1").unwrap()),
             tags: None,
             remotes: None,
             branches: None,
@@ -2454,13 +2450,13 @@ mod tests {
     #[test]
     fn test_janitor_result_with_failure() {
         let result = JanitorResult {
-            log_id: "log-456".to_string(),
+            log_id: RunId::new("log-456").unwrap(),
             branch_url: "https://example.com/repo".to_string(),
             subpath: None,
             code: "build-failed".to_string(),
             transient: Some(true),
-            codebase: "failcodebase".to_string(),
-            campaign: "fresh-releases".to_string(),
+            codebase: CodebaseName::new("failcodebase").unwrap(),
+            campaign: Campaign::new("fresh-releases").unwrap(),
             description: Some("Build failed".to_string()),
             codemod: None,
             value: None,
@@ -2494,13 +2490,13 @@ mod tests {
     #[test]
     fn test_janitor_result_with_resume() {
         let result = JanitorResult {
-            log_id: "log-789".to_string(),
+            log_id: RunId::new("log-789").unwrap(),
             branch_url: "https://example.com/repo".to_string(),
             subpath: None,
             code: "success".to_string(),
             transient: None,
-            codebase: "test".to_string(),
-            campaign: "test".to_string(),
+            codebase: CodebaseName::new("test").unwrap(),
+            campaign: Campaign::new("test").unwrap(),
             description: Some("OK".to_string()),
             codemod: Some(serde_json::json!({})),
             value: None,
@@ -2525,7 +2521,7 @@ mod tests {
             failure_details: None,
             failure_stage: None,
             resume: Some(ResultResume {
-                run_id: "prev-run".to_string(),
+                run_id: RunId::new("prev-run").unwrap(),
             }),
             target: Some(ResultTarget {
                 name: "debian".to_string(),

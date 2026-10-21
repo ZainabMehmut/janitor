@@ -8,6 +8,7 @@ use axum::Json;
 use breezyshim::RevisionId;
 use clap::Parser;
 use janitor::artifacts::{ArtifactManager, Error as ArtifactError};
+use janitor::{Campaign, CodebaseName, RunId};
 use janitor_differ::diffoscope::{self, DiffoscopeOutput};
 use janitor_differ::{find_binaries, is_binary, Error, Result};
 use prometheus::{
@@ -29,20 +30,10 @@ const TMP_PREFIX: &str = "janitor-differ";
 /// hanging the handler indefinitely.
 const ARTIFACT_RETRIEVE_TIMEOUT_SECS: u64 = 300;
 
-/// Only characters we allow in run ids that get interpolated into cache
-/// filenames. Defence in depth; the DB round-trip already gates real
-/// requests, but precache callers pass ids straight through.
-fn validate_run_id(id: &str) -> Result<()> {
-    if id.is_empty() || id.starts_with('.') {
-        return Err(Error::InvalidRunId(id.to_string()));
-    }
-    let ok = id
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
-    if !ok {
-        return Err(Error::InvalidRunId(id.to_string()));
-    }
-    Ok(())
+/// Parse a run id from a request path. Run ids end up in cache
+/// filenames, so this also keeps them from escaping the cache dir.
+fn parse_run_id(id: String) -> Result<RunId> {
+    RunId::new(id.as_str()).map_err(|_| Error::InvalidRunId(id))
 }
 
 /// Prometheus metrics owned by this binary. We register once in
@@ -112,13 +103,13 @@ fn metrics() -> Arc<DifferMetrics> {
 /// once no waiter holds them, so the map does not grow unbounded.
 #[derive(Default)]
 struct InFlight {
-    map: Mutex<HashMap<(String, String), Weak<Notify>>>,
+    map: Mutex<HashMap<(RunId, RunId), Weak<Notify>>>,
 }
 
 impl InFlight {
     /// Return either a fresh `Notify` guard (caller must generate and
     /// then call `finish`) or an existing `Notify` to wait on.
-    fn acquire(&self, key: (String, String)) -> InFlightHandle<'_> {
+    fn acquire(&self, key: (RunId, RunId)) -> InFlightHandle<'_> {
         let mut m = self.map.lock().expect("in-flight mutex poisoned");
         if let Some(existing) = m.get(&key).and_then(Weak::upgrade) {
             InFlightHandle::Wait(existing)
@@ -141,7 +132,7 @@ enum InFlightHandle<'a> {
 
 struct GenerateGuard<'a> {
     inflight: &'a InFlight,
-    key: (String, String),
+    key: (RunId, RunId),
     notify: Arc<Notify>,
 }
 
@@ -213,14 +204,13 @@ struct AppState {
 }
 
 impl AppState {
-    /// Only callers who already have validated ids call this.
-    fn diffoscope_cache_path(&self, old_id: &str, new_id: &str) -> Option<PathBuf> {
+    fn diffoscope_cache_path(&self, old_id: &RunId, new_id: &RunId) -> Option<PathBuf> {
         self.diffoscope_cache_dir
             .as_ref()
             .map(|d| d.join(format!("{old_id}_{new_id}.json")))
     }
 
-    fn debdiff_cache_path(&self, old_id: &str, new_id: &str) -> Option<PathBuf> {
+    fn debdiff_cache_path(&self, old_id: &RunId, new_id: &RunId) -> Option<PathBuf> {
         self.debdiff_cache_dir
             .as_ref()
             .map(|d| d.join(format!("{old_id}_{new_id}")))
@@ -233,8 +223,8 @@ struct Run {
     /// LEFT JOIN debian_build makes this NULL for runs that never
     /// produced a Debian build (failed early, control runs, ...).
     build_source: Option<String>,
-    campaign: String,
-    id: String,
+    campaign: Campaign,
+    id: RunId,
     build_version: Option<debversion::Version>,
 }
 
@@ -251,7 +241,7 @@ impl Run {
     }
 }
 
-async fn get_run(pool: &sqlx::PgPool, run_id: &str) -> sqlx::Result<Option<Run>> {
+async fn get_run(pool: &sqlx::PgPool, run_id: &RunId) -> sqlx::Result<Option<Run>> {
     sqlx::query_as::<_, Run>(
         r#"SELECT result_code, source AS build_source, suite::text AS campaign, id,
                   debian_build.version AS build_version
@@ -266,7 +256,7 @@ async fn get_run(pool: &sqlx::PgPool, run_id: &str) -> sqlx::Result<Option<Run>>
 
 async fn get_unchanged_run(
     pool: &sqlx::PgPool,
-    codebase: &str,
+    codebase: &CodebaseName,
     main_branch_revision: &RevisionId,
 ) -> sqlx::Result<Option<Run>> {
     sqlx::query_as::<_, Run>(
@@ -286,7 +276,7 @@ async fn get_unchanged_run(
 
 /// Fetch two successful runs. Distinguishes missing rows (404 run-not-found)
 /// from present-but-failed rows (422 run-not-successful).
-async fn get_run_pair(pool: &sqlx::PgPool, old_id: &str, new_id: &str) -> Result<(Run, Run)> {
+async fn get_run_pair(pool: &sqlx::PgPool, old_id: &RunId, new_id: &RunId) -> Result<(Run, Run)> {
     let new_run = get_run(pool, new_id).await?;
     let old_run = get_run(pool, old_id).await?;
     let old_run = check_successful(old_id, old_run)?;
@@ -294,10 +284,10 @@ async fn get_run_pair(pool: &sqlx::PgPool, old_id: &str, new_id: &str) -> Result
     Ok((old_run, new_run))
 }
 
-fn check_successful(run_id: &str, run: Option<Run>) -> Result<Run> {
+fn check_successful(run_id: &RunId, run: Option<Run>) -> Result<Run> {
     match run {
-        None => Err(Error::RunNotFound(run_id.to_string())),
-        Some(r) if r.result_code != "success" => Err(Error::RunNotSuccessful(run_id.to_string())),
+        None => Err(Error::RunNotFound(run_id.clone())),
+        Some(r) if r.result_code != "success" => Err(Error::RunNotSuccessful(run_id.clone())),
         Some(r) => Ok(r),
     }
 }
@@ -305,8 +295,8 @@ fn check_successful(run_id: &str, run: Option<Run>) -> Result<Run> {
 /// Retrieve the two runs' binaries into fresh temp dirs.
 async fn fetch_binaries(
     artifact_manager: &dyn ArtifactManager,
-    old_id: &str,
-    new_id: &str,
+    old_id: &RunId,
+    new_id: &RunId,
 ) -> Result<(
     tempfile::TempDir,
     Vec<(std::ffi::OsString, PathBuf)>,
@@ -317,7 +307,11 @@ async fn fetch_binaries(
     let new_dir = tempfile::TempDir::with_prefix(TMP_PREFIX)?;
 
     let timeout = std::time::Duration::from_secs(ARTIFACT_RETRIEVE_TIMEOUT_SECS);
-    let span = info_span!("fetch-artifacts", old_run_id = old_id, new_run_id = new_id);
+    let span = info_span!(
+        "fetch-artifacts",
+        old_run_id = old_id.as_str(),
+        new_run_id = new_id.as_str()
+    );
     let (old_res, new_res) = async {
         tokio::join!(
             tokio::time::timeout(
@@ -338,27 +332,25 @@ async fn fetch_binaries(
 
     let old_binaries = find_binaries(old_dir.path())?;
     if old_binaries.is_empty() {
-        return Err(Error::ArtifactsMissing(old_id.to_string()));
+        return Err(Error::ArtifactsMissing(old_id.clone()));
     }
     let new_binaries = find_binaries(new_dir.path())?;
     if new_binaries.is_empty() {
-        return Err(Error::ArtifactsMissing(new_id.to_string()));
+        return Err(Error::ArtifactsMissing(new_id.clone()));
     }
     Ok((old_dir, old_binaries, new_dir, new_binaries))
 }
 
 fn classify_retrieval_result(
-    run_id: &str,
+    run_id: &RunId,
     res: std::result::Result<std::result::Result<(), ArtifactError>, tokio::time::error::Elapsed>,
 ) -> Result<()> {
     match res {
-        Err(_) => Err(Error::ArtifactRetrievalTimeout(run_id.to_string())),
+        Err(_) => Err(Error::ArtifactRetrievalTimeout(run_id.clone())),
         Ok(Ok(())) => Ok(()),
-        Ok(Err(ArtifactError::ArtifactsMissing)) => {
-            Err(Error::ArtifactsMissing(run_id.to_string()))
-        }
+        Ok(Err(ArtifactError::ArtifactsMissing)) => Err(Error::ArtifactsMissing(run_id.clone())),
         Ok(Err(e)) => Err(Error::ArtifactRetrievalFailed {
-            run_id: run_id.to_string(),
+            run_id: run_id.clone(),
             reason: e.to_string(),
         }),
     }
@@ -414,7 +406,7 @@ async fn handle_diffoscope(
         .requests
         .with_label_values(&["diffoscope"])
         .inc();
-    let result = handle_diffoscope_inner(&old_id, &new_id, query, &state, &headers).await;
+    let result = handle_diffoscope_inner(old_id, new_id, query, &state, &headers).await;
     if let Err(e) = &result {
         state
             .metrics
@@ -426,14 +418,14 @@ async fn handle_diffoscope(
 }
 
 async fn handle_diffoscope_inner(
-    old_id: &str,
-    new_id: &str,
+    old_id: String,
+    new_id: String,
     query: DiffoscopeQuery,
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Response> {
-    validate_run_id(old_id)?;
-    validate_run_id(new_id)?;
+    let old_id = parse_run_id(old_id)?;
+    let new_id = parse_run_id(new_id)?;
 
     let offered = &[
         "text/plain",
@@ -446,7 +438,7 @@ async fn handle_diffoscope_inner(
             offered: offered.join(", "),
         })?;
 
-    let (old_run, new_run) = get_run_pair(&state.pool, old_id, new_id).await?;
+    let (old_run, new_run) = get_run_pair(&state.pool, &old_id, &new_id).await?;
 
     let cache_path = state.diffoscope_cache_path(&old_run.id, &new_run.id);
     if let Some(parent) = cache_path.as_deref().and_then(|p| p.parent()) {
@@ -583,8 +575,8 @@ async fn generate_diffoscope(
     cache_path: Option<&StdPath>,
 ) -> Result<DiffoscopeOutput> {
     info!(
-        old_run_id = old_run.id,
-        new_run_id = new_run.id,
+        old_run_id = old_run.id.as_str(),
+        new_run_id = new_run.id.as_str(),
         "Generating diffoscope between {} ({}/{}/{}) and {} ({}/{}/{})",
         old_run.id,
         old_run.build_source_str(),
@@ -658,7 +650,7 @@ async fn handle_debdiff(
     headers: HeaderMap,
 ) -> Result<Response> {
     state.metrics.requests.with_label_values(&["debdiff"]).inc();
-    let result = handle_debdiff_inner(&old_id, &new_id, query, &state, &headers).await;
+    let result = handle_debdiff_inner(old_id, new_id, query, &state, &headers).await;
     if let Err(e) = &result {
         state
             .metrics
@@ -670,14 +662,14 @@ async fn handle_debdiff(
 }
 
 async fn handle_debdiff_inner(
-    old_id: &str,
-    new_id: &str,
+    old_id: String,
+    new_id: String,
     query: DebdiffQuery,
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Response> {
-    validate_run_id(old_id)?;
-    validate_run_id(new_id)?;
+    let old_id = parse_run_id(old_id)?;
+    let new_id = parse_run_id(new_id)?;
 
     let offered = &["text/x-diff", "text/plain", "text/markdown", "text/html"];
     let content_type =
@@ -685,7 +677,7 @@ async fn handle_debdiff_inner(
             offered: offered.join(", "),
         })?;
 
-    let (old_run, new_run) = get_run_pair(&state.pool, old_id, new_id).await?;
+    let (old_run, new_run) = get_run_pair(&state.pool, &old_id, &new_id).await?;
 
     let cache_path = state.debdiff_cache_path(&old_run.id, &new_run.id);
     if let Some(parent) = cache_path.as_deref().and_then(|p| p.parent()) {
@@ -852,10 +844,7 @@ async fn generate_debdiff(
     Ok(bytes)
 }
 
-async fn precache(state: &AppState, old_id: String, new_id: String) -> Result<()> {
-    validate_run_id(&old_id)?;
-    validate_run_id(&new_id)?;
-
+async fn precache(state: &AppState, old_id: RunId, new_id: RunId) -> Result<()> {
     // Bound concurrent precache work. Acquire before we do anything
     // expensive; a full queue makes callers wait, not accumulate.
     let _permit = state
@@ -898,8 +887,8 @@ async fn precache(state: &AppState, old_id: String, new_id: String) -> Result<()
         )
         .await?;
         info!(
-            old_run_id = old_id,
-            new_run_id = new_id,
+            old_run_id = old_id.as_str(),
+            new_run_id = new_id.as_str(),
             "Precached debdiff"
         );
     }
@@ -918,8 +907,8 @@ async fn precache(state: &AppState, old_id: String, new_id: String) -> Result<()
         )
         .await?;
         info!(
-            old_run_id = old_id,
-            new_run_id = new_id,
+            old_run_id = old_id.as_str(),
+            new_run_id = new_id.as_str(),
             "Precached diffoscope"
         );
     }
@@ -1011,15 +1000,15 @@ async fn handle_precache(
     Path((old_id, new_id)): Path<(String, String)>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Response> {
-    validate_run_id(&old_id)?;
-    validate_run_id(&new_id)?;
+    let old_id = parse_run_id(old_id)?;
+    let new_id = parse_run_id(new_id)?;
     let (old_run, new_run) = get_run_pair(&state.pool, &old_id, &new_id).await?;
     spawn_precache(&state, old_run.id, new_run.id, "request");
     Ok((StatusCode::ACCEPTED, "Precaching started").into_response())
 }
 
 async fn handle_precache_all(State(state): State<Arc<AppState>>) -> Result<Response> {
-    let rows = sqlx::query_as::<_, (String, String)>(
+    let rows = sqlx::query_as::<_, (RunId, RunId)>(
         r#"SELECT run.id, unchanged_run.id
            FROM run
            INNER JOIN run AS unchanged_run
@@ -1048,7 +1037,7 @@ async fn handle_precache_all(State(state): State<Arc<AppState>>) -> Result<Respo
         .into_response())
 }
 
-fn spawn_precache(state: &Arc<AppState>, old_id: String, new_id: String, trigger: &'static str) {
+fn spawn_precache(state: &Arc<AppState>, old_id: RunId, new_id: RunId, trigger: &'static str) {
     state
         .metrics
         .precache_started
@@ -1065,10 +1054,10 @@ fn spawn_precache(state: &Arc<AppState>, old_id: String, new_id: String, trigger
 #[derive(Debug, Deserialize, serde::Serialize)]
 struct ResultMessage {
     code: String,
-    log_id: String,
+    log_id: RunId,
     revision: String,
     main_branch_revision: String,
-    codebase: String,
+    codebase: CodebaseName,
 }
 
 impl janitor::redis::PubSubMessage for ResultMessage {
@@ -1116,9 +1105,9 @@ async fn listen_to_runner(redis_config: janitor::redis::RedisConfig, state: Arc<
 async fn candidate_pairs(
     pool: &sqlx::PgPool,
     msg: &ResultMessage,
-) -> sqlx::Result<Vec<(String, String)>> {
+) -> sqlx::Result<Vec<(RunId, RunId)>> {
     if msg.revision == msg.main_branch_revision {
-        let rows = sqlx::query_as::<_, (String,)>(
+        let rows = sqlx::query_as::<_, (RunId,)>(
             r#"SELECT id FROM run
                WHERE result_code = 'success' AND main_branch_revision = $1"#,
         )
@@ -1468,8 +1457,8 @@ mod tests {
         Run {
             result_code: "success".to_string(),
             build_source,
-            campaign: "lintian-fixes".to_string(),
-            id: "run-1".to_string(),
+            campaign: Campaign::new("lintian-fixes").unwrap(),
+            id: RunId::new("run-1").unwrap(),
             build_version,
         }
     }
@@ -1620,32 +1609,32 @@ mod tests {
 
         let cases: Vec<(Error, StatusCode, &str, Option<&str>)> = vec![
             (
-                Error::RunNotFound("r1".into()),
+                Error::RunNotFound(run_id("r1")),
                 StatusCode::NOT_FOUND,
                 "run-not-found",
                 Some("r1"),
             ),
             (
-                Error::RunNotSuccessful("r2".into()),
+                Error::RunNotSuccessful(run_id("r2")),
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "run-not-successful",
                 Some("r2"),
             ),
             (
-                Error::ArtifactsMissing("r3".into()),
+                Error::ArtifactsMissing(run_id("r3")),
                 StatusCode::NOT_FOUND,
                 "artifacts-missing",
                 Some("r3"),
             ),
             (
-                Error::ArtifactRetrievalTimeout("r4".into()),
+                Error::ArtifactRetrievalTimeout(run_id("r4")),
                 StatusCode::GATEWAY_TIMEOUT,
                 "artifact-retrieval-timeout",
                 Some("r4"),
             ),
             (
                 Error::ArtifactRetrievalFailed {
-                    run_id: "r5".into(),
+                    run_id: run_id("r5"),
                     reason: "network down".into(),
                 },
                 StatusCode::BAD_GATEWAY,
@@ -1706,16 +1695,16 @@ mod tests {
 
     #[test]
     fn check_successful_distinguishes_missing_from_failed() {
-        let missing = check_successful("r1", None).unwrap_err();
+        let missing = check_successful(&run_id("r1"), None).unwrap_err();
         assert!(matches!(missing, Error::RunNotFound(id) if id == "r1"));
 
         let failed = check_successful(
-            "r2",
+            &run_id("r2"),
             Some(Run {
                 result_code: "failed".to_string(),
                 build_source: None,
-                campaign: "c".to_string(),
-                id: "r2".to_string(),
+                campaign: Campaign::new("cc").unwrap(),
+                id: run_id("r2"),
                 build_version: None,
             }),
         )
@@ -1723,19 +1712,23 @@ mod tests {
         assert!(matches!(failed, Error::RunNotSuccessful(id) if id == "r2"));
     }
 
+    fn run_id(id: &str) -> RunId {
+        RunId::new(id).unwrap()
+    }
+
     #[test]
-    fn validate_run_id_accepts_and_rejects() {
+    fn parse_run_id_accepts_and_rejects() {
         // Accepts real-world run ids.
         for ok in ["run-1", "abcdef1234567890", "b1c2d3-e4f5", "log_id_42", "A"] {
-            assert!(validate_run_id(ok).is_ok(), "should accept {ok:?}");
+            assert_eq!(parse_run_id(ok.to_string()).unwrap(), ok);
         }
         // Rejects anything that could escape the cache dir or is empty.
         for bad in [
             "", "..", ".hidden", "a/b", "a\\b", "a b", "foo.json", "foo;bar",
         ] {
-            let err = validate_run_id(bad).unwrap_err();
+            let err = parse_run_id(bad.to_string()).unwrap_err();
             assert!(
-                matches!(err, Error::InvalidRunId(_)),
+                matches!(&err, Error::InvalidRunId(id) if id == bad),
                 "should reject {bad:?}"
             );
         }
@@ -1744,7 +1737,7 @@ mod tests {
     #[test]
     fn inflight_dedupes_and_wakes_waiters() {
         let inflight = InFlight::default();
-        let key = ("a".to_string(), "b".to_string());
+        let key = (run_id("a"), run_id("b"));
         let g = match inflight.acquire(key.clone()) {
             InFlightHandle::Generate(g) => g,
             InFlightHandle::Wait(_) => panic!("first acquire should generate"),
@@ -1852,6 +1845,19 @@ mod tests {
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
             let body = body_json(resp).await;
             assert_eq!(body["reason"], "invalid-run-id");
+        }
+
+        #[tokio::test]
+        async fn invalid_new_run_id_in_diffoscope_returns_400() {
+            let cache = tempfile::TempDir::new().unwrap();
+            let art = tempfile::TempDir::new().unwrap();
+            let router = build_router(test_state(cache.path(), art.path()));
+            let resp = router
+                .oneshot(get("/diffoscope/valid-id/foo.json"))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(body_json(resp).await["reason"], "invalid-run-id");
         }
 
         #[tokio::test]

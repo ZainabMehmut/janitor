@@ -1,3 +1,4 @@
+use crate::RunId;
 use async_trait::async_trait;
 use std::fs;
 use std::fs::File;
@@ -26,7 +27,7 @@ impl LocalArtifactManager {
 impl ArtifactManager for LocalArtifactManager {
     async fn store_artifacts(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         local_path: &Path,
         names: Option<&[String]>,
     ) -> Result<(), Error> {
@@ -53,14 +54,14 @@ impl ArtifactManager for LocalArtifactManager {
 
     async fn get_artifact(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         filename: &str,
     ) -> Result<Box<dyn std::io::Read + Send + Sync>, Error> {
         let path = self.path.join(run_id).join(filename);
         Ok(Box::new(File::open(path)?))
     }
 
-    fn public_artifact_url(&self, run_id: &str, filename: &str) -> url::Url {
+    fn public_artifact_url(&self, run_id: &RunId, filename: &str) -> url::Url {
         url::Url::from_file_path(self.path.join(run_id).join(filename)).unwrap_or_else(|_| {
             url::Url::parse("file:///invalid/path").expect("hardcoded URL should be valid")
         })
@@ -68,7 +69,7 @@ impl ArtifactManager for LocalArtifactManager {
 
     async fn retrieve_artifacts(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         local_path: &Path,
         filter_fn: Option<&(dyn for<'a> Fn(&'a str) -> bool + Sync + Send)>,
     ) -> Result<(), Error> {
@@ -111,7 +112,7 @@ impl ArtifactManager for LocalArtifactManager {
         Box::new(entries.into_iter())
     }
 
-    async fn delete_artifacts(&self, run_id: &str) -> Result<(), Error> {
+    async fn delete_artifacts(&self, run_id: &RunId) -> Result<(), Error> {
         let run_path = self.path.join(run_id);
         if !run_path.is_dir() {
             return Err(Error::ArtifactsMissing);
@@ -146,12 +147,12 @@ mod tests {
         let (_td, mgr) = setup();
         let source = create_source_dir(&[("hello.txt", b"hello world"), ("data.bin", b"\x00\x01")]);
 
-        mgr.store_artifacts("run-1", source.path(), None)
+        mgr.store_artifacts(&RunId::new("run-1").unwrap(), source.path(), None)
             .await
             .unwrap();
 
         let retrieve_dir = TempDir::new().unwrap();
-        mgr.retrieve_artifacts("run-1", retrieve_dir.path(), None)
+        mgr.retrieve_artifacts(&RunId::new("run-1").unwrap(), retrieve_dir.path(), None)
             .await
             .unwrap();
 
@@ -170,11 +171,11 @@ mod tests {
         let (_td, mgr) = setup();
         let source = create_source_dir(&[("file.txt", b"content")]);
 
-        mgr.store_artifacts("run-1", source.path(), None)
+        mgr.store_artifacts(&RunId::new("run-1").unwrap(), source.path(), None)
             .await
             .unwrap();
         // Storing again should not error
-        mgr.store_artifacts("run-1", source.path(), None)
+        mgr.store_artifacts(&RunId::new("run-1").unwrap(), source.path(), None)
             .await
             .unwrap();
     }
@@ -184,12 +185,16 @@ mod tests {
         let (_td, mgr) = setup();
         let source = create_source_dir(&[("keep.txt", b"yes"), ("skip.txt", b"no")]);
 
-        mgr.store_artifacts("run-1", source.path(), Some(&["keep.txt".to_string()]))
-            .await
-            .unwrap();
+        mgr.store_artifacts(
+            &RunId::new("run-1").unwrap(),
+            source.path(),
+            Some(&["keep.txt".to_string()]),
+        )
+        .await
+        .unwrap();
 
         let retrieve_dir = TempDir::new().unwrap();
-        mgr.retrieve_artifacts("run-1", retrieve_dir.path(), None)
+        mgr.retrieve_artifacts(&RunId::new("run-1").unwrap(), retrieve_dir.path(), None)
             .await
             .unwrap();
 
@@ -202,7 +207,11 @@ mod tests {
         let (_td, mgr) = setup();
         let retrieve_dir = TempDir::new().unwrap();
         let result = mgr
-            .retrieve_artifacts("nonexistent", retrieve_dir.path(), None)
+            .retrieve_artifacts(
+                &RunId::new("nonexistent").unwrap(),
+                retrieve_dir.path(),
+                None,
+            )
             .await;
         assert!(matches!(result, Err(Error::ArtifactsMissing)));
     }
@@ -212,14 +221,16 @@ mod tests {
         let (_td, mgr) = setup();
         let source = create_source_dir(&[("file.txt", b"content")]);
 
-        mgr.store_artifacts("run-1", source.path(), None)
+        mgr.store_artifacts(&RunId::new("run-1").unwrap(), source.path(), None)
             .await
             .unwrap();
-        mgr.delete_artifacts("run-1").await.unwrap();
+        mgr.delete_artifacts(&RunId::new("run-1").unwrap())
+            .await
+            .unwrap();
 
         let retrieve_dir = TempDir::new().unwrap();
         let result = mgr
-            .retrieve_artifacts("run-1", retrieve_dir.path(), None)
+            .retrieve_artifacts(&RunId::new("run-1").unwrap(), retrieve_dir.path(), None)
             .await;
         assert!(matches!(result, Err(Error::ArtifactsMissing)));
     }
@@ -227,7 +238,9 @@ mod tests {
     #[tokio::test]
     async fn test_delete_nonexistent() {
         let (_td, mgr) = setup();
-        let result = mgr.delete_artifacts("nonexistent").await;
+        let result = mgr
+            .delete_artifacts(&RunId::new("nonexistent").unwrap())
+            .await;
         assert!(matches!(result, Err(Error::ArtifactsMissing)));
     }
 
@@ -236,10 +249,10 @@ mod tests {
         let (_td, mgr) = setup();
         let source = create_source_dir(&[("file.txt", b"content")]);
 
-        mgr.store_artifacts("run-1", source.path(), None)
+        mgr.store_artifacts(&RunId::new("run-1").unwrap(), source.path(), None)
             .await
             .unwrap();
-        mgr.store_artifacts("run-2", source.path(), None)
+        mgr.store_artifacts(&RunId::new("run-2").unwrap(), source.path(), None)
             .await
             .unwrap();
 
@@ -260,11 +273,14 @@ mod tests {
         let (_td, mgr) = setup();
         let source = create_source_dir(&[("file.txt", b"hello")]);
 
-        mgr.store_artifacts("run-1", source.path(), None)
+        mgr.store_artifacts(&RunId::new("run-1").unwrap(), source.path(), None)
             .await
             .unwrap();
 
-        let mut reader = mgr.get_artifact("run-1", "file.txt").await.unwrap();
+        let mut reader = mgr
+            .get_artifact(&RunId::new("run-1").unwrap(), "file.txt")
+            .await
+            .unwrap();
         let mut content = String::new();
         reader.read_to_string(&mut content).unwrap();
         assert_eq!(content, "hello");
@@ -273,7 +289,7 @@ mod tests {
     #[tokio::test]
     async fn test_public_artifact_url() {
         let (_td, mgr) = setup();
-        let url = mgr.public_artifact_url("run-1", "file.txt");
+        let url = mgr.public_artifact_url(&RunId::new("run-1").unwrap(), "file.txt");
         assert_eq!(url.scheme(), "file");
     }
 
@@ -282,13 +298,13 @@ mod tests {
         let (_td, mgr) = setup();
         let source = create_source_dir(&[("keep.txt", b"yes"), ("skip.txt", b"no")]);
 
-        mgr.store_artifacts("run-1", source.path(), None)
+        mgr.store_artifacts(&RunId::new("run-1").unwrap(), source.path(), None)
             .await
             .unwrap();
 
         let retrieve_dir = TempDir::new().unwrap();
         mgr.retrieve_artifacts(
-            "run-1",
+            &RunId::new("run-1").unwrap(),
             retrieve_dir.path(),
             Some(&|name: &str| name == "keep.txt"),
         )

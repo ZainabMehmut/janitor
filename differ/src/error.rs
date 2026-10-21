@@ -4,6 +4,7 @@ use axum::http::header::{HeaderName, HeaderValue};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use janitor::RunId;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -14,19 +15,19 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("run {0} not found")]
-    RunNotFound(String),
+    RunNotFound(RunId),
 
     #[error("run {0} was not successful")]
-    RunNotSuccessful(String),
+    RunNotSuccessful(RunId),
 
     #[error("artifacts missing for run {0}")]
-    ArtifactsMissing(String),
+    ArtifactsMissing(RunId),
 
     #[error("timeout retrieving artifacts for run {0}")]
-    ArtifactRetrievalTimeout(String),
+    ArtifactRetrievalTimeout(RunId),
 
     #[error("failed to retrieve artifacts for run {run_id}: {reason}")]
-    ArtifactRetrievalFailed { run_id: String, reason: String },
+    ArtifactRetrievalFailed { run_id: RunId, reason: String },
 
     #[error("timeout running {0}")]
     DiffCommandTimeout(&'static str),
@@ -148,7 +149,7 @@ impl Error {
             | Error::RunNotSuccessful(id)
             | Error::ArtifactsMissing(id)
             | Error::ArtifactRetrievalTimeout(id)
-            | Error::ArtifactRetrievalFailed { run_id: id, .. } => Some(id),
+            | Error::ArtifactRetrievalFailed { run_id: id, .. } => Some(id.as_str()),
             _ => None,
         }
     }

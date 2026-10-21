@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use janitor::Campaign;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -38,7 +39,7 @@ pub enum JobStatus {
 pub struct JobInfo {
     pub id: Uuid,
     pub repository_name: String,
-    pub campaign: Option<String>,
+    pub campaign: Option<Campaign>,
     pub status: JobStatus,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -47,7 +48,7 @@ pub struct JobInfo {
 
 impl JobInfo {
     /// Fresh Pending job with a random UUID and `now()` timestamps.
-    pub fn new(repository_name: String, campaign: Option<String>) -> Self {
+    pub fn new(repository_name: String, campaign: Option<Campaign>) -> Self {
         Self {
             id: Uuid::new_v4(),
             repository_name,
@@ -163,9 +164,11 @@ pub(crate) async fn record_publish_completion(
 /// `config.apt_repository[*].select[*].campaign` (a single campaign
 /// can produce multiple apt repositories); when absent, falls back
 /// to a `suite == campaign` mapping so env-only deployments still
-/// work.
-pub fn build_campaign_mapping(config: &ArchiveConfig) -> HashMap<String, Vec<AptRepositoryConfig>> {
-    let mut mapping: HashMap<String, Vec<AptRepositoryConfig>> = HashMap::new();
+/// work. Fails if a campaign name in the configuration is invalid.
+pub fn build_campaign_mapping(
+    config: &ArchiveConfig,
+) -> ArchiveResult<HashMap<Campaign, Vec<AptRepositoryConfig>>> {
+    let mut mapping: HashMap<Campaign, Vec<AptRepositoryConfig>> = HashMap::new();
 
     if let Some(runtime) = config.runtime_config.as_ref() {
         for apt_repo in &runtime.apt_repository {
@@ -184,7 +187,7 @@ pub fn build_campaign_mapping(config: &ArchiveConfig) -> HashMap<String, Vec<Apt
                     continue;
                 };
                 mapping
-                    .entry(campaign_name.to_string())
+                    .entry(parse_config_campaign(campaign_name)?)
                     .or_default()
                     .push(repo_cfg.clone());
             }
@@ -194,7 +197,7 @@ pub fn build_campaign_mapping(config: &ArchiveConfig) -> HashMap<String, Vec<Apt
     if mapping.is_empty() {
         for (repo_name, repo_config) in &config.repositories {
             mapping
-                .entry(repo_config.suite.clone())
+                .entry(parse_config_campaign(&repo_config.suite)?)
                 .or_default()
                 .push(repo_config.clone());
             debug!(
@@ -204,7 +207,11 @@ pub fn build_campaign_mapping(config: &ArchiveConfig) -> HashMap<String, Vec<Apt
         }
     }
 
-    mapping
+    Ok(mapping)
+}
+
+fn parse_config_campaign(name: &str) -> ArchiveResult<Campaign> {
+    Campaign::new(name).map_err(|e| ArchiveError::InvalidConfiguration(e.to_string()))
 }
 
 /// Owns the campaign->repository fan-out map, the set of in-flight
@@ -217,7 +224,7 @@ pub struct GeneratorManager {
     database: Arc<BuildManager>,
     manager_config: GeneratorManagerConfig,
     active_jobs: Arc<RwLock<HashMap<String, ActiveJob>>>,
-    campaign_to_repository: Arc<RwLock<HashMap<String, Vec<AptRepositoryConfig>>>>,
+    campaign_to_repository: Arc<RwLock<HashMap<Campaign, Vec<AptRepositoryConfig>>>>,
     job_history: Arc<Mutex<Vec<JobInfo>>>,
     publish_observer: Arc<RwLock<Option<crate::web::LastPublishTimes>>>,
 }
@@ -236,7 +243,7 @@ impl GeneratorManager {
         let scanner = Arc::new(scanner);
         let database = Arc::new(database);
 
-        let campaign_mapping = build_campaign_mapping(&config);
+        let campaign_mapping = build_campaign_mapping(&config)?;
         info!(
             "Built campaign mapping for {} campaigns",
             campaign_mapping.len()
@@ -272,7 +279,7 @@ impl GeneratorManager {
     }
 
     /// Trigger repository generation for a specific campaign.
-    pub async fn trigger_campaign(&self, campaign_name: &str) -> ArchiveResult<Vec<Uuid>> {
+    pub async fn trigger_campaign(&self, campaign_name: &Campaign) -> ArchiveResult<Vec<Uuid>> {
         info!(
             "Triggering repository generation for campaign: {}",
             campaign_name
@@ -291,7 +298,7 @@ impl GeneratorManager {
 
         for repo_config in repositories {
             match self
-                .trigger_repository(&repo_config, Some(campaign_name.to_string()))
+                .trigger_repository(&repo_config, Some(campaign_name.clone()))
                 .await
             {
                 Ok(job_id) => {
@@ -342,7 +349,7 @@ impl GeneratorManager {
     pub async fn trigger_repository(
         &self,
         repo_config: &AptRepositoryConfig,
-        campaign: Option<String>,
+        campaign: Option<Campaign>,
     ) -> ArchiveResult<Uuid> {
         let repo_name = &repo_config.name;
 
@@ -576,7 +583,7 @@ impl GeneratorManager {
     }
 
     /// Get campaign to repository mapping.
-    pub async fn get_campaign_mapping(&self) -> HashMap<String, Vec<String>> {
+    pub async fn get_campaign_mapping(&self) -> HashMap<Campaign, Vec<String>> {
         let mapping = self.campaign_to_repository.read().await;
         mapping
             .iter()
@@ -648,10 +655,11 @@ mod tests {
 
     #[test]
     fn test_job_info_creation() {
-        let job = JobInfo::new("test-repo".to_string(), Some("test-campaign".to_string()));
+        let campaign = Campaign::new("test-campaign").unwrap();
+        let job = JobInfo::new("test-repo".to_string(), Some(campaign.clone()));
 
         assert_eq!(job.repository_name, "test-repo");
-        assert_eq!(job.campaign, Some("test-campaign".to_string()));
+        assert_eq!(job.campaign, Some(campaign));
         assert_eq!(job.status, JobStatus::Pending);
         assert!(!job.is_finished());
     }
@@ -768,7 +776,7 @@ mod tests {
         )
         .unwrap();
         let ac = make_archive_config(vec![repo("unstable", "unstable")], Some(cfg));
-        let mapping = build_campaign_mapping(&ac);
+        let mapping = build_campaign_mapping(&ac).unwrap();
         assert_eq!(mapping.len(), 2);
         assert_eq!(mapping.get("lintian-fixes").unwrap()[0].name, "unstable");
         assert_eq!(mapping.get("fresh-releases").unwrap()[0].name, "unstable");
@@ -798,7 +806,7 @@ mod tests {
             vec![repo("snapshot", "snapshot"), repo("stable", "stable")],
             Some(cfg),
         );
-        let mapping = build_campaign_mapping(&ac);
+        let mapping = build_campaign_mapping(&ac).unwrap();
         let mut names: Vec<&str> = mapping
             .get("lintian-fixes")
             .unwrap()
@@ -830,7 +838,7 @@ mod tests {
         // campaign) but the source list is empty, so mapping is
         // empty too.
         let ac = make_archive_config(vec![], Some(cfg));
-        let mapping = build_campaign_mapping(&ac);
+        let mapping = build_campaign_mapping(&ac).unwrap();
         assert!(mapping.is_empty());
     }
 
@@ -841,12 +849,30 @@ mod tests {
     #[test]
     fn build_campaign_mapping_fallback_no_runtime_config() {
         let ac = make_archive_config(vec![repo("lintian-fixes", "lintian-fixes")], None);
-        let mapping = build_campaign_mapping(&ac);
+        let mapping = build_campaign_mapping(&ac).unwrap();
         assert_eq!(mapping.len(), 1);
         assert_eq!(
             mapping.get("lintian-fixes").unwrap()[0].name,
             "lintian-fixes"
         );
+    }
+
+    #[test]
+    fn build_campaign_mapping_rejects_invalid_campaign() {
+        let cfg = janitor::config::read_string(
+            r#"
+                apt_repository {
+                    name: "unstable"
+                    select { campaign: "Lintian_Fixes" }
+                }
+            "#,
+        )
+        .unwrap();
+        let ac = make_archive_config(vec![repo("unstable", "unstable")], Some(cfg));
+        assert!(matches!(
+            build_campaign_mapping(&ac),
+            Err(ArchiveError::InvalidConfiguration(_))
+        ));
     }
 
     /// The publish-observer helper must record `Utc::now()` into
@@ -909,7 +935,7 @@ mod tests {
         let ac = make_archive_config(vec![repo("unstable", "unstable")], Some(cfg));
         // Runtime has no selects, so the runtime branch yields
         // empty; fallback populates from repositories.
-        let mapping = build_campaign_mapping(&ac);
+        let mapping = build_campaign_mapping(&ac).unwrap();
         assert_eq!(mapping.len(), 1);
         assert_eq!(mapping.get("unstable").unwrap()[0].name, "unstable");
     }

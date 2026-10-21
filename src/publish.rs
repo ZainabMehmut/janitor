@@ -1,3 +1,4 @@
+use crate::{Campaign, CodebaseName, PublishId, RunId};
 use chrono::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url::Url;
@@ -67,8 +68,8 @@ pub struct MergeProposalNotification {
     pub merged_by: Option<String>,
     pub merged_by_url: Option<Url>,
     pub merged_at: Option<String>,
-    pub codebase: String,
-    pub campaign: String,
+    pub codebase: CodebaseName,
+    pub campaign: Campaign,
     pub target_branch_url: Url,
     pub target_branch_web_url: Option<Url>,
 }
@@ -170,9 +171,9 @@ where
 
 #[derive(Serialize, Deserialize)]
 pub struct PublishNotification {
-    pub id: String,
-    pub codebase: String,
-    pub campaign: String,
+    pub id: PublishId,
+    pub codebase: CodebaseName,
+    pub campaign: Campaign,
     pub proposal_url: Option<Url>,
     pub mode: Mode,
     pub main_branch_url: Option<Url>,
@@ -180,7 +181,7 @@ pub struct PublishNotification {
     pub branch_name: Option<String>,
     pub result_code: String,
     pub result: serde_json::Value,
-    pub run_id: String,
+    pub run_id: RunId,
     #[serde(
         serialize_with = "serialize_duration",
         deserialize_with = "deserialize_duration"
@@ -367,9 +368,9 @@ mod tests {
     #[test]
     fn test_publish_notification_serde() {
         let notification = PublishNotification {
-            id: "pub-123".to_string(),
-            codebase: "mycodebase".to_string(),
-            campaign: "lintian-fixes".to_string(),
+            id: PublishId::new("pub-123").unwrap(),
+            codebase: CodebaseName::new("mycodebase").unwrap(),
+            campaign: Campaign::new("lintian-fixes").unwrap(),
             proposal_url: Some(
                 Url::parse("https://salsa.debian.org/foo/bar/-/merge_requests/1").unwrap(),
             ),
@@ -379,7 +380,7 @@ mod tests {
             branch_name: Some("lintian-fixes".to_string()),
             result_code: "success".to_string(),
             result: serde_json::json!({"key": "value"}),
-            run_id: "run-456".to_string(),
+            run_id: RunId::new("run-456").unwrap(),
             publish_delay: Some(Duration::seconds(3600)),
         };
         let json = serde_json::to_string(&notification).unwrap();
@@ -420,8 +421,8 @@ mod tests {
             merged_by: None,
             merged_by_url: None,
             merged_at: None,
-            codebase: "mycodebase".to_string(),
-            campaign: "lintian-fixes".to_string(),
+            codebase: CodebaseName::new("mycodebase").unwrap(),
+            campaign: Campaign::new("lintian-fixes").unwrap(),
             target_branch_url: Url::parse("https://github.com/foo/bar").unwrap(),
             target_branch_web_url: None,
         };

@@ -4,10 +4,11 @@
 use std::sync::Arc;
 
 use janitor::redis::{PubSubMessage, RedisConfig, RedisManager};
+use janitor::{Campaign, CodebaseName, RunId};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::error::{ArchiveError, ArchiveResult};
 use crate::manager::GeneratorManager;
@@ -18,23 +19,24 @@ use crate::manager::GeneratorManager;
 #[allow(missing_docs)]
 pub enum ArchiveEvent {
     BuildCompleted {
-        run_id: String,
-        codebase: String,
-        campaign: String,
+        run_id: RunId,
+        codebase: CodebaseName,
+        campaign: Campaign,
         artifacts: Vec<String>,
     },
     CampaignFinished {
-        campaign: String,
+        campaign: Campaign,
         successful_runs: u32,
         total_runs: u32,
     },
     ManualRegeneration {
         repository: String,
-        campaign: Option<String>,
+        campaign: Option<Campaign>,
         requested_by: Option<String>,
     },
+    /// `campaign` is `None` when every repository was republished.
     PeriodicRepublish {
-        campaign: String,
+        campaign: Option<Campaign>,
         interval_type: String,
     },
 }
@@ -49,8 +51,9 @@ impl PubSubMessage for ArchiveEvent {
 /// name if the message represents a successful Debian build.
 ///
 /// Returns `None` for malformed JSON, non-success codes, non-debian
-/// targets, or messages missing the campaign field.
-pub fn extract_debian_success_campaign(payload: &str) -> Option<String> {
+/// targets, or messages missing the campaign field or carrying an
+/// invalid campaign name.
+pub fn extract_debian_success_campaign(payload: &str) -> Option<Campaign> {
     let parsed: serde_json::Value = match serde_json::from_str(payload) {
         Ok(v) => v,
         Err(e) => {
@@ -75,27 +78,31 @@ pub fn extract_debian_success_campaign(payload: &str) -> Option<String> {
         return None;
     }
 
-    parsed
-        .get("campaign")
-        .and_then(|c| c.as_str())
-        .map(|s| s.to_string())
+    let name = parsed.get("campaign").and_then(|c| c.as_str())?;
+    match Campaign::new(name) {
+        Ok(campaign) => Some(campaign),
+        Err(e) => {
+            warn!("Ignoring runner result: {}", e);
+            None
+        }
+    }
 }
 
 impl ArchiveEvent {
     /// Get the campaign name associated with this event.
-    pub fn campaign(&self) -> Option<&str> {
+    pub fn campaign(&self) -> Option<&Campaign> {
         match self {
             ArchiveEvent::BuildCompleted { campaign, .. } => Some(campaign),
             ArchiveEvent::CampaignFinished { campaign, .. } => Some(campaign),
-            ArchiveEvent::ManualRegeneration { campaign, .. } => campaign.as_deref(),
-            ArchiveEvent::PeriodicRepublish { campaign, .. } => Some(campaign),
+            ArchiveEvent::ManualRegeneration { campaign, .. } => campaign.as_ref(),
+            ArchiveEvent::PeriodicRepublish { campaign, .. } => campaign.as_ref(),
         }
     }
 
     /// Get the repository name if specified.
     pub fn repository(&self) -> Option<&str> {
         match self {
-            ArchiveEvent::BuildCompleted { codebase, .. } => Some(codebase),
+            ArchiveEvent::BuildCompleted { codebase, .. } => Some(codebase.as_str()),
             ArchiveEvent::ManualRegeneration { repository, .. } => Some(repository),
             _ => None,
         }
@@ -335,6 +342,14 @@ impl RedisSubscriber {
                 campaign,
                 interval_type,
             } => {
+                let Some(campaign) = campaign else {
+                    // Published after every repository was already triggered.
+                    debug!(
+                        "Periodic republish of all repositories (interval: {})",
+                        interval_type
+                    );
+                    return Ok(());
+                };
                 info!(
                     "Periodic republish triggered for campaign {} (interval: {})",
                     campaign, interval_type
@@ -432,8 +447,18 @@ mod tests {
         }"#;
         assert_eq!(
             extract_debian_success_campaign(payload),
-            Some("lintian-fixes".to_string())
+            Some(Campaign::new("lintian-fixes").unwrap())
         );
+    }
+
+    #[test]
+    fn test_extract_campaign_invalid_name() {
+        let payload = r#"{
+            "code": "success",
+            "campaign": "../etc",
+            "target": {"name": "debian", "details": {}}
+        }"#;
+        assert_eq!(extract_debian_success_campaign(payload), None);
     }
 
     #[test]

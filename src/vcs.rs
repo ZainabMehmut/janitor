@@ -1,3 +1,4 @@
+use crate::CodebaseName;
 use async_trait::async_trait;
 use breezyshim::branch::Branch;
 use breezyshim::error::Error as BrzError;
@@ -402,7 +403,7 @@ mod tests {
         let mgr = RemoteGitVcsManager::new(Url::parse("https://vcs.example.com/git/").unwrap());
         let old = RevisionId::from(b"git-v1:aaaa".to_vec());
         let new = RevisionId::from(b"git-v1:bbbb".to_vec());
-        let url = mgr.get_diff_url("mycodebase", &old, &new);
+        let url = mgr.get_diff_url(&CodebaseName::new("mycodebase").unwrap(), &old, &new);
         assert_eq!(
             url.as_str(),
             "https://vcs.example.com/git/mycodebase/diff?old=aaaa&new=bbbb"
@@ -412,7 +413,7 @@ mod tests {
     #[test]
     fn test_remote_bzr_vcs_manager_branch_url() {
         let mgr = RemoteBzrVcsManager::new(Url::parse("https://vcs.example.com/bzr/").unwrap());
-        let url = mgr.get_branch_url("mycodebase", "main");
+        let url = mgr.get_branch_url(&CodebaseName::new("mycodebase").unwrap(), "main");
         assert_eq!(url.as_str(), "https://vcs.example.com/bzr/mycodebase/main");
     }
 
@@ -421,7 +422,7 @@ mod tests {
         let mgr = RemoteBzrVcsManager::new(Url::parse("https://vcs.example.com/bzr/").unwrap());
         let old = RevisionId::from(b"old-revid".to_vec());
         let new = RevisionId::from(b"new-revid".to_vec());
-        let url = mgr.get_diff_url("mycodebase", &old, &new);
+        let url = mgr.get_diff_url(&CodebaseName::new("mycodebase").unwrap(), &old, &new);
         assert_eq!(
             url.as_str(),
             "https://vcs.example.com/bzr/mycodebase/diff?old=old-revid&new=new-revid"
@@ -432,7 +433,8 @@ mod tests {
     fn test_remote_git_vcs_manager_repository_url() {
         let mgr = RemoteGitVcsManager::new(Url::parse("https://vcs.example.com/git/").unwrap());
         assert_eq!(
-            mgr.get_repository_url("mycodebase").as_str(),
+            mgr.get_repository_url(&CodebaseName::new("mycodebase").unwrap())
+                .as_str(),
             "https://vcs.example.com/git/mycodebase"
         );
     }
@@ -441,7 +443,8 @@ mod tests {
     fn test_remote_bzr_vcs_manager_repository_url() {
         let mgr = RemoteBzrVcsManager::new(Url::parse("https://vcs.example.com/bzr/").unwrap());
         assert_eq!(
-            mgr.get_repository_url("mycodebase").as_str(),
+            mgr.get_repository_url(&CodebaseName::new("mycodebase").unwrap())
+                .as_str(),
             "https://vcs.example.com/bzr/mycodebase"
         );
     }
@@ -630,18 +633,21 @@ pub const EMPTY_GIT_TREE: &[u8] = b"4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 pub trait VcsManager: Send + Sync {
     fn get_branch(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         branch_name: &str,
     ) -> Result<Option<breezyshim::branch::GenericBranch>, BranchOpenError>;
 
     /// Get the URL for the branch.
-    fn get_branch_url(&self, codebase: &str, branch_name: &str) -> Url;
+    fn get_branch_url(&self, codebase: &CodebaseName, branch_name: &str) -> Url;
 
     /// Get the repository for the codebase.
-    fn get_repository(&self, codebase: &str) -> Result<Option<GenericRepository>, BrzError>;
+    fn get_repository(
+        &self,
+        codebase: &CodebaseName,
+    ) -> Result<Option<GenericRepository>, BrzError>;
 
     /// Get the URL for the repository.
-    fn get_repository_url(&self, codebase: &str) -> Url;
+    fn get_repository_url(&self, codebase: &CodebaseName) -> Url;
 
     /// List all repositories.
     fn list_repositories(&self) -> Vec<String>;
@@ -649,14 +655,14 @@ pub trait VcsManager: Send + Sync {
     /// Get the diff between two revisions.
     async fn get_diff(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Vec<u8>;
 
     async fn get_revision_info(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Vec<RevisionInfo>;
@@ -681,7 +687,7 @@ impl LocalGitVcsManager {
 impl VcsManager for LocalGitVcsManager {
     fn get_branch(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         branch_name: &str,
     ) -> Result<Option<breezyshim::branch::GenericBranch>, BranchOpenError> {
         let url = self.get_branch_url(codebase, branch_name);
@@ -706,7 +712,7 @@ impl VcsManager for LocalGitVcsManager {
         }
     }
 
-    fn get_branch_url(&self, codebase: &str, branch_name: &str) -> Url {
+    fn get_branch_url(&self, codebase: &CodebaseName, branch_name: &str) -> Url {
         let url = Url::from_directory_path(&self.base_path)
             .expect("LocalGitVcsManager base_path must be an absolute path");
         let url = url.join(codebase).expect(&format!(
@@ -718,7 +724,10 @@ impl VcsManager for LocalGitVcsManager {
         breezyshim::urlutils::join_segment_parameters(&url, params)
     }
 
-    fn get_repository(&self, codebase: &str) -> Result<Option<GenericRepository>, BrzError> {
+    fn get_repository(
+        &self,
+        codebase: &CodebaseName,
+    ) -> Result<Option<GenericRepository>, BrzError> {
         let url = self.get_repository_url(codebase);
         match breezyshim::repository::open(&url) {
             Ok(repo) => Ok(Some(repo)),
@@ -727,7 +736,7 @@ impl VcsManager for LocalGitVcsManager {
         }
     }
 
-    fn get_repository_url(&self, codebase: &str) -> Url {
+    fn get_repository_url(&self, codebase: &CodebaseName) -> Url {
         std::fs::create_dir_all(&self.base_path).unwrap();
         let base_path = self.base_path.canonicalize().unwrap();
         Url::from_directory_path(base_path)
@@ -746,7 +755,7 @@ impl VcsManager for LocalGitVcsManager {
 
     async fn get_diff(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Vec<u8> {
@@ -785,7 +794,7 @@ impl VcsManager for LocalGitVcsManager {
 
     async fn get_revision_info(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Vec<RevisionInfo> {
@@ -851,7 +860,7 @@ impl LocalBzrVcsManager {
 impl VcsManager for LocalBzrVcsManager {
     fn get_branch(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         branch_name: &str,
     ) -> Result<Option<breezyshim::branch::GenericBranch>, BranchOpenError> {
         let url = self.get_branch_url(codebase, branch_name);
@@ -876,7 +885,7 @@ impl VcsManager for LocalBzrVcsManager {
         }
     }
 
-    fn get_branch_url(&self, codebase: &str, branch_name: &str) -> Url {
+    fn get_branch_url(&self, codebase: &CodebaseName, branch_name: &str) -> Url {
         let url = Url::from_directory_path(&self.base_path).unwrap();
         url.join(&format!("{}/", codebase))
             .unwrap()
@@ -884,7 +893,10 @@ impl VcsManager for LocalBzrVcsManager {
             .unwrap()
     }
 
-    fn get_repository(&self, codebase: &str) -> Result<Option<GenericRepository>, BrzError> {
+    fn get_repository(
+        &self,
+        codebase: &CodebaseName,
+    ) -> Result<Option<GenericRepository>, BrzError> {
         let url = self.get_repository_url(codebase);
         match breezyshim::repository::open(&url) {
             Ok(repo) => Ok(Some(repo)),
@@ -893,7 +905,7 @@ impl VcsManager for LocalBzrVcsManager {
         }
     }
 
-    fn get_repository_url(&self, codebase: &str) -> Url {
+    fn get_repository_url(&self, codebase: &CodebaseName) -> Url {
         std::fs::create_dir_all(&self.base_path).unwrap();
         let base_path = self.base_path.canonicalize().unwrap();
         Url::from_directory_path(base_path)
@@ -912,7 +924,7 @@ impl VcsManager for LocalBzrVcsManager {
 
     async fn get_diff(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Vec<u8> {
@@ -939,7 +951,7 @@ impl VcsManager for LocalBzrVcsManager {
 
     async fn get_revision_info(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Vec<RevisionInfo> {
@@ -980,23 +992,23 @@ mod local_repository_url_tests {
         let missing = base.path().join("not-created-yet");
 
         let git_manager = LocalGitVcsManager::new(missing.clone());
-        let git_url = git_manager.get_repository_url("mycodebase");
+        let git_url = git_manager.get_repository_url(&CodebaseName::new("mycodebase").unwrap());
         assert!(git_url.as_str().ends_with("/not-created-yet/mycodebase"));
 
         let bzr_manager = LocalBzrVcsManager::new(missing.clone());
-        let bzr_url = bzr_manager.get_repository_url("mycodebase");
+        let bzr_url = bzr_manager.get_repository_url(&CodebaseName::new("mycodebase").unwrap());
         assert!(bzr_url.as_str().ends_with("/not-created-yet/mycodebase"));
     }
 
     #[test]
     fn get_repository_url_accepts_relative_base_path() {
         let git_manager = LocalGitVcsManager::new(PathBuf::from("."));
-        let git_url = git_manager.get_repository_url("mycodebase");
+        let git_url = git_manager.get_repository_url(&CodebaseName::new("mycodebase").unwrap());
         assert!(git_url.as_str().starts_with("file://"));
         assert!(git_url.as_str().ends_with("/mycodebase"));
 
         let bzr_manager = LocalBzrVcsManager::new(PathBuf::from("."));
-        let bzr_url = bzr_manager.get_repository_url("mycodebase");
+        let bzr_url = bzr_manager.get_repository_url(&CodebaseName::new("mycodebase").unwrap());
         assert!(bzr_url.as_str().starts_with("file://"));
         assert!(bzr_url.as_str().ends_with("/mycodebase"));
     }
@@ -1026,7 +1038,7 @@ impl RemoteGitVcsManager {
 
     pub fn get_diff_url(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Url {
@@ -1047,7 +1059,7 @@ impl RemoteGitVcsManager {
 impl VcsManager for RemoteGitVcsManager {
     async fn get_diff(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Vec<u8> {
@@ -1069,7 +1081,7 @@ impl VcsManager for RemoteGitVcsManager {
 
     async fn get_revision_info(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Vec<RevisionInfo> {
@@ -1095,7 +1107,7 @@ impl VcsManager for RemoteGitVcsManager {
         resp.json().await.unwrap()
     }
 
-    fn get_branch_url(&self, codebase: &str, branch_name: &str) -> Url {
+    fn get_branch_url(&self, codebase: &CodebaseName, branch_name: &str) -> Url {
         let url = self.base_url.join(codebase).unwrap();
         let params = std::collections::HashMap::from_iter(vec![(
             "branch".to_string(),
@@ -1106,7 +1118,7 @@ impl VcsManager for RemoteGitVcsManager {
 
     fn get_branch(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         branch_name: &str,
     ) -> Result<Option<breezyshim::branch::GenericBranch>, BranchOpenError> {
         let url = self.get_branch_url(codebase, branch_name);
@@ -1116,11 +1128,14 @@ impl VcsManager for RemoteGitVcsManager {
         open_cached_branch(&url).map_err(|e| BranchOpenError::from_err(url, &e))
     }
 
-    fn get_repository_url(&self, codebase: &str) -> Url {
+    fn get_repository_url(&self, codebase: &CodebaseName) -> Url {
         self.base_url.join(codebase).unwrap()
     }
 
-    fn get_repository(&self, codebase: &str) -> Result<Option<GenericRepository>, BrzError> {
+    fn get_repository(
+        &self,
+        codebase: &CodebaseName,
+    ) -> Result<Option<GenericRepository>, BrzError> {
         let url = self.get_repository_url(codebase);
         match breezyshim::repository::open(&url) {
             Ok(repo) => Ok(Some(repo)),
@@ -1169,7 +1184,7 @@ impl RemoteBzrVcsManager {
 
     pub fn get_diff_url(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Url {
@@ -1186,7 +1201,7 @@ impl RemoteBzrVcsManager {
 impl VcsManager for RemoteBzrVcsManager {
     async fn get_diff(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Vec<u8> {
@@ -1208,7 +1223,7 @@ impl VcsManager for RemoteBzrVcsManager {
 
     async fn get_revision_info(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         old_revid: &RevisionId,
         new_revid: &RevisionId,
     ) -> Vec<RevisionInfo> {
@@ -1231,7 +1246,7 @@ impl VcsManager for RemoteBzrVcsManager {
         resp.json().await.unwrap()
     }
 
-    fn get_branch_url(&self, codebase: &str, branch_name: &str) -> Url {
+    fn get_branch_url(&self, codebase: &CodebaseName, branch_name: &str) -> Url {
         self.base_url
             .join(&format!("{}/", codebase))
             .unwrap()
@@ -1241,7 +1256,7 @@ impl VcsManager for RemoteBzrVcsManager {
 
     fn get_branch(
         &self,
-        codebase: &str,
+        codebase: &CodebaseName,
         branch_name: &str,
     ) -> Result<Option<breezyshim::branch::GenericBranch>, BranchOpenError> {
         let url = self.get_branch_url(codebase, branch_name);
@@ -1250,11 +1265,14 @@ impl VcsManager for RemoteBzrVcsManager {
         open_cached_branch(&url).map_err(|e| BranchOpenError::from_err(url, &e))
     }
 
-    fn get_repository_url(&self, codebase: &str) -> Url {
+    fn get_repository_url(&self, codebase: &CodebaseName) -> Url {
         self.base_url.join(codebase).unwrap()
     }
 
-    fn get_repository(&self, codebase: &str) -> Result<Option<GenericRepository>, BrzError> {
+    fn get_repository(
+        &self,
+        codebase: &CodebaseName,
+    ) -> Result<Option<GenericRepository>, BrzError> {
         let url = self.get_repository_url(codebase);
         match breezyshim::repository::open(&url) {
             Ok(repo) => Ok(Some(repo)),

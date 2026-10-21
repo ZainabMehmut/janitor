@@ -1,3 +1,4 @@
+use crate::RunId;
 use async_trait::async_trait;
 use google_cloud_storage::client::{Storage, StorageControl};
 use std::collections::HashSet;
@@ -70,7 +71,7 @@ fn map_gcs_error(e: google_cloud_storage::Error) -> Error {
 impl ArtifactManager for GCSArtifactManager {
     async fn store_artifacts(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         local_path: &Path,
         names: Option<&[String]>,
     ) -> Result<(), Error> {
@@ -117,7 +118,7 @@ impl ArtifactManager for GCSArtifactManager {
         Ok(())
     }
 
-    async fn delete_artifacts(&self, run_id: &str) -> Result<(), Error> {
+    async fn delete_artifacts(&self, run_id: &RunId) -> Result<(), Error> {
         let prefix = format!("{}/", run_id);
         let bucket = bucket_resource(&self.bucket_name);
 
@@ -145,7 +146,7 @@ impl ArtifactManager for GCSArtifactManager {
 
     async fn get_artifact(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         filename: &str,
     ) -> Result<Box<dyn std::io::Read + Send + Sync>, Error> {
         let object_name = format!("{}/{}", run_id, filename);
@@ -166,7 +167,7 @@ impl ArtifactManager for GCSArtifactManager {
         Ok(Box::new(std::io::Cursor::new(contents)))
     }
 
-    fn public_artifact_url(&self, run_id: &str, filename: &str) -> url::Url {
+    fn public_artifact_url(&self, run_id: &RunId, filename: &str) -> url::Url {
         let object_name = format!("{}/{}", run_id, filename);
         let encoded_object_name =
             percent_encoding::utf8_percent_encode(&object_name, percent_encoding::CONTROLS);
@@ -182,7 +183,7 @@ impl ArtifactManager for GCSArtifactManager {
 
     async fn retrieve_artifacts(
         &self,
-        run_id: &str,
+        run_id: &RunId,
         local_path: &Path,
         filter_fn: Option<&(dyn for<'a> Fn(&'a str) -> bool + Sync + Send)>,
     ) -> Result<(), Error> {

@@ -3,6 +3,7 @@
 //! Talks to a running janitor site instance over its public HTTP API.
 
 use clap::{Args, Parser, Subcommand};
+use janitor::{Campaign, RunId};
 use reqwest::{Client, RequestBuilder, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -75,7 +76,7 @@ enum WorkerCmd {
 struct RescheduleArgs {
     /// A single run ID to reschedule. If not set, --result-code triggers a mass reschedule.
     #[arg(long, conflicts_with = "result_code")]
-    run_id: Option<String>,
+    run_id: Option<RunId>,
 
     /// Mass-reschedule: rerun everything with this result code.
     #[arg(long)]
@@ -87,7 +88,7 @@ struct RescheduleArgs {
 
     /// Restrict to this campaign.
     #[arg(long)]
-    campaign: Option<String>,
+    campaign: Option<Campaign>,
 
     /// Only reschedule rejected runs (mass reschedule only).
     #[arg(long)]
@@ -125,7 +126,7 @@ enum RunCmd {
     /// Kill an active run.
     Kill {
         /// Run ID.
-        run_id: String,
+        run_id: RunId,
     },
     /// List active runs.
     List,
@@ -285,7 +286,7 @@ async fn cmd_reschedule(client: &ApiClient, args: &RescheduleArgs) -> Result<(),
         form.push(("description_re", desc.clone()));
     }
     if let Some(campaign) = &args.campaign {
-        form.push(("campaign", campaign.clone()));
+        form.push(("campaign", campaign.to_string()));
     }
     if args.rejected {
         form.push(("rejected", "1".to_string()));
@@ -332,7 +333,7 @@ async fn cmd_queue_list(client: &ApiClient, limit: u32) -> Result<(), String> {
     Ok(())
 }
 
-async fn cmd_run_kill(client: &ApiClient, run_id: &str) -> Result<(), String> {
+async fn cmd_run_kill(client: &ApiClient, run_id: &RunId) -> Result<(), String> {
     let path = format!("api/active-runs/{}/kill", run_id);
     let resp = client
         .request(reqwest::Method::POST, &path)?

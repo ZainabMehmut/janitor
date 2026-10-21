@@ -2,6 +2,7 @@ use crate::Mode;
 use breezyshim::branch::Branch;
 use breezyshim::transport::Transport;
 use breezyshim::RevisionId;
+use janitor::{Campaign, ChangeSetId, CodebaseName, PublishId, RunId};
 use sqlx::PgPool;
 use url::Url;
 
@@ -11,8 +12,8 @@ use url::Url;
 /// change_set state to `publishing` or `done` as appropriate.
 pub async fn store_publish(
     conn: &PgPool,
-    change_set: &str,
-    codebase: &str,
+    change_set: &ChangeSetId,
+    codebase: &CodebaseName,
     branch_name: Option<&str>,
     target_branch_url: Option<&Url>,
     target_branch_web_url: Option<&str>,
@@ -23,9 +24,9 @@ pub async fn store_publish(
     result_code: &str,
     description: &str,
     merge_proposal_url: Option<&Url>,
-    publish_id: Option<&str>,
+    publish_id: Option<&PublishId>,
     requester: Option<&str>,
-    run_id: Option<&str>,
+    run_id: Option<&RunId>,
 ) -> Result<(), sqlx::Error> {
     let mut tx = conn.begin().await?;
 
@@ -126,7 +127,7 @@ pub(crate) async fn already_published(
 
 pub(crate) async fn get_open_merge_proposal(
     conn: &PgPool,
-    codebase: &str,
+    codebase: &CodebaseName,
     branch_name: &str,
 ) -> Result<Option<(RevisionId, Url)>, sqlx::Error> {
     let row: Option<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(
@@ -168,8 +169,8 @@ ORDER BY timestamp DESC
 
 pub(crate) async fn check_last_published(
     conn: &PgPool,
-    campaign: &str,
-    codebase: &str,
+    campaign: &Campaign,
+    codebase: &CodebaseName,
 ) -> Result<Option<chrono::DateTime<chrono::Utc>>, sqlx::Error> {
     let row: Option<(Option<chrono::DateTime<chrono::Utc>>,)> =
         sqlx::query_as(sqlx::AssertSqlSafe(
@@ -194,8 +195,8 @@ order by timestamp desc limit 1
 pub async fn guess_proposal_info_from_revision(
     conn: &PgPool,
     revision: &RevisionId,
-) -> Result<(Option<String>, Option<String>), sqlx::Error> {
-    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+) -> Result<(Option<CodebaseName>, Option<String>), sqlx::Error> {
+    let rows: Vec<(CodebaseName, Option<String>)> = sqlx::query_as(
         r#"SELECT DISTINCT run.codebase,
        named_publish_policy.rate_limit_bucket AS rate_limit_bucket
 FROM run
@@ -223,7 +224,7 @@ WHERE rb.revision = $1 AND run.codebase IS NOT NULL"#,
 /// joining through `named_publish_policy`.
 pub async fn guess_rate_limit_bucket(
     conn: &PgPool,
-    codebase: &str,
+    codebase: &CodebaseName,
     source_branch_name: &str,
 ) -> Result<Option<String>, sqlx::Error> {
     // Assume source_branch_name is `<campaign>/...`.
@@ -231,12 +232,23 @@ pub async fn guess_rate_limit_bucket(
         .split('/')
         .next()
         .unwrap_or(source_branch_name);
+    let campaign = match Campaign::new(campaign) {
+        Ok(campaign) => campaign,
+        Err(e) => {
+            log::debug!(
+                "Source branch {} does not name a campaign: {}",
+                source_branch_name,
+                e
+            );
+            return Ok(None);
+        }
+    };
     sqlx::query_scalar::<_, Option<String>>(
         r#"SELECT named_publish_policy.rate_limit_bucket FROM candidate
 INNER JOIN named_publish_policy ON named_publish_policy.name = candidate.publish_policy
 WHERE candidate.suite = $1 AND candidate.codebase = $2"#,
     )
-    .bind(campaign)
+    .bind(&campaign)
     .bind(codebase)
     .fetch_optional(conn)
     .await
@@ -355,7 +367,7 @@ pub(crate) async fn guess_codebase_from_branch_url(
     conn: &PgPool,
     url: &url::Url,
     mut possible_transports: Option<&mut Vec<Transport>>,
-) -> Result<Option<String>, sqlx::Error> {
+) -> Result<Option<CodebaseName>, sqlx::Error> {
     let GuessCodebaseQuery {
         url_trimmed,
         candidates,
@@ -364,7 +376,7 @@ pub(crate) async fn guess_codebase_from_branch_url(
         Some(q) => q,
         None => return Ok(None),
     };
-    let result = sqlx::query_as::<_, (String, String)>(GUESS_CODEBASE_QUERY_SQL)
+    let result = sqlx::query_as::<_, (CodebaseName, String)>(GUESS_CODEBASE_QUERY_SQL)
         .bind(&candidates)
         .fetch_optional(conn)
         .await?;
@@ -454,10 +466,11 @@ pub(crate) async fn guess_codebase_from_branch_url(
 /// Returned by [`get_merge_proposal_run`] for `check_existing_mp` to
 /// consume.
 pub struct MergeProposalRun {
-    /// Run id.
-    pub id: String,
+    /// Run id. `None` for the placeholder built when recovering an
+    /// orphaned merge proposal that has no run.
+    pub id: Option<RunId>,
     /// Campaign name (`run.suite` in the schema).
-    pub campaign: String,
+    pub campaign: Campaign,
     /// URL of the codebase branch the run targeted.
     pub branch_url: String,
     /// Command that produced the run.
@@ -473,9 +486,10 @@ pub struct MergeProposalRun {
     /// Revision id of the matching result branch.
     pub revision: RevisionId,
     /// Codebase the run belonged to.
-    pub codebase: String,
-    /// Change set id.
-    pub change_set: String,
+    pub codebase: CodebaseName,
+    /// Change set id; None for the placeholder built for an orphaned
+    /// merge proposal.
+    pub change_set: Option<ChangeSetId>,
 }
 
 /// Look up the most recent run whose `new_result_branch.revision`
@@ -515,8 +529,8 @@ LIMIT 1
 /// `last_effective_runs` view.
 pub async fn get_last_effective_run(
     conn: &PgPool,
-    codebase: &str,
-    campaign: &str,
+    codebase: &CodebaseName,
+    campaign: &Campaign,
 ) -> Result<Option<janitor::state::Run>, sqlx::Error> {
     sqlx::query_as(
         r#"
@@ -557,7 +571,7 @@ LIMIT 1
 /// `run_id` carried in an approval message.
 pub async fn get_run(
     conn: &PgPool,
-    run_id: &str,
+    run_id: &RunId,
 ) -> Result<Option<janitor::state::Run>, sqlx::Error> {
     sqlx::query_as(
         r#"
@@ -608,8 +622,8 @@ pub async fn get_publish_attempt_count(
 /// Get the status of previous merge proposals for a codebase and campaign.
 pub async fn get_previous_mp_status(
     conn: &PgPool,
-    codebase: &str,
-    campaign: &str,
+    codebase: &CodebaseName,
+    campaign: &Campaign,
 ) -> Result<Vec<(String, String)>, sqlx::Error> {
     sqlx::query_as(
         r#"
@@ -677,7 +691,7 @@ struct PublishReadyRow {
 /// Iterate through runs that are ready to be published.
 pub async fn iter_publish_ready(
     conn: &PgPool,
-    run_id: Option<&str>,
+    run_id: Option<&RunId>,
 ) -> Result<Vec<(janitor::state::Run, String, String, Vec<UnpublishedBranch>)>, sqlx::Error> {
     // Explicit column list with the same casts the other Run-returning
     // queries (`get_last_effective_run`, `get_run`) apply: TIMESTAMPTZ
@@ -730,7 +744,7 @@ pub async fn iter_publish_ready(
     );
     if let Some(run_id) = run_id {
         query.push("id = ");
-        query.push_bind(run_id);
+        query.push_bind(run_id.clone());
     } else {
         query.push("True");
     }
