@@ -4,23 +4,62 @@ use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use jiff::Timestamp;
 use reqwest::{Client, StatusCode};
+use rusty_s3::{Bucket, Credentials, S3Action, UrlStyle};
 use std::io::{self, Cursor, Read};
 use std::path::Path;
 use std::time::Duration;
 
 use crate::logs::{Error, LogFileManager};
 
+// How long a signed request URL stays valid.
+const SIGNATURE_LIFETIME: Duration = Duration::from_secs(300);
+
+#[derive(Clone, Copy)]
+enum Method {
+    Head,
+    Get,
+    Put,
+    Delete,
+}
+
 pub struct S3LogFileManager {
-    base_url: String,
-    _bucket_name: String,
+    bucket: Bucket,
+    credentials: Option<Credentials>,
     client: Client,
 }
 
 impl S3LogFileManager {
+    /// Signs requests with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY when both are set.
     pub fn new(endpoint_url: &str, bucket_name: Option<&str>) -> Result<Self, Error> {
+        let region = std::env::var("AWS_REGION")
+            .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+            .unwrap_or_else(|_| "us-east-1".to_string());
+        Self::with_credentials(endpoint_url, bucket_name, &region, Credentials::from_env())
+    }
+
+    pub fn with_credentials(
+        endpoint_url: &str,
+        bucket_name: Option<&str>,
+        region: &str,
+        credentials: Option<Credentials>,
+    ) -> Result<Self, Error> {
         let bucket_name = bucket_name.unwrap_or("debian-janitor");
-        let base_url = format!("{}/{}/", endpoint_url.trim_end_matches('/'), bucket_name);
+        let mut endpoint = url::Url::parse(endpoint_url)
+            .map_err(|e| Error::Other(format!("Invalid S3 URL: {}", e)))?;
+        // Without the trailing slash, joining the bucket name drops the last path segment.
+        if !endpoint.path().ends_with('/') {
+            let path = format!("{}/", endpoint.path());
+            endpoint.set_path(&path);
+        }
+        let bucket = Bucket::new(
+            endpoint,
+            UrlStyle::Path,
+            bucket_name.to_string(),
+            region.to_string(),
+        )
+        .map_err(|e| Error::Other(e.to_string()))?;
 
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
@@ -28,18 +67,60 @@ impl S3LogFileManager {
             .map_err(|e| Error::Other(e.to_string()))?;
 
         Ok(Self {
-            base_url,
-            _bucket_name: bucket_name.to_string(),
+            bucket,
+            credentials,
             client,
         })
     }
 
-    fn get_key(&self, codebase: &CodebaseName, run_id: &RunId, name: &str) -> String {
-        format!("logs/{}/{}/{}.gz", codebase, run_id, name)
+    fn get_key(
+        &self,
+        codebase: &CodebaseName,
+        run_id: &RunId,
+        name: &str,
+    ) -> Result<String, Error> {
+        // URL parsing resolves a .. segment, which would leave logs/.
+        if name
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "..")
+        {
+            return Err(Error::NotFound);
+        }
+        Ok(format!("logs/{}/{}/{}.gz", codebase, run_id, name))
     }
 
-    fn get_url(&self, codebase: &CodebaseName, run_id: &RunId, name: &str) -> String {
-        format!("{}{}", self.base_url, self.get_key(codebase, run_id, name))
+    fn object_url(&self, method: Method, key: &str, time: &Timestamp) -> url::Url {
+        let credentials = self.credentials.as_ref();
+        match method {
+            Method::Head => self
+                .bucket
+                .head_object(credentials, key)
+                .sign_with_time(SIGNATURE_LIFETIME, time),
+            Method::Get => self
+                .bucket
+                .get_object(credentials, key)
+                .sign_with_time(SIGNATURE_LIFETIME, time),
+            Method::Put => {
+                let mut action = self.bucket.put_object(credentials, key);
+                action.headers_mut().insert("x-amz-acl", "public-read");
+                action.sign_with_time(SIGNATURE_LIFETIME, time)
+            }
+            Method::Delete => self
+                .bucket
+                .delete_object(credentials, key)
+                .sign_with_time(SIGNATURE_LIFETIME, time),
+        }
+    }
+
+    fn get_url(
+        &self,
+        method: Method,
+        codebase: &CodebaseName,
+        run_id: &RunId,
+        name: &str,
+    ) -> Result<url::Url, Error> {
+        let key = self.get_key(codebase, run_id, name)?;
+        Ok(self.object_url(method, &key, &Timestamp::now()))
     }
 }
 
@@ -51,9 +132,12 @@ impl LogFileManager for S3LogFileManager {
         run_id: &RunId,
         name: &str,
     ) -> Result<bool, Error> {
-        let url = self.get_url(codebase, run_id, name);
+        let url = match self.get_url(Method::Head, codebase, run_id, name) {
+            Ok(url) => url,
+            Err(_) => return Ok(false),
+        };
 
-        match self.client.head(&url).send().await {
+        match self.client.head(url).send().await {
             Ok(resp) => match resp.status() {
                 StatusCode::OK => Ok(true),
                 StatusCode::NOT_FOUND => Ok(false),
@@ -73,11 +157,11 @@ impl LogFileManager for S3LogFileManager {
         run_id: &RunId,
         name: &str,
     ) -> Result<Box<dyn Read + Send + Sync>, Error> {
-        let url = self.get_url(codebase, run_id, name);
+        let url = self.get_url(Method::Get, codebase, run_id, name)?;
 
         let resp = self
             .client
-            .get(&url)
+            .get(url)
             .timeout(Duration::from_secs(300))
             .send()
             .await
@@ -120,12 +204,11 @@ impl LogFileManager for S3LogFileManager {
                 .unwrap_or("unknown")
         });
 
-        let key = self.get_key(codebase, run_id, basename);
-        let url = format!("{}{}", self.base_url, key);
+        let url = self.get_url(Method::Put, codebase, run_id, basename)?;
 
         let resp = self
             .client
-            .put(&url)
+            .put(url)
             .header("x-amz-acl", "public-read")
             .body(compressed_data)
             .send()
@@ -149,11 +232,11 @@ impl LogFileManager for S3LogFileManager {
         run_id: &RunId,
         name: &str,
     ) -> Result<(), Error> {
-        let url = self.get_url(codebase, run_id, name);
+        let url = self.get_url(Method::Delete, codebase, run_id, name)?;
 
         let resp = self
             .client
-            .delete(&url)
+            .delete(url)
             .send()
             .await
             .map_err(|_| Error::ServiceUnavailable)?;
@@ -181,12 +264,12 @@ impl LogFileManager for S3LogFileManager {
         run_id: &RunId,
         name: &str,
     ) -> Result<DateTime<Utc>, Error> {
-        let url = self.get_url(codebase, run_id, name);
+        let url = self.get_url(Method::Head, codebase, run_id, name)?;
 
         // Use HEAD request to get object metadata including last-modified
         let response = self
             .client
-            .head(&url)
+            .head(url)
             .timeout(Duration::from_secs(30))
             .send()
             .await
@@ -219,7 +302,11 @@ impl LogFileManager for S3LogFileManager {
         // Try to access the bucket root
         let resp = self
             .client
-            .head(&self.base_url)
+            .head(
+                self.bucket
+                    .head_bucket(self.credentials.as_ref())
+                    .sign(SIGNATURE_LIFETIME),
+            )
             .timeout(Duration::from_secs(10))
             .send()
             .await;
@@ -228,6 +315,74 @@ impl LogFileManager for S3LogFileManager {
             Ok(r) if r.status().is_success() => Ok(()),
             Ok(r) if r.status() == StatusCode::FORBIDDEN => Err(Error::PermissionDenied),
             _ => Err(Error::ServiceUnavailable),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ids() -> (CodebaseName, RunId) {
+        (
+            CodebaseName::new("cb").unwrap(),
+            RunId::new("run1").unwrap(),
+        )
+    }
+
+    #[test]
+    fn unsigned_without_credentials() {
+        let manager = S3LogFileManager::with_credentials(
+            "http://s3.example:3900/prefix",
+            None,
+            "garage",
+            None,
+        )
+        .unwrap();
+        let (codebase, run_id) = ids();
+        assert_eq!(
+            manager
+                .get_url(Method::Get, &codebase, &run_id, "build.log")
+                .unwrap()
+                .as_str(),
+            "http://s3.example:3900/prefix/debian-janitor/logs/cb/run1/build.log.gz"
+        );
+    }
+
+    #[test]
+    fn signed_with_credentials() {
+        let manager = S3LogFileManager::with_credentials(
+            "http://s3.example:3900",
+            Some("logs-bucket"),
+            "garage",
+            Some(Credentials::new("GKkey", "secret")),
+        )
+        .unwrap();
+        let (codebase, run_id) = ids();
+        let key = manager.get_key(&codebase, &run_id, "build.log").unwrap();
+        let time = Timestamp::from_second(1_800_000_000).unwrap();
+        assert_eq!(
+            manager.object_url(Method::Put, &key, &time).as_str(),
+            "http://s3.example:3900/logs-bucket/logs/cb/run1/build.log.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=GKkey%2F20270115%2Fgarage%2Fs3%2Faws4_request&X-Amz-Date=20270115T080000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host%3Bx-amz-acl&X-Amz-Signature=120e741ca7f5efe0a31e9171e3139caeb7f339895483f108c66bb88381e0ac4e"
+        );
+    }
+
+    #[test]
+    fn dot_dot_and_empty_segments_rejected() {
+        let manager =
+            S3LogFileManager::with_credentials("http://s3.example:3900", None, "garage", None)
+                .unwrap();
+        let (codebase, run_id) = ids();
+        for name in ["../../../other-bucket/secret", "a//build.log", ""] {
+            for method in [Method::Get, Method::Put] {
+                assert_eq!(
+                    manager
+                        .get_url(method, &codebase, &run_id, name)
+                        .map(|url| url.to_string())
+                        .map_err(|e| e.to_string()),
+                    Err("Not found".to_string())
+                );
+            }
         }
     }
 }
