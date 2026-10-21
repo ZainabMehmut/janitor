@@ -222,7 +222,15 @@ impl Credentials {
     /// `/finish`. For `Credentials::None` or `Credentials::Bearer`
     /// the URL is returned unchanged; bearer-token push isn't a
     /// thing on the wire this targets.
-    pub fn embed_in_url(&self, url: &Url) -> Url {
+    ///
+    /// Credentials are only embedded when `url` is an http or https
+    /// URL on the same origin as `store_url`, the VCS store they are
+    /// meant for. Other URLs, such as a `git+ssh://git@host/...`
+    /// resume branch, are returned unchanged.
+    pub fn embed_in_url(&self, url: &Url, store_url: &Url) -> Url {
+        if !matches!(url.scheme(), "http" | "https") || url.origin() != store_url.origin() {
+            return url.clone();
+        }
         if let Credentials::Basic { username, password } = self {
             let mut out = url.clone();
             // `set_username`/`set_password` only fail when the URL
@@ -529,6 +537,67 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+
+    fn basic_credentials() -> Credentials {
+        Credentials::Basic {
+            username: "w1".to_string(),
+            password: Some("pw1".to_string()),
+        }
+    }
+
+    #[test]
+    fn embed_in_url_adds_credentials_to_store_urls() {
+        let credentials = basic_credentials();
+        for (store, url, expected) in [
+            (
+                "http://janitor.local/git/foo",
+                "http://janitor.local/git/foo",
+                "http://w1:pw1@janitor.local/git/foo",
+            ),
+            (
+                "https://janitor.local/git/foo",
+                "https://janitor.local/git/foo,branch=lintian-fixes%2Fmain",
+                "https://w1:pw1@janitor.local/git/foo,branch=lintian-fixes%2Fmain",
+            ),
+        ] {
+            let store: Url = store.parse().unwrap();
+            let url: Url = url.parse().unwrap();
+            assert_eq!(credentials.embed_in_url(&url, &store).as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn embed_in_url_keeps_the_user_of_ssh_urls() {
+        let credentials = basic_credentials();
+        let store: Url = "https://janitor.local/git/foo".parse().unwrap();
+        for url in [
+            "git+ssh://git@janitor.local/foo",
+            "bzr+ssh://bzr@janitor.local/foo",
+            "ssh://git@janitor.local/foo",
+        ] {
+            let url: Url = url.parse().unwrap();
+            assert_eq!(
+                credentials.embed_in_url(&url, &store).as_str(),
+                url.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn embed_in_url_leaves_urls_on_other_hosts_alone() {
+        let credentials = basic_credentials();
+        let store: Url = "https://janitor.local/git/foo".parse().unwrap();
+        for url in [
+            "https://forge.invalid/janitor-bot/foo",
+            "http://forge.invalid/janitor-bot/foo",
+        ] {
+            let url: Url = url.parse().unwrap();
+            assert_eq!(
+                credentials.embed_in_url(&url, &store).as_str(),
+                url.as_str()
+            );
+        }
+    }
 
     #[tokio::test]
     async fn bundle_results_without_directory_has_only_metadata() {

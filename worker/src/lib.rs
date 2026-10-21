@@ -1048,21 +1048,20 @@ pub async fn process_single_item(
     // them into the runner-side config. No-op for `Credentials::None`,
     // so in-cluster setups using cluster-internal URLs without auth
     // still work.
-    let target_repo_url_with_creds = client
-        .credentials()
-        .embed_in_url(&assignment.target_repository.url);
-    // The cached_url and resume_branch_url usually point at the same
-    // git-store as target_repository (the runner derives them from
-    // the same `public_vcs_location`), so they need the same Basic
-    // auth. Splice creds into both.
+    let store_url = &assignment.target_repository.url;
+    let target_repo_url_with_creds = client.credentials().embed_in_url(store_url, store_url);
+    // cached_url is on the same store as target_repository, and the
+    // worker pushes to it. resume_branch_url can be on a forge or
+    // come from git_location, so it only gets creds when it is on
+    // the store too.
     let cached_branch_url_with_creds = assignment
         .branch
         .cached_url
         .as_ref()
-        .map(|u| client.credentials().embed_in_url(u));
+        .map(|u| client.credentials().embed_in_url(u, store_url));
     let resume_branch_url_with_creds = resume_branch_url
         .as_ref()
-        .map(|u| client.credentials().embed_in_url(u));
+        .map(|u| client.credentials().embed_in_url(u, store_url));
 
     let metadata = tokio::task::spawn_blocking(move || {
         let mut metadata = Metadata {
