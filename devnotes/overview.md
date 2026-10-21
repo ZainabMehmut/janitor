@@ -1,3 +1,5 @@
+# Overview
+
 The janitor can manage automated changes to a set of
 projects in version control.
 
@@ -20,8 +22,7 @@ for exposure to the internet. In particular:
  * janitor.bzr_store: /bzr
  * janitor.debian.archive: /dists
 
-The runner
-==========
+## The runner
 
 A "codebase" is a place in a VCS repository that changes can be made to.
 Generally, it will refer to the root of a branch in a repository
@@ -71,8 +72,7 @@ as transient, which means that the expectation is that a repeat
 run will succeed. The scheduler takes this into account, and
 runs with transient failures are ignored in various places.
 
-The publisher
-=============
+## The publisher
 
 Once a run is approved for publishing, it's the publisher's job to
 either create a merge proposal or to push the changes directly to
@@ -122,8 +122,7 @@ at once or overwhelm:
  * At most X pushes (configurable)
  * At most Y new merge proposals (configurable)
 
-The Git/Bzr Store
-=================
+## The Git/Bzr Store
 
 These are simple implementations of a Git and Bazaar servers,
 available over HTTP and with a web UI built in. The only Janitor-specific
@@ -135,15 +134,13 @@ properties they have are:
 
 Each also provide an endpoint for getting the diff between two arbitrary runs.
 
-The Differ
-==========
+## The Differ
 
 The (binary) differ takes the artifacts from two runs and compares them using a particular
 diffing tool. It can cache the results. Currently supported are diffoscope and
 debdiff.
 
-The Worker
-==========
+## The Worker
 
 The worker is where the bulk of the work happens, but it's fairly simple overall.
 
@@ -160,14 +157,12 @@ It runs an endless loop and repeatedly:
 The worker provides a web UI and rest API as well, which are used by
 the runner to health-check it and query for intermediate results.
 
-The Archiver (optional)
-=======================
+## The Archiver (optional)
 
 This Debian specific component can generate APT repositories that
 include the artifacts of all successful runs.
 
-The Auto-Uploader (optional)
-============================
+## The Auto-Uploader (optional)
 
 This Debian specific component automatically uploads
 the artifacts of successful runs using dput.
