@@ -929,9 +929,9 @@ checksum = "36f64beae40a84da1b4b26ff2761a5b895c12adc41dc25aaee1c4f2bbfe97a6e"
 
 [[package]]
 name = "breezyshim"
-version = "0.7.29"
+version = "0.7.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09f988ece7592a148c6b72cfd8393bed342b34d96daa5af936eeb32c0c41d56f"
+checksum = "f2e741209ad8a1e9bf79995496a7e557a6ece771c6fa2ab0e8ad0640cbd85a60"
 dependencies = [
  "bazaar",
  "chrono",
@@ -1616,9 +1616,9 @@ dependencies = [
 
 [[package]]
 name = "deb822-lossless"
-version = "0.5.19"
+version = "0.5.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45bfeac719b1f3441c6f8c29652c60376e11eabbdbd99c53b3f14e0e8585d053"
+checksum = "54f9d282c59af5853fc8f6e6118170a20846a8bff692d3ae128fd6088f4bf9e6"
 dependencies = [
  "pyo3",
  "regex",
@@ -1628,9 +1628,9 @@ dependencies = [
 
 [[package]]
 name = "debian-analyzer"
-version = "0.160.21"
+version = "0.160.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3348e2b8e8f86d801dd19c59d94d0899d442018b91284d4036856f7c2cbabc6"
+checksum = "07e4810b272bdbbd3074270cf4a9de71723f8429da950b9fa71ec509b5ca7af8"
 dependencies = [
  "breezyshim",
  "chrono",
@@ -1710,9 +1710,9 @@ dependencies = [
 
 [[package]]
 name = "debversion"
-version = "0.5.4"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd0855110dc659601a99e89e04b8b51196161b3da5ff33848c47421bb6feeff8"
+checksum = "bafa591c799e23dd22ac6cae679c5c53b9d3f4a0de76290ea5cd079fd3ed1086"
 dependencies = [
  "chrono",
  "lazy-regex",
@@ -4777,9 +4777,8 @@ dependencies = [
 
 [[package]]
 name = "ognibuild"
-version = "0.2.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "203a26be2960b73852c2fc2de9fa06f370bbec4e25403d506cf14aa3882150db"
+version = "0.2.20"
+source = "git+https://github.com/jelmer/ognibuild#f4ed2c882babbe4c759808067e1d785c1f29e630"
 dependencies = [
  "apt-sources",
  "breezyshim",
@@ -5642,9 +5641,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.28.3"
+version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91fd8e38a3b50ed1167fb981cd6fd60147e091784c427b8f7183a7ee32c31c12"
+checksum = "229ca13b8a15bb0d1487b81ab975bfcd97513416499a8312011b6036e42e0de4"
 dependencies = [
  "chrono",
  "libc",
@@ -5658,9 +5657,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-async-runtimes"
-version = "0.28.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e7364a95bf00e8377bbf9b0f09d7ff9715a29d8fcf93b47d1a967363b973178"
+checksum = "b877331c7817ccb6379e9d19a06993160141f1d0a386e55276128717df85e3fc"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -5672,18 +5671,18 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.28.3"
+version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e368e7ddfdeb98c9bca7f8383be1648fd84ab466bf2bc015e94008db6d35611e"
+checksum = "70130e2b6dd1ee589a8788026a429561ca5c40fa7a2fa7914c2282eddae24700"
 dependencies = [
  "target-lexicon",
 ]
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.28.3"
+version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f29e10af80b1f7ccaf7f69eace800a03ecd13e883acfacc1e5d0988605f651e"
+checksum = "5e7ff73c555c286d212d4ce7e5fbda845a973c4f61bd5f160f5f2c3c2a04d1c4"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -5691,9 +5690,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-filelike"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f517e1abff6367e6e72c58cb6a5a57b0c6d8c63f442fbbe48016645145f9f039"
+checksum = "0c476123c39011d2fae44c9248464f3e6cfbbe52ae2d8077063d5ed7fb4cbc70"
 dependencies = [
  "pyo3",
 ]
@@ -5701,8 +5700,7 @@ dependencies = [
 [[package]]
 name = "pyo3-log"
 version = "0.13.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f64083bd3a16a353d9d62335808e8e13d0552d2a2b83fdb084496192dcfa9fcd"
+source = "git+https://github.com/edenhaus/pyo3-log?rev=064b6dff35ebe9e6e0f98adc5c87018b476843b8#064b6dff35ebe9e6e0f98adc5c87018b476843b8"
 dependencies = [
  "arc-swap",
  "log",
@@ -5711,27 +5709,26 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.28.3"
+version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df6e520eff47c45997d2fc7dd8214b25dd1310918bbb2642156ef66a67f29813"
+checksum = "c46d2e5862c7bb8207e3b639f713dda3c499933444784154c11d013c5a691b60"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.6",
 ]
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.28.3"
+version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4cdc218d835738f81c2338f822078af45b4afdf8b2e33cbb5916f108b813acb"
+checksum = "38b89f066f2ae72a2aef52d1537ca2fcd104440ebfadee06e97aa90738a25b9b"
 dependencies = [
  "heck",
  "proc-macro2",
- "pyo3-build-config",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -6771,9 +6768,9 @@ dependencies = [
 
 [[package]]
 name = "silver-platter"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f485d6467778c2d139c3209d20cc31c8debf2ece6230ea632fae2915c50bbe6"
+checksum = "5cda14648d32c73fcc59ae9a064c7825934a65ab6a41ddb1296ba98764be8b42"
 dependencies = [
  "breezyshim",
  "chrono",
