@@ -33,9 +33,9 @@ $ psql janitor -c "INSERT INTO worker (name, password) VALUES ('myworker', crypt
 The worker process itself needs those same credentials supplied to it -
 inserting the row above only lets the runner *accept* a login, it does not
 give any worker one. `janitor-worker` looks for them in this order:
-`--credentials <file>` (a JSON file with `login`/`password`), the
-`WORKER_NAME`/`WORKER_PASSWORD` environment variables, or embedded directly
-in `--base-url` (`http://myworker:mypassword@runner-host/`).
+`--credentials <file>` (a JSON file with `login`/`password`) or the
+`WORKER_NAME`/`WORKER_PASSWORD` environment variables. Passwords embedded in
+`--base-url` are rejected, since the URL ends up in logs.
 
 ## Forge credentials
 
