@@ -202,10 +202,11 @@ pub struct FileSystemLogFileManager;
 #[pymethods]
 impl FileSystemLogFileManager {
     #[new]
-    fn new(log_directory: std::path::PathBuf) -> PyResult<(Self, LogFileManager)> {
+    fn new(log_directory: std::path::PathBuf) -> PyResult<PyClassInitializer<Self>> {
         let z = janitor::logs::FileSystemLogFileManager::new(log_directory)
             .map_err(convert_logs_error_to_py)?;
-        Ok((FileSystemLogFileManager, LogFileManager(Arc::new(z))))
+        Ok(PyClassInitializer::from(LogFileManager(Arc::new(z)))
+            .add_subclass(FileSystemLogFileManager))
     }
 }
 
@@ -216,10 +217,10 @@ pub struct S3LogFileManager;
 impl S3LogFileManager {
     #[new]
     #[pyo3(signature = (endpoint_url, bucket_name=None))]
-    fn new(endpoint_url: &str, bucket_name: Option<&str>) -> PyResult<(Self, LogFileManager)> {
+    fn new(endpoint_url: &str, bucket_name: Option<&str>) -> PyResult<PyClassInitializer<Self>> {
         let z = janitor::logs::S3LogFileManager::new(endpoint_url, bucket_name)
             .map_err(convert_logs_error_to_py)?;
-        Ok((S3LogFileManager, LogFileManager(Arc::new(z))))
+        Ok(PyClassInitializer::from(LogFileManager(Arc::new(z))).add_subclass(S3LogFileManager))
     }
 }
 
@@ -229,13 +230,13 @@ pub struct GCSLogFileManager;
 #[pymethods]
 impl GCSLogFileManager {
     #[new]
-    fn new(location: &str) -> PyResult<(Self, LogFileManager)> {
+    fn new(location: &str) -> PyResult<PyClassInitializer<Self>> {
         let url = url::Url::parse(location)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let z = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(janitor::logs::GCSLogFileManager::from_url(&url, None))
             .map_err(convert_logs_error_to_py)?;
-        Ok((GCSLogFileManager, LogFileManager(Arc::new(z))))
+        Ok(PyClassInitializer::from(LogFileManager(Arc::new(z))).add_subclass(GCSLogFileManager))
     }
 }
 

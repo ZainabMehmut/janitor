@@ -112,10 +112,10 @@ pub struct LocalGitVcsManager(Arc<janitor::vcs::LocalGitVcsManager>);
 #[pymethods]
 impl LocalGitVcsManager {
     #[new]
-    fn new(base_path: PathBuf) -> PyResult<(Self, VcsManager)> {
+    fn new(base_path: PathBuf) -> PyResult<PyClassInitializer<Self>> {
         let vcs_manager = Arc::new(janitor::vcs::LocalGitVcsManager::new(base_path));
         let manager = LocalGitVcsManager(vcs_manager.clone());
-        Ok((manager, VcsManager(vcs_manager)))
+        Ok(PyClassInitializer::from(VcsManager(vcs_manager)).add_subclass(manager))
     }
 
     #[getter]
@@ -144,12 +144,12 @@ pub struct RemoteGitVcsManager(Arc<janitor::vcs::RemoteGitVcsManager>);
 #[pymethods]
 impl RemoteGitVcsManager {
     #[new]
-    fn new(base_url: &str) -> PyResult<(Self, VcsManager)> {
+    fn new(base_url: &str) -> PyResult<PyClassInitializer<Self>> {
         let base_url =
             url::Url::parse(base_url).map_err(|e| PyValueError::new_err(format!("{}", e)))?;
         let vcs_manager = Arc::new(janitor::vcs::RemoteGitVcsManager::new(base_url));
         let manager = RemoteGitVcsManager(vcs_manager.clone());
-        Ok((manager, VcsManager(vcs_manager)))
+        Ok(PyClassInitializer::from(VcsManager(vcs_manager)).add_subclass(manager))
     }
 
     pub fn get_diff_url(
@@ -187,10 +187,10 @@ pub struct LocalBzrVcsManager(Arc<janitor::vcs::LocalBzrVcsManager>);
 #[pymethods]
 impl LocalBzrVcsManager {
     #[new]
-    fn new(base_path: PathBuf) -> PyResult<(Self, VcsManager)> {
+    fn new(base_path: PathBuf) -> PyResult<PyClassInitializer<Self>> {
         let vcs_manager = Arc::new(janitor::vcs::LocalBzrVcsManager::new(base_path));
         let manager = LocalBzrVcsManager(vcs_manager.clone());
-        Ok((manager, VcsManager(vcs_manager)))
+        Ok(PyClassInitializer::from(VcsManager(vcs_manager)).add_subclass(manager))
     }
 
     #[getter]
@@ -219,12 +219,12 @@ pub struct RemoteBzrVcsManager(Arc<janitor::vcs::RemoteBzrVcsManager>);
 #[pymethods]
 impl RemoteBzrVcsManager {
     #[new]
-    fn new(base_url: &str) -> PyResult<(Self, VcsManager)> {
+    fn new(base_url: &str) -> PyResult<PyClassInitializer<Self>> {
         let base_url =
             url::Url::parse(base_url).map_err(|e| PyValueError::new_err(format!("{}", e)))?;
         let vcs_manager = Arc::new(janitor::vcs::RemoteBzrVcsManager::new(base_url));
         let manager = RemoteBzrVcsManager(vcs_manager.clone());
-        Ok((manager, VcsManager(vcs_manager)))
+        Ok(PyClassInitializer::from(VcsManager(vcs_manager)).add_subclass(manager))
     }
 
     pub fn get_diff_url(

@@ -166,12 +166,12 @@ pub struct LocalArtifactManager;
 #[pymethods]
 impl LocalArtifactManager {
     #[new]
-    fn new(path: std::path::PathBuf) -> PyResult<(Self, ArtifactManager)> {
+    fn new(path: std::path::PathBuf) -> PyResult<PyClassInitializer<Self>> {
         let artifact_manager = janitor::artifacts::LocalArtifactManager::new(path.as_path())?;
-        Ok((
-            LocalArtifactManager,
-            ArtifactManager(Arc::new(artifact_manager)),
-        ))
+        Ok(
+            PyClassInitializer::from(ArtifactManager(Arc::new(artifact_manager)))
+                .add_subclass(LocalArtifactManager),
+        )
     }
 }
 

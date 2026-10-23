@@ -174,6 +174,11 @@ fn main() -> Result<(), i32> {
             ))) => {
                 report_failure("session-image-error", &e.to_string());
             }
+            Err(ognibuild::debian::apt::Error::Session(
+                e @ ognibuild::session::Error::MissingBinary { .. },
+            )) => {
+                report_failure("session-missing-binary", &e.to_string());
+            }
         }
     } else {
         (None, None)
