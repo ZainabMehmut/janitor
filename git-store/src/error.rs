@@ -166,7 +166,7 @@ impl axum::response::IntoResponse for GitStoreError {
             .status(status)
             .header(ERROR_CLASS_HEADER, class);
         // RFC 7235: a 401 must include WWW-Authenticate or clients
-        // treat it as terminal and won't retry with URL userinfo.
+        // treat it as terminal and won't retry with credentials.
         if status == StatusCode::UNAUTHORIZED {
             builder = builder.header("WWW-Authenticate", "Basic realm=\"Janitor\"");
         }

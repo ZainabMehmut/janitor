@@ -95,6 +95,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
     let base_url = args.base_url;
+    if base_url.password().is_some() {
+        eprintln!(
+            "Passwords in --base-url are not supported; use --credentials or WORKER_PASSWORD"
+        );
+        std::process::exit(1);
+    }
 
     let auth = if let Some(credentials) = args.credentials {
         #[derive(Deserialize)]
@@ -127,6 +133,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         janitor_worker::client::Credentials::from_url(&base_url)
     };
+
+    let Some(host) = base_url.host_str() else {
+        eprintln!("Base URL {} has no host", base_url);
+        std::process::exit(1);
+    };
+    if let Err(e) = auth.register_with_breezy(host) {
+        eprintln!("Failed to register credentials with Breezy: {}", e);
+        std::process::exit(1);
+    }
 
     let jenkins_build_url: Option<url::Url> = std::env::var("BUILD_URL").ok().and_then(|x| {
         x.parse()

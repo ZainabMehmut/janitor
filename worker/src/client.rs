@@ -214,29 +214,54 @@ impl Credentials {
         credentials
     }
 
-    /// Return a copy of `url` with the worker's Basic-auth credentials
-    /// embedded as `userinfo`, so transports that take URLs as their
-    /// only auth-bearing parameter (notably breezy/dulwich's HTTP git
-    /// push, which doesn't read our `reqwest` client) still talk to
-    /// the same authenticated endpoint we use for `/assign` and
-    /// `/finish`. For `Credentials::None` or `Credentials::Bearer`
-    /// the URL is returned unchanged; bearer-token push isn't a
-    /// thing on the wire this targets.
-    pub fn embed_in_url(&self, url: &Url) -> Url {
-        if let Credentials::Basic { username, password } = self {
-            let mut out = url.clone();
-            // `set_username`/`set_password` only fail when the URL
-            // cannot have a userinfo component (cannot-be-a-base
-            // URLs like `data:` or `mailto:`); for the http(s) URLs
-            // workers actually push to this is unreachable. Leave
-            // the URL untouched if we somehow hit one.
-            if out.set_username(username).is_ok() {
-                let _ = out.set_password(password.as_deref());
-            }
-            out
-        } else {
-            url.clone()
+    /// Let Breezy use these credentials for `host`, so that pushes to the
+    /// VCS stores behind the runner authenticate. Only Basic credentials
+    /// are handed to Breezy.
+    pub fn register_with_breezy(&self, host: &str) -> Result<(), Box<breezyshim::error::Error>> {
+        let Credentials::Basic { username, password } = self else {
+            return Ok(());
+        };
+        breezyshim::config::credential_store_registry().register_fallback(
+            "janitor-worker",
+            Box::new(WorkerCredentialStore {
+                host: host.to_string(),
+                username: username.clone(),
+                password: password.clone(),
+            }),
+        )?;
+        Ok(())
+    }
+}
+
+struct WorkerCredentialStore {
+    host: String,
+    username: String,
+    password: Option<String>,
+}
+
+impl breezyshim::config::CredentialStore for WorkerCredentialStore {
+    fn get_credentials(
+        &self,
+        scheme: &str,
+        host: &str,
+        port: Option<i64>,
+        _user: Option<&str>,
+        path: Option<&str>,
+        realm: Option<&str>,
+    ) -> breezyshim::Result<Option<breezyshim::config::Credentials>> {
+        if host != self.host {
+            return Ok(None);
         }
+        Ok(Some(breezyshim::config::Credentials {
+            scheme: Some(scheme.to_string()),
+            username: Some(self.username.clone()),
+            password: self.password.clone(),
+            host: Some(host.to_string()),
+            port,
+            path: path.map(|p| p.to_string()),
+            realm: realm.map(|r| r.to_string()),
+            verify_certificates: Some(true),
+        }))
     }
 }
 
@@ -529,6 +554,26 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+
+    #[test]
+    fn worker_credential_store_only_answers_for_its_host() {
+        use breezyshim::config::CredentialStore;
+        let store = WorkerCredentialStore {
+            host: "runner.example.com".to_string(),
+            username: "worker1".to_string(),
+            password: Some("secret".to_string()),
+        };
+        let creds = store
+            .get_credentials("https", "runner.example.com", None, None, None, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(creds.username.as_deref(), Some("worker1"));
+        assert_eq!(creds.password.as_deref(), Some("secret"));
+        assert!(store
+            .get_credentials("https", "github.com", None, None, None, None)
+            .unwrap()
+            .is_none());
+    }
 
     #[tokio::test]
     async fn bundle_results_without_directory_has_only_metadata() {
