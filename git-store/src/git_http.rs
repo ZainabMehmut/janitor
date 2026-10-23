@@ -460,7 +460,7 @@ fn validate_git_service(service: &str, auth_context: &AuthContext) -> Result<()>
     match service {
         "git-upload-pack" => Ok(()),
         "git-receive-pack" => {
-            // Return 401 rather than 403 so clients with URL userinfo
+            // Return 401 rather than 403 so clients with credentials
             // retry once challenged. Without the 401, breezy/dulwich
             // treat 403 as terminal.
             if auth_context.allow_writes {
@@ -1181,7 +1181,7 @@ mod tests {
     }
 
     /// Receive-pack yields 401 (not 403) when unauthenticated, so
-    /// breezy/dulwich retry with URL userinfo.
+    /// breezy/dulwich retry with credentials.
     #[test]
     fn test_validate_git_service_receive_pack_requires_writer() {
         let result = validate_git_service("git-receive-pack", &reader_ctx());
