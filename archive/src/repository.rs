@@ -382,6 +382,7 @@ impl RepositoryGenerator {
         info!("Generating {} repositories", repos.len());
 
         let mut tasks = Vec::new();
+        let mut failed = 0;
 
         for (_name, repo_config) in repos {
             let generator = Self {
@@ -404,8 +405,14 @@ impl RepositoryGenerator {
                 let (result, _index, remaining) = futures::future::select_all(tasks).await;
                 match result {
                     Ok(Ok(_)) => info!("Repository generation completed successfully"),
-                    Ok(Err(e)) => error!("Repository generation failed: {}", e),
-                    Err(e) => error!("Repository generation task failed: {}", e),
+                    Ok(Err(e)) => {
+                        error!("Repository generation failed: {}", e);
+                        failed += 1;
+                    }
+                    Err(e) => {
+                        error!("Repository generation task failed: {}", e);
+                        failed += 1;
+                    }
                 }
                 tasks = remaining;
             }
@@ -415,11 +422,24 @@ impl RepositoryGenerator {
         for task in tasks {
             match task.await {
                 Ok(Ok(_)) => info!("Repository generation completed successfully"),
-                Ok(Err(e)) => error!("Repository generation failed: {}", e),
-                Err(e) => error!("Repository generation task failed: {}", e),
+                Ok(Err(e)) => {
+                    error!("Repository generation failed: {}", e);
+                    failed += 1;
+                }
+                Err(e) => {
+                    error!("Repository generation task failed: {}", e);
+                    failed += 1;
+                }
             }
         }
 
+        if failed > 0 {
+            return Err(ArchiveError::RepositoryGeneration(format!(
+                "{} of {} repositories failed",
+                failed,
+                repos.len()
+            )));
+        }
         Ok(())
     }
 
@@ -838,5 +858,31 @@ mod tests {
             let got = std::fs::read(&p).unwrap();
             assert_eq!(got, bytes);
         }
+    }
+
+    #[tokio::test]
+    async fn generate_repositories_fails_when_a_repository_fails() {
+        let tmp = TempDir::new().unwrap();
+        let not_a_dir = tmp.path().join("file");
+        std::fs::write(&not_a_dir, b"").unwrap();
+        let scanner = Arc::new(PackageScanner::new("local://").await.unwrap());
+        let pool = sqlx::PgPool::connect_lazy("postgresql://localhost/unused").unwrap();
+        let generator = RepositoryGenerator::new(
+            scanner,
+            Arc::new(BuildManager::new(pool)),
+            RepositoryGenerationConfig::default(),
+        );
+        let repo = AptRepositoryConfig::new(
+            "bad".to_string(),
+            "bad".to_string(),
+            vec!["amd64".to_string()],
+            not_a_dir.join("bad"),
+        );
+        let repos = HashMap::from([("bad".to_string(), repo)]);
+        let err = generator.generate_repositories(&repos).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Repository generation failed: 1 of 1 repositories failed"
+        );
     }
 }
