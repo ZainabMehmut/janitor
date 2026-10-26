@@ -1638,53 +1638,167 @@ async fn seed_active_run_for_finish(state: &Arc<AppState>, log_id: &str) {
     state.active_runs.store(run).await;
 }
 
-/// `POST /finish` with a multipart body that has no `metadata` /
-/// `worker_result` part must be rejected as 400. This is the
-/// upload-processor `Missing worker_result field` validation branch.
-#[tokio::test]
-async fn finish_multipart_without_metadata_returns_400() {
-    let Some((app, state)) = setup().await else {
-        eprintln!("skipping: no test resources");
-        return;
-    };
-    let pool = state.database.pool().clone();
-    insert_codebase(&pool, "finish-neg-cb").await;
-    seed_active_run_for_finish(&state, "run-no-metadata").await;
+/// A multipart part: field name, file name and contents.
+type Part<'a> = (&'a str, Option<&'a str>, &'a [u8]);
 
-    // Multipart with a single unrelated `file` part -- no `metadata`
-    // or `worker_result` field.
-    let boundary = "no-metadata-boundary";
-    let body = format!(
-        "--{boundary}\r\n\
-         Content-Disposition: form-data; name=\"file\"; filename=\"stray.log\"\r\n\
-         Content-Type: text/plain\r\n\r\n\
-         hello\r\n\
-         --{boundary}--\r\n"
-    );
+/// `POST /active-runs/{run_id}/finish` with a multipart body of `parts`,
+/// sent in 64-byte chunks that arrive one at a time, as over a network.
+/// Without `complete` the body stops before the closing boundary.
+async fn post_finish_parts(
+    app: axum::Router,
+    run_id: &str,
+    parts: &[Part<'_>],
+    complete: bool,
+) -> (StatusCode, Value) {
+    use futures::StreamExt;
+
+    let boundary = "finish-parts-boundary";
+    let mut body = Vec::new();
+    for (name, filename, contents) in parts {
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"").as_bytes(),
+        );
+        if let Some(filename) = filename {
+            body.extend_from_slice(format!("; filename=\"{filename}\"").as_bytes());
+        }
+        body.extend_from_slice(b"\r\n\r\n");
+        body.extend_from_slice(contents);
+        body.extend_from_slice(b"\r\n");
+    }
+    if complete {
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    }
+    let chunks: Vec<_> = body
+        .chunks(64)
+        .map(|c| Ok::<_, std::io::Error>(axum::body::Bytes::copy_from_slice(c)))
+        .collect();
+    let chunks = futures::stream::iter(chunks).then(|c| async {
+        tokio::task::yield_now().await;
+        c
+    });
     let req = Request::builder()
         .method(Method::POST)
-        .uri("/active-runs/run-no-metadata/finish")
+        .uri(format!("/active-runs/{run_id}/finish"))
         .header(
             "content-type",
             format!("multipart/form-data; boundary={boundary}"),
         )
-        .body(Body::from(body))
+        .body(Body::from_stream(chunks))
         .unwrap();
     let response = app.oneshot(req).await.unwrap();
+    let status = response.status();
+    (status, get_body(response).await)
+}
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = get_body(response).await;
-    assert!(
-        body["error"]
-            .as_str()
-            .is_some_and(|s| s.contains("worker_result") || s.contains("Missing")),
-        "expected `worker_result`/`Missing` in error, got {body}"
+/// `POST /finish` stores a worker result that arrives in many chunks,
+/// and every log and artifact part sent with it.
+#[tokio::test]
+async fn finish_stores_every_uploaded_part() {
+    let Some((app, state)) = setup_with_campaign().await else {
+        eprintln!("skipping: no test resources");
+        return;
+    };
+    insert_codebase(state.database.pool(), "finish-neg-cb").await;
+    state
+        .auth_service
+        .create_worker("finish-worker", "pw", None)
+        .await
+        .expect("create worker");
+    seed_active_run_for_finish(&state, "run-all-parts").await;
+
+    let description = "x".repeat(256 * 1024);
+    let worker_result = json!({"code": "success", "description": description}).to_string();
+    let build_log = "build line\n".repeat(10_000);
+    let parts: [Part; 4] = [
+        ("metadata", Some("result.json"), worker_result.as_bytes()),
+        ("file", Some("build.log"), build_log.as_bytes()),
+        ("file", Some("worker.log"), b"worker output\n"),
+        ("file", Some("foo.deb"), b"deb contents"),
+    ];
+    let (status, body) = post_finish_parts(app, "run-all-parts", &parts, true).await;
+
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+    assert_eq!(
+        [&body["filenames"], &body["logs"], &body["artifacts"]],
+        [
+            &json!(["build.log", "worker.log", "foo.deb"]),
+            &json!(["build.log", "worker.log"]),
+            &json!(["foo.deb"]),
+        ]
     );
+    let row: (String, Option<String>, Vec<String>) =
+        sqlx::query_as("SELECT result_code, description, logfilenames FROM run WHERE id = $1")
+            .bind("run-all-parts")
+            .fetch_one(state.database.pool())
+            .await
+            .expect("run row must exist after finish");
+    assert_eq!(
+        row,
+        (
+            "success".to_string(),
+            Some(description),
+            vec!["build.log".to_string(), "worker.log".to_string()]
+        )
+    );
+}
 
-    let _ = state
-        .active_runs
-        .remove(&janitor::RunId::new("run-no-metadata").unwrap())
-        .await;
+/// `POST /finish` answers 400 when the worker result is missing, is
+/// not valid JSON, or the upload ends inside it.
+#[tokio::test]
+async fn finish_rejects_bad_worker_results() {
+    let Some((app, state)) = setup().await else {
+        eprintln!("skipping: no test resources");
+        return;
+    };
+    insert_codebase(state.database.pool(), "finish-neg-cb").await;
+
+    let cut_off = format!(
+        "{{\"code\":\"success\",\"description\":\"{}",
+        "x".repeat(64 * 1024)
+    );
+    let cases: Vec<(&str, Vec<Part>, bool)> = vec![
+        (
+            "run-no-metadata",
+            vec![("file", Some("stray.log"), b"hello")],
+            true,
+        ),
+        ("run-not-json", vec![("metadata", None, b"not json")], true),
+        (
+            "run-trailing",
+            vec![("metadata", None, b"{\"code\":\"success\"} x")],
+            true,
+        ),
+        (
+            "run-cut-off",
+            vec![("metadata", None, cut_off.as_bytes())],
+            false,
+        ),
+    ];
+    let mut responses = Vec::new();
+    for (run_id, parts, complete) in &cases {
+        seed_active_run_for_finish(&state, run_id).await;
+        responses.push(post_finish_parts(app.clone(), run_id, parts, *complete).await);
+        let _ = state
+            .active_runs
+            .remove(&janitor::RunId::new(*run_id).unwrap())
+            .await;
+    }
+
+    let error = |e: &str| {
+        (
+            StatusCode::BAD_REQUEST,
+            json!({"error": format!("Upload processing failed: {e}")}),
+        )
+    };
+    assert_eq!(
+        responses,
+        vec![
+            error("Validation error: Missing worker_result field"),
+            error("Parse error: Invalid worker_result JSON: expected ident at line 1 column 2"),
+            error("Parse error: Invalid worker_result JSON: trailing characters at line 1 column 20"),
+            error("Multipart error: Failed to read worker_result: Error parsing `multipart/form-data` request"),
+        ]
+    );
 }
 
 /// `POST /finish` with malformed multipart (unterminated body) yields

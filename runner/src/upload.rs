@@ -112,30 +112,25 @@ impl UploadProcessor {
             // pre-categorise files.
             match field_name.as_str() {
                 "worker_result" | "metadata" => {
-                    // Process JSON worker result
-                    let data = field.bytes().await.map_err(|e| {
-                        UploadError::Multipart(format!("Failed to read worker_result: {}", e))
-                    })?;
+                    let (data_len, preview, parsed) = parse_worker_result(field).await?;
 
-                    // Debug: dump the raw worker payload before parsing so
+                    // Debug: dump the start of the raw worker payload so
                     // we can confirm whether the worker actually sends
                     // `branches`/`revision`. Site shows every success run
                     // with empty result_branches; the question is whether
                     // the runner is receiving them and discarding, or the
                     // worker never puts them on the wire. Print the first
                     // 2KB and the parsed branches length.
-                    let preview_len = data.len().min(2048);
                     log::info!(
-                        "upload {} raw worker_result ({} bytes, first {}): {}",
+                        "upload {} raw worker_result ({} bytes read, first {}): {}",
                         run_id,
-                        data.len(),
-                        preview_len,
-                        String::from_utf8_lossy(&data[..preview_len])
+                        data_len,
+                        preview.len(),
+                        String::from_utf8_lossy(&preview)
                     );
-                    let parsed: crate::WorkerResult =
-                        serde_json::from_slice(&data).map_err(|e| {
-                            UploadError::Parse(format!("Invalid worker_result JSON: {}", e))
-                        })?;
+                    let parsed: crate::WorkerResult = parsed.map_err(|e| {
+                        UploadError::Parse(format!("Invalid worker_result JSON: {}", e))
+                    })?;
                     log::info!(
                         "upload {} parsed: code={} branches={:?} revision={:?} main_branch_revision={:?}",
                         run_id,
@@ -582,6 +577,64 @@ pub enum UploadError {
     /// Validation error.
     #[error("Validation error: {0}")]
     Validation(String),
+}
+
+/// Parse the worker result field as JSON while it arrives, instead
+/// of reading the whole field into memory first. Returns the number of
+/// bytes read, their first 2 KiB and the parse result; reading stops
+/// as soon as the parser fails.
+async fn parse_worker_result<'a>(
+    mut field: axum::extract::multipart::Field<'a>,
+) -> Result<(usize, Vec<u8>, serde_json::Result<WorkerResult>), UploadError> {
+    let (sender, chunks) = tokio::sync::mpsc::channel(8);
+    let parser = tokio::task::spawn_blocking(move || {
+        serde_json::from_reader(std::io::BufReader::new(ChunkReader {
+            chunks,
+            current: axum::body::Bytes::new(),
+        }))
+    });
+    let mut data_len = 0;
+    let mut preview = Vec::new();
+    let read = loop {
+        match field.chunk().await {
+            Ok(Some(chunk)) => {
+                data_len += chunk.len();
+                let n = chunk.len().min(2048 - preview.len());
+                preview.extend_from_slice(&chunk[..n]);
+                if sender.send(chunk).await.is_err() {
+                    break Ok(());
+                }
+            }
+            Ok(None) => break Ok(()),
+            Err(e) => break Err(e),
+        }
+    };
+    drop(sender);
+    let parsed = parser
+        .await
+        .map_err(|e| UploadError::Parse(format!("JSON parser failed: {}", e)))?;
+    read.map_err(|e| UploadError::Multipart(format!("Failed to read worker_result: {}", e)))?;
+    Ok((data_len, preview, parsed))
+}
+
+/// Blocking reader over the chunks that [`parse_worker_result`] receives.
+struct ChunkReader {
+    chunks: tokio::sync::mpsc::Receiver<axum::body::Bytes>,
+    current: axum::body::Bytes,
+}
+
+impl std::io::Read for ChunkReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        while self.current.is_empty() {
+            match self.chunks.blocking_recv() {
+                Some(chunk) => self.current = chunk,
+                None => return Ok(0),
+            }
+        }
+        let n = buf.len().min(self.current.len());
+        buf[..n].copy_from_slice(&self.current.split_to(n));
+        Ok(n)
+    }
 }
 
 /// Stream a multipart field to disk in chunks instead of buffering
