@@ -13,6 +13,7 @@ homepage = "https://github.com/jelmer/janitor"
 crate-type = ["cdylib"]
 
 [dependencies]
+futures = "0.3"
 pyo3 = {workspace = true, features=["serde", "chrono"]}
 janitor = { path = ".." }
 reqwest = { workspace = true, features = ["json"] }

@@ -161,53 +161,6 @@ impl Drop for TestDatabase {
     }
 }
 
-/// Mock artifact manager for use in tests.
-#[derive(Debug, Clone)]
-pub struct MockArtifactManager;
-
-#[async_trait]
-impl janitor::artifacts::ArtifactManager for MockArtifactManager {
-    async fn store_artifacts(
-        &self,
-        _run_id: &RunId,
-        _local_path: &std::path::Path,
-        _names: Option<&[String]>,
-    ) -> Result<(), janitor::artifacts::Error> {
-        Ok(())
-    }
-
-    async fn get_artifact(
-        &self,
-        _run_id: &RunId,
-        _filename: &str,
-    ) -> Result<Box<dyn std::io::Read + Sync + Send>, janitor::artifacts::Error> {
-        Ok(Box::new(std::io::Cursor::new(b"mock artifact data")))
-    }
-
-    fn public_artifact_url(&self, run_id: &RunId, filename: &str) -> url::Url {
-        format!("mock://artifacts/{}/{}", run_id, filename)
-            .parse()
-            .unwrap()
-    }
-
-    async fn retrieve_artifacts(
-        &self,
-        _run_id: &RunId,
-        _local_path: &std::path::Path,
-        _filter_fn: Option<&(dyn for<'a> Fn(&'a str) -> bool + Sync + Send)>,
-    ) -> Result<(), janitor::artifacts::Error> {
-        Ok(())
-    }
-
-    async fn iter_ids(&self) -> Box<dyn Iterator<Item = String> + Send> {
-        Box::new(Vec::<String>::new().into_iter())
-    }
-
-    async fn delete_artifacts(&self, _run_id: &RunId) -> Result<(), janitor::artifacts::Error> {
-        Ok(())
-    }
-}
-
 /// Mock log manager for use in tests.
 #[derive(Debug, Clone)]
 pub struct MockLogFileManager;
@@ -275,8 +228,8 @@ impl crate::logs::LogFileManager for MockLogFileManager {
 #[derive(Default)]
 pub struct TestConfigBuilder {
     campaigns: Vec<janitor::config::Campaign>,
-    artifact_manager: Option<Arc<dyn janitor::artifacts::ArtifactManager>>,
-    backup_artifact_manager: Option<Arc<dyn janitor::artifacts::ArtifactManager>>,
+    artifact_manager: Option<Arc<janitor::artifacts::ArtifactManager>>,
+    backup_artifact_manager: Option<Arc<janitor::artifacts::ArtifactManager>>,
 }
 
 impl TestConfigBuilder {
@@ -305,7 +258,7 @@ impl TestConfigBuilder {
     /// Use `manager` instead of a mock as the main artifact manager.
     pub fn with_artifact_manager(
         mut self,
-        manager: Arc<dyn janitor::artifacts::ArtifactManager>,
+        manager: Arc<janitor::artifacts::ArtifactManager>,
     ) -> Self {
         self.artifact_manager = Some(manager);
         self
@@ -314,7 +267,7 @@ impl TestConfigBuilder {
     /// Set the backup artifact manager.
     pub fn with_backup_artifact_manager(
         mut self,
-        manager: Arc<dyn janitor::artifacts::ArtifactManager>,
+        manager: Arc<janitor::artifacts::ArtifactManager>,
     ) -> Self {
         self.backup_artifact_manager = Some(manager);
         self
@@ -438,10 +391,10 @@ fn assemble_app_state(
     mut config_builder: TestConfigBuilder,
 ) -> Arc<AppState> {
     let log_manager = Arc::new(MockLogFileManager);
-    let artifact_manager: Arc<dyn janitor::artifacts::ArtifactManager> = config_builder
+    let artifact_manager: Arc<janitor::artifacts::ArtifactManager> = config_builder
         .artifact_manager
         .take()
-        .unwrap_or_else(|| Arc::new(MockArtifactManager));
+        .unwrap_or_else(|| Arc::new(janitor::artifacts::ArtifactManager::in_memory()));
     let backup_artifact_manager = config_builder.backup_artifact_manager.take();
     let config = Arc::new(config_builder.build_janitor_config());
 

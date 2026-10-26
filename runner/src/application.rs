@@ -248,14 +248,13 @@ impl ApplicationBuilder {
 
         // Initialize artifact management from textproto artifact_location.
         log::info!("Initializing artifact management...");
-        let artifact_manager: Arc<dyn janitor::artifacts::ArtifactManager> = Arc::from(
+        let artifact_manager: Arc<janitor::artifacts::ArtifactManager> = Arc::from(
             janitor::artifacts::get_artifact_manager(
                 janitor_config
                     .artifact_location
                     .as_deref()
                     .unwrap_or("/var/lib/janitor/artifacts"),
             )
-            .await
             .map_err(|e| {
                 ApplicationError::ArtifactManagement(format!(
                     "Failed to initialize artifact manager: {}",
@@ -370,7 +369,7 @@ impl ApplicationBuilder {
 
 type BackupManagers = (
     Arc<dyn janitor::logs::LogFileManager>,
-    Arc<dyn janitor::artifacts::ArtifactManager>,
+    Arc<janitor::artifacts::ArtifactManager>,
 );
 
 /// Create the `logs` and `artifacts` subdirectories of the
@@ -395,7 +394,7 @@ fn open_backup_managers(dir: &std::path::Path) -> Result<BackupManagers, Applica
         ))
     })?;
     let artifact_manager =
-        janitor::artifacts::LocalArtifactManager::new(&artifacts_dir).map_err(|e| {
+        janitor::artifacts::ArtifactManager::local(&artifacts_dir).map_err(|e| {
             ApplicationError::ArtifactManagement(format!(
                 "Failed to open backup artifact directory {:?}: {}",
                 artifacts_dir, e

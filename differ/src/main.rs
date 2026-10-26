@@ -185,7 +185,7 @@ struct Args {
 
 struct AppState {
     pool: sqlx::PgPool,
-    artifact_manager: Arc<dyn ArtifactManager>,
+    artifact_manager: Arc<ArtifactManager>,
     task_memory_limit: u64,
     task_timeout: u64,
     diffoscope_command: String,
@@ -294,7 +294,7 @@ fn check_successful(run_id: &RunId, run: Option<Run>) -> Result<Run> {
 
 /// Retrieve the two runs' binaries into fresh temp dirs.
 async fn fetch_binaries(
-    artifact_manager: &dyn ArtifactManager,
+    artifact_manager: &ArtifactManager,
     old_id: &RunId,
     new_id: &RunId,
 ) -> Result<(
@@ -1317,7 +1317,6 @@ async fn run() -> std::result::Result<(), StartupError> {
         .clone()
         .ok_or(StartupError::NoArtifactLocation)?;
     let artifact_manager = janitor::artifacts::get_artifact_manager(&artifact_location)
-        .await
         .map_err(StartupError::ArtifactManager)?;
 
     if let Some(p) = args.cache_path.as_ref() {
@@ -1771,7 +1770,7 @@ mod tests {
         use tower::ServiceExt;
 
         /// Build an `AppState` suitable for tests: a lazy pool that
-        /// never actually connects and a `LocalArtifactManager`
+        /// never actually connects and an artifact manager
         /// backed by a temp directory. `Router::oneshot` requests
         /// that never reach the DB or artifact manager succeed
         /// without any external services.
@@ -1779,8 +1778,8 @@ mod tests {
             let pool = PgPoolOptions::new()
                 .max_connections(1)
                 .connect_lazy_with(PgConnectOptions::new());
-            let artifact_manager = janitor::artifacts::LocalArtifactManager::new(artifacts_root)
-                .expect("LocalArtifactManager::new");
+            let artifact_manager = janitor::artifacts::ArtifactManager::local(artifacts_root)
+                .expect("ArtifactManager::local");
             Arc::new(AppState {
                 pool,
                 artifact_manager: Arc::new(artifact_manager),
@@ -1994,8 +1993,8 @@ mod tests {
                 .max_connections(1)
                 .acquire_timeout(std::time::Duration::from_millis(500))
                 .connect_lazy_with(bad_opts);
-            let artifact_manager = janitor::artifacts::LocalArtifactManager::new(art.path())
-                .expect("LocalArtifactManager::new");
+            let artifact_manager = janitor::artifacts::ArtifactManager::local(art.path())
+                .expect("ArtifactManager::local");
             let state = Arc::new(AppState {
                 pool,
                 artifact_manager: Arc::new(artifact_manager),

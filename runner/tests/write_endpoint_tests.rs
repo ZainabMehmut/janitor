@@ -8,6 +8,7 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use chrono::Utc;
+use futures::TryStreamExt;
 use janitor::queue::VcsInfo;
 use janitor_runner::{test_utils, ActiveRun, AppState, Backchannel};
 use serde_json::{json, Value};
@@ -2379,20 +2380,26 @@ async fn finish_with_artifact(
     (status, get_body(response).await)
 }
 
-/// An artifact manager rooted in a directory that no longer exists, so
-/// storing artifacts in it fails.
-fn broken_artifact_manager() -> Arc<dyn janitor::artifacts::ArtifactManager> {
+/// An artifact manager whose root directory has been replaced by a regular
+/// file, so storing artifacts in it fails. The returned directory must be
+/// kept alive for as long as the manager is used.
+fn broken_artifact_manager() -> (tempfile::TempDir, Arc<janitor::artifacts::ArtifactManager>) {
     let dir = tempfile::tempdir().unwrap();
-    Arc::new(janitor::artifacts::LocalArtifactManager::new(dir.path()).unwrap())
+    let root = dir.path().join("artifacts");
+    let manager = janitor::artifacts::ArtifactManager::local(&root).unwrap();
+    std::fs::remove_dir(&root).unwrap();
+    std::fs::write(&root, b"").unwrap();
+    (dir, Arc::new(manager))
 }
 
 /// Like Python, a run whose artifacts can't be stored is recorded as
 /// `artifact-upload-failed` and reports no artifacts.
 #[tokio::test]
 async fn finish_marks_artifact_upload_failed() {
+    let (_broken_dir, broken) = broken_artifact_manager();
     let builder = test_utils::TestConfigBuilder::new()
         .with_campaign("test-campaign", "true")
-        .with_artifact_manager(broken_artifact_manager());
+        .with_artifact_manager(broken);
     let Some((app, state)) =
         test_utils::create_test_app_with_state_with_config_if_available(builder)
             .await
@@ -2427,11 +2434,11 @@ async fn finish_marks_artifact_upload_failed() {
 #[tokio::test]
 async fn finish_stores_artifacts_in_backup() {
     let backup_dir = tempfile::tempdir().unwrap();
-    let backup =
-        Arc::new(janitor::artifacts::LocalArtifactManager::new(backup_dir.path()).unwrap());
+    let backup = Arc::new(janitor::artifacts::ArtifactManager::local(backup_dir.path()).unwrap());
+    let (_broken_dir, broken) = broken_artifact_manager();
     let builder = test_utils::TestConfigBuilder::new()
         .with_campaign("test-campaign", "true")
-        .with_artifact_manager(broken_artifact_manager())
+        .with_artifact_manager(broken)
         .with_backup_artifact_manager(backup.clone());
     let Some((app, state)) =
         test_utils::create_test_app_with_state_with_config_if_available(builder)
@@ -2448,17 +2455,13 @@ async fn finish_stores_artifacts_in_backup() {
     assert_eq!(body["artifacts"], json!(["foo.deb"]));
     assert_eq!(body["result"]["code"], "success");
 
-    let mut contents = Vec::new();
-    std::io::Read::read_to_end(
-        &mut janitor::artifacts::ArtifactManager::get_artifact(
-            backup.as_ref(),
-            &janitor::RunId::new("run-backup").unwrap(),
-            "foo.deb",
-        )
+    let contents: Vec<u8> = backup
+        .get_artifact(&janitor::RunId::new("run-backup").unwrap(), "foo.deb")
         .await
-        .expect("artifact in backup"),
-        &mut contents,
-    )
-    .unwrap();
+        .expect("artifact in backup")
+        .map_ok(|chunk| chunk.to_vec())
+        .try_concat()
+        .await
+        .unwrap();
     assert_eq!(contents, b"deb contents");
 }

@@ -9,13 +9,13 @@ use janitor::RunId;
 
 /// Wraps the shared [`ArtifactManager`] and downloads runs into a fresh temp dir.
 pub struct ArtifactProcessor {
-    artifact_manager: Box<dyn ArtifactManager>,
+    artifact_manager: ArtifactManager,
 }
 
 impl ArtifactProcessor {
     /// Open the artifact store at `artifact_location`.
     pub async fn new(artifact_location: &str) -> Result<Self> {
-        let artifact_manager = get_artifact_manager(artifact_location).await.map_err(|e| {
+        let artifact_manager = get_artifact_manager(artifact_location).map_err(|e| {
             UploadError::Config(format!("Failed to create artifact manager: {}", e))
         })?;
         Ok(Self { artifact_manager })

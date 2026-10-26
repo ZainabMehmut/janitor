@@ -1,16 +1,13 @@
 use crate::RunId;
-use async_trait::async_trait;
+use futures::stream::{BoxStream, TryStreamExt};
 use std::path::Path;
 
-mod local;
+mod store;
 
-pub use local::LocalArtifactManager;
+pub use store::ArtifactManager;
 
-#[cfg(feature = "gcs")]
-mod gcs;
-
-#[cfg(feature = "gcs")]
-pub use gcs::GCSArtifactManager;
+/// The contents of an artifact, as a stream of chunks.
+pub type ArtifactStream = BoxStream<'static, Result<bytes::Bytes, Error>>;
 
 #[derive(Debug)]
 pub enum Error {
@@ -41,63 +38,42 @@ impl From<std::io::Error> for Error {
     }
 }
 
-#[async_trait]
-pub trait ArtifactManager: std::fmt::Debug + Send + Sync {
-    /// Store artifacts from a local directory
-    async fn store_artifacts(
-        &self,
-        run_id: &RunId,
-        local_path: &Path,
-        names: Option<&[String]>,
-    ) -> Result<(), Error>;
-
-    /// Get a single artifact as a reader
-    async fn get_artifact(
-        &self,
-        run_id: &RunId,
-        filename: &str,
-    ) -> Result<Box<dyn std::io::Read + Sync + Send>, Error>;
-
-    /// Get the public URL for an artifact
-    fn public_artifact_url(&self, run_id: &RunId, filename: &str) -> url::Url;
-
-    /// Retrieve artifacts to a local directory with optional filter
-    async fn retrieve_artifacts(
-        &self,
-        run_id: &RunId,
-        local_path: &Path,
-        filter_fn: Option<&(dyn for<'a> Fn(&'a str) -> bool + Sync + Send)>,
-    ) -> Result<(), Error>;
-
-    /// List all artifact IDs
-    async fn iter_ids(&self) -> Box<dyn Iterator<Item = String> + Send>;
-
-    /// Delete all artifacts for a run
-    async fn delete_artifacts(&self, run_id: &RunId) -> Result<(), Error>;
+impl From<object_store::Error> for Error {
+    fn from(e: object_store::Error) -> Self {
+        match e {
+            object_store::Error::NotFound { .. } => Error::ArtifactsMissing,
+            e => Error::Other(e.to_string()),
+        }
+    }
 }
 
-pub async fn list_ids(manager: &dyn ArtifactManager) -> Result<(), Error> {
-    for id in manager.iter_ids().await {
+pub async fn list_ids(manager: &ArtifactManager) -> Result<(), Error> {
+    let mut ids = manager.iter_ids();
+    while let Some(id) = ids.try_next().await? {
         println!("{}", id);
     }
 
     Ok(())
 }
 
-pub async fn get_artifact_manager(location: &str) -> Result<Box<dyn ArtifactManager>, Error> {
+pub fn get_artifact_manager(location: &str) -> Result<ArtifactManager, Error> {
     if location.starts_with("gs://") {
         #[cfg(feature = "gcs")]
         {
-            Ok(Box::new(
-                GCSArtifactManager::from_url(&location.parse().unwrap()).await?,
-            ))
+            let url: url::Url = location
+                .parse()
+                .map_err(|e| Error::Other(format!("invalid location {}: {}", location, e)))?;
+            let bucket_name = url
+                .host_str()
+                .ok_or_else(|| Error::Other(format!("missing bucket name in {}", location)))?;
+            ArtifactManager::gcs(bucket_name)
         }
         #[cfg(not(feature = "gcs"))]
         {
             Err(Error::ServiceUnavailable)
         }
     } else {
-        Ok(Box::new(LocalArtifactManager::new(Path::new(location))?))
+        Ok(ArtifactManager::local(Path::new(location))?)
     }
 }
 
@@ -111,15 +87,16 @@ pub async fn get_artifact_manager(location: &str) -> Result<Box<dyn ArtifactMana
 /// # Returns
 /// A list of run IDs for which the backup artifacts were successfully uploaded.
 pub async fn upload_backup_artifacts(
-    backup_artifact_manager: &dyn ArtifactManager,
-    artifact_manager: &dyn ArtifactManager,
+    backup_artifact_manager: &ArtifactManager,
+    artifact_manager: &ArtifactManager,
 ) -> Result<Vec<String>, Error> {
     use futures::stream::{self, StreamExt};
 
     // Process artifacts in parallel with a concurrency limit
     const MAX_CONCURRENT: usize = 3;
 
-    let ids: Vec<_> = backup_artifact_manager.iter_ids().await.collect();
+    // Collect up front, since processing deletes from the store being listed.
+    let ids: Vec<String> = backup_artifact_manager.iter_ids().try_collect().await?;
 
     let results = stream::iter(ids)
         .map(|id| async move {
@@ -145,8 +122,8 @@ pub async fn upload_backup_artifacts(
 
 async fn process_single_backup_artifact(
     id: &str,
-    backup_artifact_manager: &dyn ArtifactManager,
-    artifact_manager: &dyn ArtifactManager,
+    backup_artifact_manager: &ArtifactManager,
+    artifact_manager: &ArtifactManager,
 ) -> Result<(), Error> {
     // Must be a directory: retrieve_artifacts writes each file as
     // `local_path/<filename>`, so `local_path` needs to already be
@@ -170,8 +147,8 @@ async fn process_single_backup_artifact(
 }
 
 pub async fn store_artifacts_with_backup(
-    manager: &dyn ArtifactManager,
-    backup_manager: Option<&dyn ArtifactManager>,
+    manager: &ArtifactManager,
+    backup_manager: Option<&ArtifactManager>,
     from_dir: &Path,
     run_id: &RunId,
     names: Option<&[String]>,
@@ -233,16 +210,16 @@ mod tests {
         _requires(Error::Other("x".into()));
     }
 
-    /// Bare filesystem path routes to LocalArtifactManager.
+    /// Bare filesystem path routes to a local store.
     #[tokio::test]
     async fn get_artifact_manager_bare_path_yields_local_manager() {
         let dir = tempfile::tempdir().unwrap();
-        let mgr = get_artifact_manager(dir.path().to_str().unwrap())
-            .await
-            .expect("bare path must succeed");
+        let mgr =
+            get_artifact_manager(dir.path().to_str().unwrap()).expect("bare path must succeed");
         // Can't assert the concrete type, but we can exercise the
         // trait API to prove the construction is correct.
-        let _ = mgr.iter_ids().await;
+        let ids: Vec<String> = mgr.iter_ids().try_collect().await.unwrap();
+        assert_eq!(ids, Vec::<String>::new());
     }
 
     /// `gs://` without the gcs feature compiled in returns
@@ -251,7 +228,7 @@ mod tests {
     #[cfg(not(feature = "gcs"))]
     #[tokio::test]
     async fn get_artifact_manager_gs_without_feature_returns_service_unavailable() {
-        let err = get_artifact_manager("gs://some-bucket").await.unwrap_err();
+        let err = get_artifact_manager("gs://some-bucket").unwrap_err();
         assert!(matches!(err, Error::ServiceUnavailable));
     }
 
@@ -260,9 +237,9 @@ mod tests {
     #[tokio::test]
     async fn store_with_backup_primary_success_skips_backup() {
         let primary_dir = tempfile::tempdir().unwrap();
-        let primary = LocalArtifactManager::new(primary_dir.path()).unwrap();
+        let primary = ArtifactManager::local(primary_dir.path()).unwrap();
         let backup_dir = tempfile::tempdir().unwrap();
-        let backup = LocalArtifactManager::new(backup_dir.path()).unwrap();
+        let backup = ArtifactManager::local(backup_dir.path()).unwrap();
 
         let src = tempfile::tempdir().unwrap();
         std::fs::write(src.path().join("out.txt"), b"body").unwrap();
@@ -278,12 +255,14 @@ mod tests {
         .unwrap();
 
         // Primary has the artifact; backup does not.
-        let mut primary_out = primary
+        let primary_contents: Vec<u8> = primary
             .get_artifact(&RunId::new("run-1").unwrap(), "out.txt")
             .await
+            .unwrap()
+            .map_ok(|chunk| chunk.to_vec())
+            .try_concat()
+            .await
             .unwrap();
-        let mut primary_contents = Vec::new();
-        primary_out.read_to_end(&mut primary_contents).unwrap();
         assert_eq!(primary_contents, b"body");
 
         let err = match backup
@@ -293,7 +272,17 @@ mod tests {
             Ok(_) => panic!("backup must not have the artifact"),
             Err(e) => e,
         };
-        assert!(matches!(err, Error::ArtifactsMissing | Error::IoError(_)));
+        assert!(matches!(err, Error::ArtifactsMissing), "got {err:?}");
+    }
+
+    /// An artifact manager whose root directory has been replaced by a
+    /// regular file, so storing artifacts in it fails.
+    fn broken_manager(dir: &Path) -> ArtifactManager {
+        let root = dir.join("artifacts");
+        let manager = ArtifactManager::local(&root).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        std::fs::write(&root, b"").unwrap();
+        manager
     }
 
     /// When the primary manager fails, storing in the backup manager
@@ -301,11 +290,9 @@ mod tests {
     #[tokio::test]
     async fn store_with_backup_primary_failure_uses_backup() {
         let primary_dir = tempfile::tempdir().unwrap();
-        let primary = LocalArtifactManager::new(primary_dir.path()).unwrap();
-        // Remove the primary's directory so storing there fails.
-        drop(primary_dir);
+        let primary = broken_manager(primary_dir.path());
         let backup_dir = tempfile::tempdir().unwrap();
-        let backup = LocalArtifactManager::new(backup_dir.path()).unwrap();
+        let backup = ArtifactManager::local(backup_dir.path()).unwrap();
 
         let src = tempfile::tempdir().unwrap();
         std::fs::write(src.path().join("out.txt"), b"body").unwrap();
@@ -320,12 +307,14 @@ mod tests {
         .await
         .unwrap();
 
-        let mut backup_out = backup
+        let backup_contents: Vec<u8> = backup
             .get_artifact(&RunId::new("run-1").unwrap(), "out.txt")
             .await
+            .unwrap()
+            .map_ok(|chunk| chunk.to_vec())
+            .try_concat()
+            .await
             .unwrap();
-        let mut backup_contents = Vec::new();
-        backup_out.read_to_end(&mut backup_contents).unwrap();
         assert_eq!(backup_contents, b"body");
     }
 
@@ -333,8 +322,7 @@ mod tests {
     #[tokio::test]
     async fn store_with_backup_primary_failure_without_backup_errors() {
         let primary_dir = tempfile::tempdir().unwrap();
-        let primary = LocalArtifactManager::new(primary_dir.path()).unwrap();
-        drop(primary_dir);
+        let primary = broken_manager(primary_dir.path());
 
         let src = tempfile::tempdir().unwrap();
         std::fs::write(src.path().join("out.txt"), b"body").unwrap();
@@ -356,9 +344,9 @@ mod tests {
     #[tokio::test]
     async fn upload_backup_artifacts_moves_artifacts_and_clears_backup() {
         let primary_dir = tempfile::tempdir().unwrap();
-        let primary = LocalArtifactManager::new(primary_dir.path()).unwrap();
+        let primary = ArtifactManager::local(primary_dir.path()).unwrap();
         let backup_dir = tempfile::tempdir().unwrap();
-        let backup = LocalArtifactManager::new(backup_dir.path()).unwrap();
+        let backup = ArtifactManager::local(backup_dir.path()).unwrap();
 
         // Seed the backup with two runs.
         for run in ["run-a", "run-b"] {
@@ -376,7 +364,7 @@ mod tests {
         assert_eq!(done_sorted, vec!["run-a".to_string(), "run-b".to_string()]);
 
         // Backup is empty now.
-        let backup_ids: Vec<_> = backup.iter_ids().await.collect();
+        let backup_ids: Vec<String> = backup.iter_ids().try_collect().await.unwrap();
         assert!(
             backup_ids.is_empty(),
             "backup should be empty after migration, still has: {:?}",
@@ -385,12 +373,14 @@ mod tests {
 
         // Primary now holds both runs with correct bodies.
         for run in ["run-a", "run-b"] {
-            let mut reader = primary
+            let buf: Vec<u8> = primary
                 .get_artifact(&RunId::new(run).unwrap(), "out.txt")
                 .await
+                .unwrap()
+                .map_ok(|chunk| chunk.to_vec())
+                .try_concat()
+                .await
                 .unwrap();
-            let mut buf = Vec::new();
-            reader.read_to_end(&mut buf).unwrap();
             assert_eq!(buf, run.as_bytes());
         }
     }
@@ -399,9 +389,9 @@ mod tests {
     #[tokio::test]
     async fn upload_backup_artifacts_empty_backup_returns_empty_done_list() {
         let primary_dir = tempfile::tempdir().unwrap();
-        let primary = LocalArtifactManager::new(primary_dir.path()).unwrap();
+        let primary = ArtifactManager::local(primary_dir.path()).unwrap();
         let backup_dir = tempfile::tempdir().unwrap();
-        let backup = LocalArtifactManager::new(backup_dir.path()).unwrap();
+        let backup = ArtifactManager::local(backup_dir.path()).unwrap();
 
         let done = upload_backup_artifacts(&backup, &primary).await.unwrap();
         assert!(done.is_empty());

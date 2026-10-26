@@ -61,3 +61,35 @@ async def test_retrieve_nonexistent(local_artifact_manager):
     with tempfile.TemporaryDirectory() as td:
         with pytest.raises(ArtifactsMissing):
             await manager.retrieve_artifacts("some-run-id", td)
+
+
+@pytest.mark.asyncio
+async def test_get_artifact(local_artifact_manager):
+    manager = local_artifact_manager
+    with tempfile.TemporaryDirectory() as td:
+        with open(os.path.join(td, "somefile"), "wb") as f:
+            f.write(b"lalala")
+        await manager.store_artifacts("some-run-id", td)
+    reader = await manager.get_artifact("some-run-id", "somefile")
+    assert b"lalala" == await reader.read()
+
+
+@pytest.mark.asyncio
+async def test_get_artifact_iterates_chunks(local_artifact_manager):
+    manager = local_artifact_manager
+    contents = bytes(range(256)) * 40000
+    with tempfile.TemporaryDirectory() as td:
+        with open(os.path.join(td, "somefile"), "wb") as f:
+            f.write(contents)
+        await manager.store_artifacts("some-run-id", td)
+    reader = await manager.get_artifact("some-run-id", "somefile")
+    chunks = [chunk async for chunk in reader]
+    assert len(chunks) > 1
+    assert contents == b"".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_get_artifact_nonexistent(local_artifact_manager):
+    manager = local_artifact_manager
+    with pytest.raises(ArtifactsMissing):
+        await manager.get_artifact("some-run-id", "somefile")
