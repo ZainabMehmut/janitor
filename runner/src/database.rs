@@ -10,6 +10,15 @@ use sqlx::postgres::types::PgInterval;
 use sqlx::PgPool;
 use std::collections::HashMap;
 
+/// A successful run whose codemod result lists items to `verify` waits for a manual review.
+fn publish_status(result: &JanitorResult) -> &'static str {
+    let verify = result.codemod.as_ref().and_then(|c| c.get("verify"));
+    match verify.and_then(|v| v.as_array()) {
+        Some(items) if result.code == "success" && !items.is_empty() => "needs-manual-review",
+        _ => "unknown",
+    }
+}
+
 /// Wire-shape of a queue row joined against `codebase`, used by both
 /// scoring lookups and single-item fetches. Kept next to those
 /// callers so column drift is a single compile-time fix.
@@ -464,7 +473,8 @@ INSERT INTO run (
     value, worker,
     result_tags,
     resume_from, failure_details, failure_stage,
-    target_branch_url, change_set, failure_transient, codebase
+    target_branch_url, change_set, failure_transient, codebase,
+    publish_status
 ) VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8,
@@ -476,7 +486,8 @@ INSERT INTO run (
         FROM unnest($19::text[], $20::text[]) AS t(n, r)
     ) ELSE NULL END,
     $22, $23, $24,
-    $25, $26, $27, $28
+    $25, $26, $27, $28,
+    $29::text::publish_status
 )
 "#,
         )
@@ -508,6 +519,7 @@ INSERT INTO run (
         .bind(result.change_set.as_deref())
         .bind(result.transient)
         .bind(&result.codebase)
+        .bind(publish_status(result))
         .execute(&mut **tx)
         .await?;
 

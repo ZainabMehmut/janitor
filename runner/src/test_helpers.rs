@@ -368,6 +368,78 @@ mod tests {
     }
 
     test_with_database! {
+        async fn test_finish_run_sets_publish_status_from_verify(test_db: TestDatabase) {
+            use crate::JanitorResult;
+            use chrono::Utc;
+
+            setup_runner_tables(&test_db).await.unwrap();
+            sqlx::query(
+                "INSERT INTO codebase (name, branch_url, url, vcs_type)
+                 VALUES ('verify-codebase', 'https://example.invalid/v', 'https://example.invalid/v', 'git')",
+            )
+            .execute(test_db.pool())
+            .await
+            .unwrap();
+            let runner_db = create_test_runner_db(&test_db);
+
+            let cases = [
+                ("run-verify", "success", serde_json::json!({"verify": ["the Standards-Version"]})),
+                ("run-empty", "success", serde_json::json!({"verify": []})),
+                ("run-failed", "build-failed", serde_json::json!({"verify": ["the Standards-Version"]})),
+                ("run-plain", "success", serde_json::json!({"changes": 2})),
+            ];
+            for (log_id, code, codemod) in cases {
+                let mut result = JanitorResult {
+                    log_id: janitor::RunId::new(log_id).unwrap(),
+                    branch_url: "https://example.invalid/v".to_string(),
+                    subpath: None,
+                    code: code.to_string(),
+                    transient: None,
+                    codebase: janitor::CodebaseName::new("verify-codebase").unwrap(),
+                    campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
+                    description: None,
+                    codemod: Some(codemod),
+                    value: None,
+                    logfilenames: vec![],
+                    start_time: Utc::now(),
+                    finish_time: Utc::now(),
+                    revision: None,
+                    main_branch_revision: None,
+                    change_set: None,
+                    tags: None,
+                    remotes: None,
+                    branches: None,
+                    failure_details: None,
+                    failure_stage: None,
+                    resume: None,
+                    target: None,
+                    worker_name: None,
+                    vcs_type: None,
+                    target_branch_url: None,
+                    context: None,
+                    builder_result: None,
+                };
+                runner_db.finish_run(&mut result, "codemod", None, 0).await.unwrap();
+            }
+
+            let statuses: Vec<(String, String)> =
+                sqlx::query_as("SELECT id, publish_status::text FROM run ORDER BY id")
+                    .fetch_all(test_db.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(
+                statuses,
+                vec![
+                    ("run-empty".to_string(), "unknown".to_string()),
+                    ("run-failed".to_string(), "unknown".to_string()),
+                    ("run-plain".to_string(), "unknown".to_string()),
+                    ("run-verify".to_string(), "needs-manual-review".to_string()),
+                ]
+            );
+        }
+    }
+
+    test_with_database! {
         async fn test_check_resume_result_skips_rejected_runs(test_db: TestDatabase) {
             setup_runner_tables(&test_db).await.unwrap();
 
