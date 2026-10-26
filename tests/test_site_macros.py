@@ -15,6 +15,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
+from bs4 import BeautifulSoup
 from jinja2 import Environment, select_autoescape
 
 from janitor.site import template_loader
@@ -82,6 +83,25 @@ def test_local_command_bzr_url():
     assert (
         "bzr branch https://example.com/bzr/mycodebase/unstable mycodebase" in rendered
     )
+
+
+def test_publish_buttons_link_publish_history():
+    src = (
+        '{% from "run_util.html" import publish_buttons with context %}'
+        '{{ publish_buttons("lintian-fixes", "mycodebase") }}'
+    )
+    soup = BeautifulSoup(env.from_string(src).render(), "html.parser")
+    assert [
+        (span.attrs, span.get_text(), [a["href"] for a in span.select("a")])
+        for span in soup.select("#publish-status, #publish-history")
+    ] == [
+        ({"id": "publish-status", "role": "status", "tabindex": "-1"}, "", []),
+        (
+            {"id": "publish-history", "hidden": ""},
+            "See the publish history.",
+            ["/cupboard/publish/"],
+        ),
+    ]
 
 
 def test_display_publish_blockers():

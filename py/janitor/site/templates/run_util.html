@@ -162,12 +162,23 @@ cd {{ codebase }}
         <button id="{{ push_id }}">Push</button>
         <button id="{{ propose_id }}">Create merge proposal</button>
     {% endif %}
+    <span id="{{ publish_id }}-status" role="status" tabindex="-1"></span>
+    <span id="{{ publish_id }}-history" hidden>See the <a href="/cupboard/publish/">publish history</a>.</span>
     <script>
         $(function() {
+            var queuedTexts = [];
+            function queued(button, text) {
+                $(button).remove();
+                if (!queuedTexts.includes(text)) {
+                    queuedTexts.push(text);
+                }
+                $("#{{ publish_id }}-status").text(queuedTexts.join(" ") + " ").append($("#{{ publish_id }}-history").clone().removeAttr("id hidden")).focus();
+            }
+
             $("#{{ publish_id }}").click(function() {
                 $.post('/api/{{ campaign }}/c/{{ codebase }}/publish', {}, function(data) {
                         if (data) {
-                            $("#{{ publish_id }}").replaceWith("<span>Publishing...</span>");
+                            queued("#{{ publish_id }}", "Publish queued.");
                         }
                     }, 'json')
                     .fail(function(response) {
@@ -181,7 +192,7 @@ cd {{ codebase }}
                         'mode': 'propose'
                     }, function(data) {
                         if (data) {
-                            $("#{{ propose_id }}").replaceWith("<span>Publishing merge proposal...</span>");
+                            queued("#{{ propose_id }}", "Merge proposal queued.");
                         }
                     }, 'json')
                     .fail(function(response) {
@@ -193,7 +204,7 @@ cd {{ codebase }}
                 $.post('/api/{{ campaign }}/c/{{ codebase }}/publish', {
                         'mode': 'push-derived'
                     }, function(data) {
-                        $("#{{ fork_id }}").replaceWith("<span>Creating fork.</span>");
+                        queued("#{{ fork_id }}", "Fork queued.");
                     }, 'json')
                     .fail(function(response) {
                         $("#{{ fork_id }}").replaceWith("<span>Failed: " + response.responseText + "</span>");
@@ -204,7 +215,7 @@ cd {{ codebase }}
                 $.post('/api/{{ campaign }}/c/{{ codebase }}/publish', {
                         'mode': 'push'
                     }, function(data) {
-                        $("#{{ push_id }}").replaceWith("<span>Pushing.</span>");
+                        queued("#{{ push_id }}", "Push queued.");
                     }, 'json')
                     .fail(function(response) {
                         $("#{{ push_id }}").replaceWith("<span>Failed: " + response.responseText + "</span>");
