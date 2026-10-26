@@ -192,7 +192,7 @@ async fn test_log_manager() {
     let temp_path = temp_dir.path().to_str().unwrap();
 
     // Create the log manager
-    let manager = create_log_manager(Some(temp_path)).await.unwrap();
+    let manager = create_log_manager(Some(temp_path)).unwrap();
 
     // Test data
     let codebase = &janitor::CodebaseName::new("test-package").unwrap();
@@ -213,7 +213,6 @@ async fn test_log_manager() {
             codebase,
             run_id,
             temp_log_path.to_str().unwrap(),
-            None,
             Some(log_name),
         )
         .await;
@@ -229,9 +228,13 @@ async fn test_log_manager() {
     assert!(exists, "Log should exist after import");
 
     // Retrieve the log
-    let mut retrieved = manager.get_log(codebase, run_id, log_name).await.unwrap();
-    let mut retrieved_content = Vec::new();
-    std::io::Read::read_to_end(&mut retrieved, &mut retrieved_content).unwrap();
+    let retrieved_content: Vec<u8> =
+        futures::TryStreamExt::try_concat(futures::TryStreamExt::map_ok(
+            manager.get_log(codebase, run_id, log_name).await.unwrap(),
+            |chunk| chunk.to_vec(),
+        ))
+        .await
+        .unwrap();
 
     assert_eq!(
         retrieved_content, test_content,

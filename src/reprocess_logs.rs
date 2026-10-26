@@ -1,6 +1,7 @@
 use crate::analyze_log::AnalyzeLogFn;
 use crate::logs::LogFileManager;
 use crate::{Campaign, ChangeSetId, CodebaseName, RunId};
+use futures::TryStreamExt;
 use sqlx::Executor;
 use tokio::time::timeout;
 use tracing::{error, info};
@@ -8,7 +9,7 @@ use tracing::{error, info};
 /// Reprocess run logs.
 pub async fn reprocess_run_logs(
     db: &sqlx::PgPool,
-    logfile_manager: &dyn LogFileManager,
+    logfile_manager: &LogFileManager,
     codebase: &CodebaseName,
     campaign: &Campaign,
     log_id: &RunId,
@@ -33,15 +34,18 @@ pub async fn reprocess_run_logs(
         if !result_code.starts_with(prefix) {
             continue;
         }
-        match timeout(
-            log_timeout.to_std().unwrap(),
-            logfile_manager.get_log(codebase, log_id, logname),
-        )
-        .await
-        {
+        let fetch = async {
+            logfile_manager
+                .get_log(codebase, log_id, logname)
+                .await?
+                .map_ok(|chunk| chunk.to_vec())
+                .try_concat()
+                .await
+        };
+        match timeout(log_timeout.to_std().unwrap(), fetch).await {
             Ok(r) => match r {
-                Ok(logf) => {
-                    break f(logf);
+                Ok(contents) => {
+                    break f(Box::new(std::io::Cursor::new(contents)));
                 }
                 Err(crate::logs::Error::NotFound) => {
                     return None;

@@ -39,8 +39,6 @@ num_cpus = "1.16"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 hostname = "0.4"
-google-cloud-storage = { workspace = true, optional = true }
-google-cloud-auth = { workspace = true, optional = true }
 thiserror = "2.0"
 tempfile = { workspace = true }
 testcontainers = { version = "0.27", default-features = false, features = ["aws-lc-rs"], optional = true }
@@ -60,7 +58,7 @@ futures = "0.3"
 default = ["debian", "cli"]
 debian = ["janitor/debian", "dep:debversion", "dep:debian-control"]
 cli = ["dep:clap"]
-gcs = ["dep:google-cloud-storage", "dep:google-cloud-auth", "janitor/gcs"]
+gcs = ["janitor/gcs"]
 gcp = ["gcs", "janitor/gcp"]
 # Enables ephemeral test infrastructure (test_utils, testcontainers-based Redis).
 # Turned on automatically for tests via the dev-dep on `janitor-runner` above.
