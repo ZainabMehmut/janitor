@@ -3922,9 +3922,8 @@ pub fn public_app(state: Arc<AppState>) -> Router<Arc<AppState>> {
     // lands as a 5ms 400 with "Multipart error: Failed to read file
     // data: Error parsing `multipart/form-data` request" the moment
     // axum starts decoding the first file part. Disable the limit
-    // on the upload routes; the per-file size cap is enforced by
-    // the upload processor itself (`max_file_size`), and the ingress
-    // proxy-body-size is the network-edge ceiling.
+    // on the upload routes; the ingress proxy-body-size is the
+    // ceiling.
     // The `/runner/` prefix that workers use is an ingress concern,
     // not a routing concern in this binary. nginx matches
     // `/runner(/|$)(.*)` on the public site and rewrites to `/$2`
