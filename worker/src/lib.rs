@@ -1307,6 +1307,95 @@ mod tests {
         test_run_worker_existing(tempfile::tempdir().unwrap().path(), VcsType::Bzr);
     }
 
+    #[serial]
+    #[test]
+    fn test_run_worker_without_vcs_type_or_target_repository() {
+        let td = tempfile::tempdir().unwrap();
+        let tmp_path = td.path();
+        let wt = breezyshim::controldir::create_standalone_workingtree(
+            &tmp_path.join("main"),
+            &breezyshim::controldir::FORMAT_REGISTRY
+                .make_controldir("git")
+                .unwrap(),
+        )
+        .unwrap();
+        let output_dir = tmp_path.join("output");
+        std::fs::create_dir(&output_dir).unwrap();
+        let mut metadata = Metadata::default();
+        let err = run_worker(
+            &CodebaseName::new("mycodebase").unwrap(),
+            &Campaign::new("mycampaign").unwrap(),
+            Some(&wt.branch().get_user_url()),
+            &RunId::new("run-id").unwrap(),
+            &serde_json::json!({
+                "chroot": serde_json::Value::Null,
+                "dep_server_url": serde_json::Value::Null,
+            }),
+            HashMap::new(),
+            vec!["sh", "-c", "echo foo > bar"],
+            &output_dir,
+            &mut metadata,
+            None,
+            "foo",
+            "generic",
+            None,
+            Path::new(""),
+            None,
+            None,
+            None,
+            None,
+            &mut None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "no-target-repository");
+        assert_eq!(metadata.revision, None);
+    }
+
+    #[serial]
+    #[test]
+    fn test_run_worker_without_branch_url_or_vcs_type() {
+        let td = tempfile::tempdir().unwrap();
+        let output_dir = td.path().join("output");
+        std::fs::create_dir(&output_dir).unwrap();
+        let mut metadata = Metadata::default();
+        let err = run_worker(
+            &CodebaseName::new("mycodebase").unwrap(),
+            &Campaign::new("mycampaign").unwrap(),
+            None,
+            &RunId::new("run-id").unwrap(),
+            &serde_json::json!({
+                "chroot": serde_json::Value::Null,
+                "dep_server_url": serde_json::Value::Null,
+            }),
+            HashMap::new(),
+            vec!["sh", "-c", "echo foo > bar"],
+            &output_dir,
+            &mut metadata,
+            Some(&Url::from_directory_path(td.path().join("target")).unwrap()),
+            "foo",
+            "generic",
+            None,
+            Path::new(""),
+            None,
+            None,
+            None,
+            None,
+            &mut None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "branch-missing");
+    }
+
     fn test_run_worker_existing(tmp_path: &std::path::Path, vcs_type: VcsType) {
         let wt = breezyshim::controldir::create_standalone_workingtree(
             &tmp_path.join("main"),
