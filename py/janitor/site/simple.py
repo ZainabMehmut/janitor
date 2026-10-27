@@ -37,6 +37,7 @@ from aiohttp_openmetrics import metrics, metrics_middleware
 from jinja2 import select_autoescape
 
 from .. import state
+from ..artifacts import ArtifactsMissing
 from ..config import Config
 from ..schedule import do_schedule
 from ..vcs import VcsManager, get_vcs_managers_from_config
@@ -253,11 +254,11 @@ async def handle_result_file(request):
     else:
         try:
             f = await request.app["artifact_manager"].get_artifact(run_id, filename)
-        except FileNotFoundError as e:
+        except ArtifactsMissing as e:
             raise web.HTTPNotFound(
                 text=f"No artifact {filename} for run {run_id}"
             ) from e
-        return web.Response(body=f.read())
+        return web.Response(body=f)
 
 
 @html_template("ready-list.html", headers={"Vary": "Cookie"})

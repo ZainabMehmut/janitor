@@ -28,6 +28,7 @@ from aiohttp import ClientSession, web
 from aiohttp.web_middlewares import normalize_path_middleware
 from jinja2 import select_autoescape
 
+from janitor.artifacts import ArtifactsMissing
 from janitor.site import template_loader
 from janitor.vcs import get_vcs_managers_from_config
 
@@ -560,11 +561,11 @@ async def handle_result_file(request):
     else:
         try:
             f = await request.app["artifact_manager"].get_artifact(run_id, filename)
-        except FileNotFoundError as e:
+        except ArtifactsMissing as e:
             raise web.HTTPNotFound(
                 text=f"No artifact {filename} for run {run_id}"
             ) from e
-        return web.Response(body=f.read())
+        return web.Response(body=f)
 
 
 @routes.get("/cupboard/ready", name="cupboard-ready")

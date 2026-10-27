@@ -1,9 +1,9 @@
-use crate::io::Readable;
+use futures::TryStreamExt;
 use janitor::RunId;
 use pyo3::create_exception;
-use pyo3::exceptions::{PyRuntimeError, PyTimeoutError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyStopAsyncIteration, PyTimeoutError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use pyo3::types::{PyAny, PyBytes};
 use std::sync::Arc;
 
 create_exception!(
@@ -44,8 +44,49 @@ fn artifact_err_to_py_err(e: janitor::artifacts::Error) -> PyErr {
     }
 }
 
+/// The contents of an artifact.
+///
+/// Iterate over it with ``async for`` to get the contents in chunks, or
+/// await ``read()`` to get all of it at once.
+#[pyclass]
+pub struct ArtifactReader(Arc<tokio::sync::Mutex<janitor::artifacts::ArtifactStream>>);
+
+#[pymethods]
+impl ArtifactReader {
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __anext__<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let stream = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let chunk = stream
+                .lock()
+                .await
+                .try_next()
+                .await
+                .map_err(artifact_err_to_py_err)?
+                .ok_or_else(|| PyStopAsyncIteration::new_err(()))?;
+            Ok(Python::attach(|py| PyBytes::new(py, &chunk).unbind()))
+        })
+    }
+
+    /// Read the remaining contents.
+    fn read<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let stream = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut stream = stream.lock().await;
+            let mut contents = Vec::new();
+            while let Some(chunk) = stream.try_next().await.map_err(artifact_err_to_py_err)? {
+                contents.extend_from_slice(&chunk);
+            }
+            Ok(Python::attach(|py| PyBytes::new(py, &contents).unbind()))
+        })
+    }
+}
+
 #[pyclass(subclass)]
-pub struct ArtifactManager(Arc<dyn janitor::artifacts::ArtifactManager>);
+pub struct ArtifactManager(Arc<janitor::artifacts::ArtifactManager>);
 
 #[pymethods]
 impl ArtifactManager {
@@ -92,7 +133,7 @@ impl ArtifactManager {
             .map_err(|_| PyTimeoutError::new_err("Timeout"))?
             .map_err(artifact_err_to_py_err)?;
 
-            Ok(Readable::new(r))
+            Ok(ArtifactReader(Arc::new(tokio::sync::Mutex::new(r))))
         })
     }
 
@@ -167,7 +208,7 @@ pub struct LocalArtifactManager;
 impl LocalArtifactManager {
     #[new]
     fn new(path: std::path::PathBuf) -> PyResult<PyClassInitializer<Self>> {
-        let artifact_manager = janitor::artifacts::LocalArtifactManager::new(path.as_path())?;
+        let artifact_manager = janitor::artifacts::ArtifactManager::local(path.as_path())?;
         Ok(
             PyClassInitializer::from(ArtifactManager(Arc::new(artifact_manager)))
                 .add_subclass(LocalArtifactManager),
@@ -191,11 +232,9 @@ fn list_ids<'a>(py: Python<'a>, artifact_manager: &ArtifactManager) -> PyResult<
 
 #[pyfunction]
 fn get_artifact_manager(location: &str) -> PyResult<ArtifactManager> {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let artifact_manager = runtime
-        .block_on(janitor::artifacts::get_artifact_manager(location))
-        .map_err(artifact_err_to_py_err)?;
-    Ok(ArtifactManager(Arc::from(artifact_manager)))
+    let artifact_manager =
+        janitor::artifacts::get_artifact_manager(location).map_err(artifact_err_to_py_err)?;
+    Ok(ArtifactManager(Arc::new(artifact_manager)))
 }
 
 #[pyfunction]
@@ -249,6 +288,7 @@ fn store_artifacts_with_backup<'a>(
 
 pub(crate) fn init(py: Python, module: &Bound<PyModule>) -> PyResult<()> {
     module.add_class::<ArtifactManager>()?;
+    module.add_class::<ArtifactReader>()?;
     module.add_class::<LocalArtifactManager>()?;
     module.add_class::<GCSArtifactManager>()?;
 

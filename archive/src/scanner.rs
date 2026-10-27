@@ -56,7 +56,7 @@ pub struct BuildInfo {
 /// re-downloads its artifacts. Sharing one tempdir would leak
 /// stale artifacts across runs.
 pub struct PackageScanner {
-    artifact_manager: Arc<dyn ArtifactManager>,
+    artifact_manager: Arc<ArtifactManager>,
     // Root directory that owns per-build subdirs. Kept for the
     // scanner's lifetime so the whole tree gets cleaned up when
     // the process exits, even if individual subdirs escape via
@@ -87,7 +87,6 @@ impl PackageScanner {
         cache_directory: Option<PathBuf>,
     ) -> ArchiveResult<Self> {
         let artifact_manager = get_artifact_manager(artifact_location)
-            .await
             .map_err(|e| ArchiveError::ArtifactRetrieval(e.to_string()))?;
         let temp_dir = tempfile::Builder::new()
             .prefix(crate::TMP_PREFIX)
@@ -899,7 +898,7 @@ mod tests {
         use super::BuildInfo;
         let store = tempfile::tempdir().unwrap();
         let store_url = store.path().display().to_string();
-        // LocalArtifactManager stores runs at <root>/<run_id>/*.
+        // Local artifact stores keep runs at <root>/<run_id>/*.
         let run_dir = store.path().join("run-1");
         std::fs::create_dir_all(&run_dir).unwrap();
         write_deb(
