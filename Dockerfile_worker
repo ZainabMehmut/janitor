@@ -1,24 +1,6 @@
-# https://hub.docker.com/_/debian
-FROM docker.io/debian:testing-slim AS build
+ARG BUILD_BASE=ghcr.io/jelmer/janitor/build_base:latest
+FROM ${BUILD_BASE} AS build
 MAINTAINER Jelmer Vernooij <jelmer@jelmer.uk>
-
-ARG DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update --yes \
- && apt-get install --yes --no-install-recommends \
-        auto-apt-proxy \
-        iproute2 \
- && apt-get satisfy --yes --no-install-recommends \
-        ca-certificates \
-        cargo \
-        libclang-dev \
-        libpython3-dev \
-        libssl-dev \
-        pkg-config \
-        nettle-dev \
-        protobuf-compiler \
-        python3-minimal \
- && apt-get clean
 
 COPY . /code
 

@@ -1,7 +1,7 @@
 DOCKER_TAG ?= latest
 PYTHON ?= python3
 SHA = $(shell git rev-parse HEAD)
-DOCKERFILES = $(shell ls Dockerfile_* | sed 's/Dockerfile_//' )
+DOCKERFILES = build_base $(shell ls Dockerfile_* | sed 's/Dockerfile_//' | grep -vx build_base)
 DOCKER_TARGETS := $(patsubst %,docker-%,$(DOCKERFILES))
 BUILD_TARGETS := $(patsubst %,build-%,$(DOCKERFILES))
 PUSH_TARGETS := $(patsubst %,push-%,$(DOCKERFILES))
@@ -95,7 +95,7 @@ docker-%:
 	$(MAKE) push-$*
 
 build-%:
-	buildah build --no-cache -t ghcr.io/jelmer/janitor/$*:$(DOCKER_TAG) -t ghcr.io/jelmer/janitor/$*:$(SHA) -f Dockerfile_$* .
+	buildah build --no-cache --build-arg BUILD_BASE=ghcr.io/jelmer/janitor/build_base:$(DOCKER_TAG) -t ghcr.io/jelmer/janitor/$*:$(DOCKER_TAG) -t ghcr.io/jelmer/janitor/$*:$(SHA) -f Dockerfile_$* .
 
 push-%:
 	buildah push ghcr.io/jelmer/janitor/$*:$(DOCKER_TAG)

@@ -15,6 +15,15 @@ $ podman build -t ghcr.io/jelmer/janitor/site:latest -f Dockerfile_site .
 $ buildah build -t ghcr.io/jelmer/janitor/site:latest -f Dockerfile_site .
 ```
 
+The images that build the Rust code in this tree start `FROM ghcr.io/jelmer/janitor/build_base:latest`, which has their build dependencies. To build one of them from your own checkout, build that image first:
+
+```console
+$ podman build -t ghcr.io/jelmer/janitor/build_base:latest -f Dockerfile_build_base .
+$ podman build -t ghcr.io/jelmer/janitor/differ:latest -f Dockerfile_differ .
+```
+
+Or give it another name and pass it with `--build-arg BUILD_BASE=<name>`.
+
 **Run**:
 
 ```console
