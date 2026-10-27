@@ -551,12 +551,10 @@ async def handle_result_file(request):
             raise web.HTTPNotFound(
                 text=f"No log file {filename} for run {run_id}"
             ) from e
-        else:
-            with logfile as f:
-                text = f.read().decode("utf-8", "replace")
         return web.Response(
             content_type="text/plain",
-            text=text,
+            charset="utf-8",
+            body=logfile,
         )
     else:
         try:

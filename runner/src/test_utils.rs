@@ -16,9 +16,7 @@ use crate::{
     vcs::RunnerVcsManager,
     AppState,
 };
-use async_trait::async_trait;
 use janitor::database::{Database, DatabaseConfig};
-use janitor::{CodebaseName, RunId};
 use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -158,68 +156,6 @@ impl Drop for TestDatabase {
                 .execute(&admin_pool)
                 .await;
         });
-    }
-}
-
-/// Mock log manager for use in tests.
-#[derive(Debug, Clone)]
-pub struct MockLogFileManager;
-
-#[async_trait]
-impl crate::logs::LogFileManager for MockLogFileManager {
-    async fn has_log(
-        &self,
-        _codebase: &CodebaseName,
-        _run_id: &RunId,
-        _name: &str,
-    ) -> Result<bool, crate::logs::Error> {
-        Ok(true)
-    }
-
-    async fn get_log(
-        &self,
-        _codebase: &CodebaseName,
-        _run_id: &RunId,
-        _name: &str,
-    ) -> Result<Box<dyn std::io::Read + Send + Sync>, crate::logs::Error> {
-        Ok(Box::new(std::io::Cursor::new(b"mock log content")))
-    }
-
-    async fn import_log(
-        &self,
-        _codebase: &CodebaseName,
-        _run_id: &RunId,
-        _orig_path: &str,
-        _mtime: Option<chrono::DateTime<chrono::Utc>>,
-        _basename: Option<&str>,
-    ) -> Result<(), crate::logs::Error> {
-        Ok(())
-    }
-
-    async fn delete_log(
-        &self,
-        _codebase: &CodebaseName,
-        _run_id: &RunId,
-        _name: &str,
-    ) -> Result<(), crate::logs::Error> {
-        Ok(())
-    }
-
-    async fn iter_logs(&self) -> Box<dyn Iterator<Item = (String, String, Vec<String>)>> {
-        Box::new(Vec::new().into_iter())
-    }
-
-    async fn get_ctime(
-        &self,
-        _codebase: &CodebaseName,
-        _run_id: &RunId,
-        _name: &str,
-    ) -> Result<chrono::DateTime<chrono::Utc>, crate::logs::Error> {
-        Ok(chrono::Utc::now())
-    }
-
-    async fn health_check(&self) -> Result<(), crate::logs::Error> {
-        Ok(())
     }
 }
 
@@ -390,7 +326,7 @@ fn assemble_app_state(
     redis_client: redis::Client,
     mut config_builder: TestConfigBuilder,
 ) -> Arc<AppState> {
-    let log_manager = Arc::new(MockLogFileManager);
+    let log_manager = Arc::new(janitor::logs::LogFileManager::in_memory());
     let artifact_manager: Arc<janitor::artifacts::ArtifactManager> = config_builder
         .artifact_manager
         .take()

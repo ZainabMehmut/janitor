@@ -2576,7 +2576,6 @@ async fn finish_run_multipart_internal(
             &run_id,
             path_str,
             Some(&log_file.filename),
-            Some(janitor_result.finish_time.timestamp()),
         )
         .await
         {

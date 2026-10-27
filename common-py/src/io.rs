@@ -1,73 +1,54 @@
-use pyo3::exceptions::PyRuntimeError;
+use futures::stream::BoxStream;
+use futures::TryStreamExt;
+use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use std::io::Read;
+use std::sync::Arc;
 
+type ByteStream = BoxStream<'static, PyResult<bytes::Bytes>>;
+
+/// Contents read from a store.
+///
+/// Iterate over it with ``async for`` to get the contents in chunks, or
+/// await ``read()`` to get all of it at once.
 #[pyclass]
-pub(crate) struct Readable(Box<dyn std::io::Read + Send + Sync>);
+pub(crate) struct AsyncReader(Arc<tokio::sync::Mutex<ByteStream>>);
 
-impl Readable {
-    pub fn new(read: Box<dyn std::io::Read + Send + Sync>) -> Self {
-        Self(read)
-    }
-}
-
-fn read_bytes(source: &mut dyn std::io::Read, size: Option<usize>) -> std::io::Result<Vec<u8>> {
-    match size {
-        // Python's file-object convention: read() / read(None) means "read until EOF",
-        // not "read one buffer" - std::io::Read::read() is allowed to return fewer bytes
-        // than the buffer without that meaning EOF.
-        None => {
-            let mut buf = Vec::new();
-            source.read_to_end(&mut buf)?;
-            Ok(buf)
-        }
-        Some(n) => {
-            let mut buf = vec![0; n];
-            let read_n = source.read(&mut buf)?;
-            buf.truncate(read_n);
-            Ok(buf)
-        }
+impl AsyncReader {
+    pub fn new(stream: ByteStream) -> Self {
+        Self(Arc::new(tokio::sync::Mutex::new(stream)))
     }
 }
 
 #[pymethods]
-impl Readable {
-    #[pyo3(signature = (size=None))]
-    fn read(&mut self, py: Python, size: Option<usize>) -> PyResult<Py<PyAny>> {
-        let buf = read_bytes(&mut self.0, size).map_err(PyRuntimeError::new_err)?;
-        Ok(PyBytes::new(py, &buf).into())
-    }
-
-    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+impl AsyncReader {
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
 
-    fn __exit__(
-        &mut self,
-        _exc_type: Py<PyAny>,
-        _exc_value: Py<PyAny>,
-        _traceback: Py<PyAny>,
-    ) -> bool {
-        false
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_read_bytes_none_reads_past_one_buffer() {
-        let data = vec![7u8; 5000];
-        let mut cursor = std::io::Cursor::new(data.clone());
-        assert_eq!(read_bytes(&mut cursor, None).unwrap(), data);
+    fn __anext__<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let stream = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let chunk = stream
+                .lock()
+                .await
+                .try_next()
+                .await?
+                .ok_or_else(|| PyStopAsyncIteration::new_err(()))?;
+            Ok(Python::attach(|py| PyBytes::new(py, &chunk).unbind()))
+        })
     }
 
-    #[test]
-    fn test_read_bytes_some_respects_requested_size() {
-        let data = vec![7u8; 100];
-        let mut cursor = std::io::Cursor::new(data);
-        assert_eq!(read_bytes(&mut cursor, Some(10)).unwrap().len(), 10);
+    /// Read the remaining contents.
+    fn read<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let stream = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut stream = stream.lock().await;
+            let mut contents = Vec::new();
+            while let Some(chunk) = stream.try_next().await? {
+                contents.extend_from_slice(&chunk);
+            }
+            Ok(Python::attach(|py| PyBytes::new(py, &contents).unbind()))
+        })
     }
 }

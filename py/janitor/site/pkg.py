@@ -235,9 +235,8 @@ WHERE followup.origin = $1""",
 
     async def _get_log(name):
         try:
-            return (
-                await logfile_manager.get_log(run["codebase"], run["id"], name)
-            ).read()
+            logfile = await logfile_manager.get_log(run["codebase"], run["id"], name)
+            return await logfile.read()
         except FileNotFoundError:
             return None
         except LogRetrievalError as e:

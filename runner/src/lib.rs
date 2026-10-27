@@ -1684,11 +1684,11 @@ pub struct AppState {
     /// VCS management system.
     pub vcs_manager: Arc<vcs::RunnerVcsManager>,
     /// Log file management system.
-    pub log_manager: Arc<dyn logs::LogFileManager>,
+    pub log_manager: Arc<logs::LogFileManager>,
     /// Artifact storage management system.
     pub artifact_manager: Arc<janitor::artifacts::ArtifactManager>,
     /// Log manager to fall back to when `log_manager` fails.
-    pub backup_log_manager: Option<Arc<dyn logs::LogFileManager>>,
+    pub backup_log_manager: Option<Arc<logs::LogFileManager>>,
     /// Artifact manager to fall back to when `artifact_manager` fails.
     pub backup_artifact_manager: Option<Arc<janitor::artifacts::ArtifactManager>>,
     /// Error tracking system.
@@ -1773,7 +1773,7 @@ pub struct HealthReport {
 /// presence is treated as healthy.
 pub struct HealthChecker {
     database: Arc<database::RunnerDatabase>,
-    log_manager: Arc<dyn logs::LogFileManager>,
+    log_manager: Arc<logs::LogFileManager>,
     _vcs_manager: Arc<vcs::RunnerVcsManager>,
     _artifact_manager: Arc<janitor::artifacts::ArtifactManager>,
 }
@@ -1783,7 +1783,7 @@ impl HealthChecker {
     pub fn new(
         database: Arc<database::RunnerDatabase>,
         vcs_manager: Arc<vcs::RunnerVcsManager>,
-        log_manager: Arc<dyn logs::LogFileManager>,
+        log_manager: Arc<logs::LogFileManager>,
         artifact_manager: Arc<janitor::artifacts::ArtifactManager>,
     ) -> Self {
         Self {

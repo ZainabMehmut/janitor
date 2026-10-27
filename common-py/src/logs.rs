@@ -1,10 +1,11 @@
-use crate::io::Readable;
-use chrono::{DateTime, Utc};
+use crate::io::AsyncReader;
+use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use janitor::{CodebaseName, RunId};
 use pyo3::create_exception;
 use pyo3::exceptions::{
     PyFileNotFoundError, PyOSError, PyPermissionError, PyRuntimeError, PyStopAsyncIteration,
-    PyTimeoutError,
+    PyTimeoutError, PyValueError,
 };
 use pyo3::prelude::*;
 use std::future::Future;
@@ -22,8 +23,7 @@ create_exception!(
     pyo3::exceptions::PyException
 );
 
-type DynLogFileManager = Arc<dyn janitor::logs::LogFileManager>;
-type LogListing = (String, String, Vec<String>);
+type LogListing = (String, String, String);
 
 fn convert_logs_error_to_py(err: janitor::logs::Error) -> PyErr {
     match err {
@@ -35,6 +35,9 @@ fn convert_logs_error_to_py(err: janitor::logs::Error) -> PyErr {
         janitor::logs::Error::Io(e) => PyOSError::new_err(e),
         janitor::logs::Error::LogRetrieval(e) => LogRetrievalError::new_err(e),
         janitor::logs::Error::Timeout => PyTimeoutError::new_err("Operation timed out"),
+        janitor::logs::Error::InvalidName(name) => {
+            PyValueError::new_err(format!("Invalid name: {}", name))
+        }
         janitor::logs::Error::Other(e) => PyRuntimeError::new_err(e),
     }
 }
@@ -53,7 +56,7 @@ where
 }
 
 #[pyclass(subclass)]
-pub struct LogFileManager(DynLogFileManager);
+pub struct LogFileManager(Arc<janitor::logs::LogFileManager>);
 
 #[pymethods]
 impl LogFileManager {
@@ -83,13 +86,14 @@ impl LogFileManager {
     ) -> PyResult<Bound<'a, PyAny>> {
         let z = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let readable = with_timeout(timeout, z.get_log(&codebase, &run_id, &name)).await?;
-            Ok(Readable::new(readable))
+            let stream = with_timeout(timeout, z.get_log(&codebase, &run_id, &name)).await?;
+            Ok(AsyncReader::new(
+                stream.map_err(convert_logs_error_to_py).boxed(),
+            ))
         })
     }
 
-    #[pyo3(signature = (codebase, run_id, orig_path, timeout=None, mtime=None, basename=None))]
-    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (codebase, run_id, orig_path, timeout=None, basename=None))]
     fn import_log<'a>(
         &self,
         py: Python<'a>,
@@ -97,14 +101,13 @@ impl LogFileManager {
         run_id: RunId,
         orig_path: String,
         timeout: Option<Duration>,
-        mtime: Option<DateTime<Utc>>,
         basename: Option<String>,
     ) -> PyResult<Bound<'a, PyAny>> {
         let z = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             with_timeout(
                 timeout,
-                z.import_log(&codebase, &run_id, &orig_path, mtime, basename.as_deref()),
+                z.import_log(&codebase, &run_id, &orig_path, basename.as_deref()),
             )
             .await
         })
@@ -158,20 +161,16 @@ impl LogFileManager {
         pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(none) })
     }
 
-    /// Iterate over all logs, yielding (codebase, run_id, names) tuples.
+    /// Iterate over all logs, yielding (codebase, run_id, name) tuples.
     fn iter_logs(&self) -> LogIterator {
-        LogIterator {
-            manager: self.0.clone(),
-            entries: Arc::new(tokio::sync::Mutex::new(None)),
-        }
+        LogIterator(Arc::new(tokio::sync::Mutex::new(self.0.iter_logs())))
     }
 }
 
 #[pyclass]
-pub struct LogIterator {
-    manager: DynLogFileManager,
-    entries: Arc<tokio::sync::Mutex<Option<std::vec::IntoIter<LogListing>>>>,
-}
+pub struct LogIterator(
+    Arc<tokio::sync::Mutex<BoxStream<'static, Result<LogListing, janitor::logs::Error>>>>,
+);
 
 #[pymethods]
 impl LogIterator {
@@ -180,17 +179,14 @@ impl LogIterator {
     }
 
     fn __anext__<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
-        let manager = self.manager.clone();
-        let entries = self.entries.clone();
+        let entries = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut entries = entries.lock().await;
-            if entries.is_none() {
-                let listing = manager.iter_logs().await.collect::<Vec<_>>();
-                *entries = Some(listing.into_iter());
-            }
             entries
-                .as_mut()
-                .and_then(|it| it.next())
+                .lock()
+                .await
+                .try_next()
+                .await
+                .map_err(convert_logs_error_to_py)?
                 .ok_or_else(|| PyStopAsyncIteration::new_err(()))
         })
     }
@@ -203,7 +199,7 @@ pub struct FileSystemLogFileManager;
 impl FileSystemLogFileManager {
     #[new]
     fn new(log_directory: std::path::PathBuf) -> PyResult<PyClassInitializer<Self>> {
-        let z = janitor::logs::FileSystemLogFileManager::new(log_directory)
+        let z = janitor::logs::LogFileManager::local(log_directory)
             .map_err(convert_logs_error_to_py)?;
         Ok(PyClassInitializer::from(LogFileManager(Arc::new(z)))
             .add_subclass(FileSystemLogFileManager))
@@ -218,7 +214,7 @@ impl S3LogFileManager {
     #[new]
     #[pyo3(signature = (endpoint_url, bucket_name=None))]
     fn new(endpoint_url: &str, bucket_name: Option<&str>) -> PyResult<PyClassInitializer<Self>> {
-        let z = janitor::logs::S3LogFileManager::new(endpoint_url, bucket_name)
+        let z = janitor::logs::LogFileManager::s3(endpoint_url, bucket_name)
             .map_err(convert_logs_error_to_py)?;
         Ok(PyClassInitializer::from(LogFileManager(Arc::new(z))).add_subclass(S3LogFileManager))
     }
@@ -231,11 +227,12 @@ pub struct GCSLogFileManager;
 impl GCSLogFileManager {
     #[new]
     fn new(location: &str) -> PyResult<PyClassInitializer<Self>> {
-        let url = url::Url::parse(location)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let z = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(janitor::logs::GCSLogFileManager::from_url(&url, None))
-            .map_err(convert_logs_error_to_py)?;
+        let url = url::Url::parse(location).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let bucket_name = url
+            .host_str()
+            .ok_or_else(|| PyValueError::new_err(format!("missing bucket name in {}", location)))?;
+        let z =
+            janitor::logs::LogFileManager::gcs(bucket_name).map_err(convert_logs_error_to_py)?;
         Ok(PyClassInitializer::from(LogFileManager(Arc::new(z))).add_subclass(GCSLogFileManager))
     }
 }
@@ -243,10 +240,8 @@ impl GCSLogFileManager {
 #[pyfunction]
 #[pyo3(signature = (location=None))]
 fn get_log_manager(location: Option<&str>) -> PyResult<LogFileManager> {
-    let manager = pyo3_async_runtimes::tokio::get_runtime()
-        .block_on(janitor::logs::get_log_manager(location))
-        .map_err(convert_logs_error_to_py)?;
-    Ok(LogFileManager(Arc::from(manager)))
+    let manager = janitor::logs::create_log_manager(location).map_err(convert_logs_error_to_py)?;
+    Ok(LogFileManager(Arc::new(manager)))
 }
 
 pub(crate) fn init(py: Python, module: &Bound<PyModule>) -> PyResult<()> {

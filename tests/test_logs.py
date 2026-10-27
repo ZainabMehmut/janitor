@@ -53,9 +53,11 @@ async def test_file_log_file_manager():
                 await lm.import_log("mypkg", "run-id", f.name)
                 logname = os.path.basename(f.name)
             assert await lm.has_log("mypkg", "run-id", logname)
-            assert (await lm.get_log("mypkg", "run-id", logname)).read() == b"foo bar\n"
+            assert await (await lm.get_log("mypkg", "run-id", logname)).read() == (
+                b"foo bar\n"
+            )
             assert isinstance(await lm.get_ctime("mypkg", "run-id", logname), datetime)
-            assert [x async for x in lm.iter_logs()] == [("mypkg", "run-id", [logname])]
+            assert [x async for x in lm.iter_logs()] == [("mypkg", "run-id", logname)]
             await lm.delete_log("mypkg", "run-id", logname)
             assert not await lm.has_log("mypkg", "run-id", logname)
 
@@ -67,8 +69,8 @@ async def test_get_log_manager_filesystem():
             f.write(b"foo bar\n")
             f.flush()
             await lm.import_log("mypkg", "run-id", f.name, basename="build.log")
-        with await lm.get_log("mypkg", "run-id", "build.log") as logf:
-            assert logf.read() == b"foo bar\n"
+        logf = await lm.get_log("mypkg", "run-id", "build.log")
+        assert await logf.read() == b"foo bar\n"
 
 
 async def test_invalid_identifiers_rejected():
@@ -78,3 +80,5 @@ async def test_invalid_identifiers_rejected():
                 await lm.has_log("../etc", "run-id", "foo.log")
             with pytest.raises(ValueError):
                 await lm.has_log("mypkg", "run/../id", "foo.log")
+            with pytest.raises(ValueError):
+                await lm.has_log("mypkg", "run-id", "foo/log")

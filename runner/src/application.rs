@@ -235,15 +235,15 @@ impl ApplicationBuilder {
 
         // Initialize log management from textproto logs_location (e.g. gs:// or /path).
         log::info!("Initializing log management...");
-        let log_manager: Arc<dyn janitor::logs::LogFileManager> = Arc::from(
-            janitor::logs::create_log_manager(janitor_config.logs_location.as_deref())
-                .await
-                .map_err(|e| {
+        let log_manager = Arc::new(
+            janitor::logs::create_log_manager(janitor_config.logs_location.as_deref()).map_err(
+                |e| {
                     ApplicationError::LogManagement(format!(
                         "Failed to initialize log manager: {}",
                         e
                     ))
-                })?,
+                },
+            )?,
         );
 
         // Initialize artifact management from textproto artifact_location.
@@ -368,7 +368,7 @@ impl ApplicationBuilder {
 }
 
 type BackupManagers = (
-    Arc<dyn janitor::logs::LogFileManager>,
+    Arc<janitor::logs::LogFileManager>,
     Arc<janitor::artifacts::ArtifactManager>,
 );
 
@@ -387,7 +387,7 @@ fn open_backup_managers(dir: &std::path::Path) -> Result<BackupManagers, Applica
             })?;
         }
     }
-    let log_manager = janitor::logs::FileSystemLogFileManager::new(&logs_dir).map_err(|e| {
+    let log_manager = janitor::logs::LogFileManager::local(&logs_dir).map_err(|e| {
         ApplicationError::LogManagement(format!(
             "Failed to open backup log directory {:?}: {}",
             logs_dir, e
