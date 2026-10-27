@@ -169,6 +169,20 @@ pub trait Target {
     ) -> Result<Box<dyn silver_platter::CodemodResult>, WorkerFailure>;
 }
 
+/// Runs Python's cycle collector on drop, so a finished run's repositories close their files.
+struct CollectPythonGarbage;
+
+impl Drop for CollectPythonGarbage {
+    fn drop(&mut self) {
+        use pyo3::types::PyAnyMethods;
+        pyo3::Python::attach(|py| {
+            if let Err(e) = py.import("gc").and_then(|gc| gc.call_method0("collect")) {
+                log::warn!("Python garbage collection failed: {}", e);
+            }
+        });
+    }
+}
+
 pub fn run_worker(
     codebase: &CodebaseName,
     campaign: &Campaign,
@@ -195,6 +209,8 @@ pub fn run_worker(
     skip_setup_validation: Option<bool>,
     default_empty: Option<bool>,
 ) -> Result<(), WorkerFailure> {
+    // Declared first, so it runs after the workspace and branches are dropped.
+    let _collect_python_garbage = CollectPythonGarbage;
     let force_build = force_build.unwrap_or(false);
     let tee = tee.unwrap_or(false);
     let skip_setup_validation = skip_setup_validation.unwrap_or(false);
@@ -1281,6 +1297,15 @@ mod tests {
         test_run_worker_existing(tempfile::tempdir().unwrap().path(), VcsType::Bzr);
     }
 
+    fn open_files_under(dir: &Path) -> Vec<PathBuf> {
+        let dir = dir.canonicalize().unwrap();
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .filter_map(|e| std::fs::read_link(e.unwrap().path()).ok())
+            .filter(|p| p.starts_with(&dir))
+            .collect()
+    }
+
     fn test_run_worker_existing(tmp_path: &std::path::Path, vcs_type: VcsType) {
         let wt = breezyshim::controldir::create_standalone_workingtree(
             &tmp_path.join("main"),
@@ -1337,6 +1362,7 @@ check:
             None,
         )
         .unwrap();
+        assert_eq!(open_files_under(&output_dir), Vec::<PathBuf>::new());
         let found_logfiles = std::fs::read_dir(&output_dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_str().unwrap().to_string())
