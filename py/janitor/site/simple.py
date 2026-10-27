@@ -393,6 +393,7 @@ async def create_app(
     listen_address: Optional[str] = None,
     port: Optional[int] = None,
     redis=None,
+    status_checks: Optional[list[tuple[str, str]]] = None,
 ):
     if minified:
         minified_prefix = ""
@@ -610,6 +611,7 @@ async def create_app(
     app["differ_url"] = differ_url
     app["publisher_url"] = URL(publisher_url) if publisher_url else None
     app["vcs_managers"] = vcs_managers
+    app["status_checks"] = status_checks or []
 
     if vcs_managers is not None:
         if hasattr(vcs_managers.get("bzr"), "base_url"):
@@ -685,6 +687,12 @@ async def main_async(argv=None):
 
     from janitor.config import read_config
 
+    def parse_status_check(value):
+        service, sep, url = value.partition("=")
+        if not (service and sep and url):
+            raise argparse.ArgumentTypeError("expected SERVICE=URL")
+        return service, url
+
     parser = argparse.ArgumentParser(
         prog="janitor.site.simple",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -724,6 +732,14 @@ async def main_async(argv=None):
         type=str,
         default="http://localhost:9911/",
         help="URL for runner",
+    )
+    parser.add_argument(
+        "--status-check",
+        type=parse_status_check,
+        action="append",
+        default=[],
+        metavar="SERVICE=URL",
+        help="Health URL to show under SERVICE on /cupboard/status; may be repeated",
     )
     parser.add_argument(
         "--debugtoolbar",
@@ -771,6 +787,7 @@ async def main_async(argv=None):
         differ_url=args.differ_url,
         listen_address=args.host,
         port=args.port,
+        status_checks=args.status_check,
     )
 
     private_runner = web.AppRunner(private_app)

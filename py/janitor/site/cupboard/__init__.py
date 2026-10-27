@@ -17,6 +17,7 @@
 
 """Serve the Janitor cupboard site."""
 
+import json
 import re
 from datetime import date, datetime
 from typing import Any, Optional
@@ -24,6 +25,7 @@ from typing import Any, Optional
 import aiohttp_jinja2
 import aiozipkin
 import asyncpg
+import mimeparse
 from aiohttp import ClientSession, web
 from aiohttp.web_middlewares import normalize_path_middleware
 from jinja2 import select_autoescape
@@ -38,7 +40,7 @@ from .. import (
     is_qa_reviewer,
     worker_link_is_global,
 )
-from ..common import html_template
+from ..common import html_template, render_template_for_request
 from ..pkg import MergeProposalUserUrlResolver
 from ..setup import setup_postgres
 
@@ -426,6 +428,27 @@ ORDER BY
     return {"broken_mps": broken_mps}
 
 
+@routes.get("/cupboard/status", name="cupboard-status")
+async def handle_status(request):
+    from .status import TIMEOUT, gather_status
+
+    status = await gather_status(request.app, admin=is_admin(request))
+    headers = {"Vary": "Accept, Cookie", "Cache-Control": "no-store"}
+    best_match = mimeparse.best_match(
+        ["application/json", "text/html"], request.headers.get("Accept", "*/*")
+    )
+    if best_match == "application/json":
+        return web.json_response(
+            status,
+            headers=headers,
+            dumps=lambda obj: json.dumps(obj, default=lambda o: o.isoformat() + "Z"),
+        )
+    text = await render_template_for_request(
+        "cupboard/status.html", request, dict(status, timeout=TIMEOUT)
+    )
+    return web.Response(content_type="text/html", text=text, headers=headers)
+
+
 @routes.get("/cupboard/", name="cupboard-start")
 @html_template("cupboard/start.html")
 async def handle_cupboard_start(request):
@@ -689,6 +712,7 @@ def register_cupboard_endpoints(
         evaluate_url = app.router["cupboard-default-evaluate"].url_for(run_id="RUN_ID")
     app["evaluate_url"] = evaluate_url
     app["runner_status"] = None
+    app["status_cache"] = {}
 
 
 async def iter_needs_review(

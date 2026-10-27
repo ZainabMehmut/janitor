@@ -1,0 +1,137 @@
+{% extends "layout.html" %}
+{% block sidebar %}
+    {% include "cupboard/sidebar.html" %}
+{% endblock sidebar %}
+{% block page_title %}
+    Cupboard - System Status
+{% endblock page_title %}
+{% macro badge(value, up=None, total=None) -%}
+    <span class="state state-{{ value | replace(' ', '-') }}">{{ value }}</span>
+    {%- if total and total > 1 and value in ("degraded", "down") %}{{ " (%d of %d checks ok)" % (up, total) }}{% endif %}
+{%- endmacro %}
+{% block body %}
+    <div class="section" id="system-status">
+        <style>
+            span.state-ok {
+                color: green;
+            }
+
+            span.state-degraded {
+                color: #b35900;
+            }
+
+            span.state-down,
+            span.state-not-seen {
+                color: #c00;
+            }
+
+            span.state-not-configured,
+            span.state-unknown {
+                color: dimgrey;
+            }
+
+            tr.service td {
+                font-weight: bold;
+            }
+
+            div.status-table {
+                overflow-x: auto;
+            }
+
+            td.error {
+                overflow-wrap: anywhere;
+            }
+
+            tr.instance td:first-child {
+                padding-left: 2em;
+            }
+        </style>
+        <h1>System Status</h1>
+        <p>
+            <em>Each service is checked when this page loads, with a {{ timeout | int }}-second timeout per check.
+                External services, logs and tracing are checked at most once a minute;
+            a mirror, forge, logs or tracing server counts as ok if it replies with any HTTP status below 500.</em>
+        </p>
+        <p id="overall-status">
+            <strong>Overall status: {{ badge(state) }}</strong>
+        </p>
+        <p>
+            <em>The overall status is down if a core service is down, otherwise degraded if any service is not ok.</em>
+        </p>
+        {% if is_admin %}
+            <p id="queue-status">
+                Queue length: {{ queue_length if queue_length is not none else "unknown" }}.
+                Active runs: {{ active_runs if active_runs is not none else "unknown" }}.
+            </p>
+            <p>
+                <em>A worker is "not seen" if it has not contacted the runner in the last 5 minutes and has no active run.</em>
+            </p>
+        {% endif %}
+        {% for section, title in [("core", "Core services"), ("optional", "Optional services"), ("external", "External services")] %}
+            {% set section_groups = groups | selectattr("section", "eq", section) | list %}
+            {% if section_groups %}
+                <h2>{{ title }}</h2>
+                <div class="status-table">
+                    <table id="status-{{ section }}" class="docutils" border="1">
+                        <thead valign="bottom">
+                            <tr>
+                                <th class="head">Service</th>
+                                <th class="head">State</th>
+                                {% if is_admin %}
+                                    <th class="head">Address</th>
+                                    <th class="head">HTTP status</th>
+                                    <th class="head">Response time</th>
+                                    <th class="head">Error</th>
+                                    <th class="head">Details</th>
+                                    <th class="head">Last checked</th>
+                                {% endif %}
+                            </tr>
+                        </thead>
+                        <tbody valign="top">
+                            {% for group in section_groups %}
+                                <tr class="service" id="service-{{ section }}-{{ group.service }}">
+                                    <td>{{ group.service }}</td>
+                                    <td>{{ badge(group.state, group.up, group.total) }}</td>
+                                    {% if is_admin %}<td colspan="6"></td>{% endif %}
+                                </tr>
+                                {% for instance in group.instances or [] %}
+                                    <tr class="instance">
+                                        <td>{{ instance.name }}</td>
+                                        <td>{{ badge(instance.state) }}</td>
+                                        <td>{{ instance.target if instance.target and instance.target != instance.name else "" }}</td>
+                                        <td>{{ instance.http_status or "" }}</td>
+                                        <td>{% if instance.elapsed_ms is not none %}{{ instance.elapsed_ms }} ms{% endif %}</td>
+                                        <td class="error">{{ instance.error or "" }}</td>
+                                        <td>
+                                            {% if "active_runs" in instance %}
+                                                active runs: {{ instance.active_runs if instance.active_runs is not none else "unknown" }}
+                                                <br />
+                                                last seen:
+                                                {% if "last_seen" not in instance %}
+                                                    unknown
+                                                {% elif instance.last_seen %}
+                                                    {{ format_timestamp(instance.last_seen) }}
+                                                {% else %}
+                                                    not in the last 24 hours
+                                                {% endif %}
+                                            {% else %}
+                                                {% for key, value in instance.health.items() %}
+                                                    {{ key }}: {{ value }}
+                                                    {% if not loop.last %}<br />{% endif %}
+                                                {% endfor %}
+                                            {% endif %}
+                                        </td>
+                                        <td>{{ format_timestamp(instance.checked_at) }}</td>
+                                    </tr>
+                                {% endfor %}
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endif %}
+        {% endfor %}
+        {% if not is_admin %}
+            <p><em>Log in as an admin to see more detail for each service.</em></p>
+        {% endif %}
+    </div>
+{% endblock body %}
