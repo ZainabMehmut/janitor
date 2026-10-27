@@ -111,6 +111,43 @@ pub fn get_build_arch() -> Result<String, DpkgArchitectureError> {
     Ok(String::from_utf8(output.stdout).unwrap().trim().to_owned())
 }
 
+/// Map an ognibuild session error to a worker failure.
+pub fn session_failure(e: ognibuild::session::Error, stage: &[&str]) -> WorkerFailure {
+    use ognibuild::session::{Error, ImageError};
+    let (code, description, details, transient) = match e {
+        Error::SetupFailure(msg, output) => {
+            // schroot already puts a line of its output in the message.
+            let reason = if output.is_empty() || output.contains(&msg) {
+                msg
+            } else {
+                format!("{}: {}", msg, output)
+            };
+            (
+                "session-setup-failure",
+                format!("Error setting up session: {}", reason),
+                Some(serde_json::json!({"output": output})),
+                true,
+            )
+        }
+        Error::IoError(e) => ("session-io-error", e.to_string(), None, false),
+        Error::CalledProcessError(status) => {
+            ("session-process-error", status.to_string(), None, false)
+        }
+        Error::ImageError(e) => {
+            let transient = matches!(e, ImageError::DownloadFailed { .. });
+            ("session-image-error", e.to_string(), None, transient)
+        }
+        e @ Error::MissingBinary { .. } => ("session-missing-binary", e.to_string(), None, false),
+    };
+    WorkerFailure {
+        code: code.to_string(),
+        description,
+        details,
+        stage: stage.iter().map(|s| s.to_string()).collect(),
+        transient: Some(transient),
+    }
+}
+
 pub fn convert_codemod_script_failed(i: i32, command: &str) -> WorkerFailure {
     match i {
         127 => WorkerFailure {
