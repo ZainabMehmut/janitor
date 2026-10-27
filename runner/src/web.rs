@@ -2456,6 +2456,53 @@ async fn store_run_artifacts(
     .await
 }
 
+/// Store a run whose upload was refused, so that it does not stay active.
+async fn end_refused_run(state: &Arc<AppState>, active_run: &ActiveRun, description: &str) {
+    let mut janitor_result =
+        active_run.create_result("upload-failed".to_string(), Some(description.to_string()));
+    janitor_result.transient = Some(true);
+    match state
+        .database
+        .finish_run(
+            &mut janitor_result,
+            &active_run.command,
+            active_run.instigated_context.as_ref(),
+            active_run.queue_id,
+        )
+        .await
+    {
+        Ok(crate::database::FinishOutcome::Stored) => {
+            publish_finish_events(
+                state,
+                &active_run.log_id,
+                &janitor_result,
+                active_run.queue_id,
+            )
+            .await;
+        }
+        outcome => {
+            if let Err(e) = outcome {
+                log::error!("Failed to store refused run {}: {}", active_run.log_id, e);
+            }
+            state.active_runs.remove(&active_run.log_id).await;
+            if let Err(e) = state
+                .database
+                .unassign_queue_item(active_run.queue_id)
+                .await
+            {
+                log::error!("Failed to unassign queue item from Redis: {}", e);
+            }
+        }
+    }
+    crate::metrics::MetricsCollector::set_active_runs(
+        &active_run.worker_name,
+        state
+            .active_runs
+            .count_for_worker(&active_run.worker_name)
+            .await as i64,
+    );
+}
+
 async fn finish_run_multipart_internal(
     state: Arc<AppState>,
     run_id: RunId,
@@ -2483,10 +2530,9 @@ async fn finish_run_multipart_internal(
         Ok(result) => result,
         Err(e) => {
             log::error!("Failed to process upload for run {}: {}", run_id, e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("Upload processing failed: {}", e)})),
-            );
+            let description = format!("Upload processing failed: {}", e);
+            end_refused_run(&state, &active_run, &description).await;
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": description})));
         }
     };
 

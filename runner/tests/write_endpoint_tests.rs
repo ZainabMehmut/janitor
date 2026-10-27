@@ -1639,18 +1639,42 @@ async fn seed_active_run_for_finish(state: &Arc<AppState>, log_id: &str) {
     state.active_runs.store(run).await;
 }
 
+/// Whether `run_id` is still active, and its stored code, description and transient flag.
+async fn finish_outcome(
+    state: &Arc<AppState>,
+    run_id: &str,
+) -> (bool, Option<(String, Option<String>, Option<bool>)>) {
+    let active = state
+        .active_runs
+        .get(&janitor::RunId::new(run_id).unwrap())
+        .await
+        .is_some();
+    let row =
+        sqlx::query_as("SELECT result_code, description, failure_transient FROM run WHERE id = $1")
+            .bind(run_id)
+            .fetch_optional(state.database.pool())
+            .await
+            .unwrap();
+    (active, row)
+}
+
 /// `POST /finish` with a multipart body that has no `metadata` /
 /// `worker_result` part must be rejected as 400. This is the
 /// upload-processor `Missing worker_result field` validation branch.
 #[tokio::test]
 async fn finish_multipart_without_metadata_returns_400() {
-    let Some((app, state)) = setup().await else {
+    let Some((app, state)) = setup_with_campaign().await else {
         eprintln!("skipping: no test resources");
         return;
     };
     let pool = state.database.pool().clone();
     insert_codebase(&pool, "finish-neg-cb").await;
     seed_active_run_for_finish(&state, "run-no-metadata").await;
+    state
+        .auth_service
+        .create_worker("finish-worker", "pw", None)
+        .await
+        .expect("create worker");
 
     // Multipart with a single unrelated `file` part -- no `metadata`
     // or `worker_result` field.
@@ -1681,24 +1705,38 @@ async fn finish_multipart_without_metadata_returns_400() {
             .is_some_and(|s| s.contains("worker_result") || s.contains("Missing")),
         "expected `worker_result`/`Missing` in error, got {body}"
     );
-
-    let _ = state
-        .active_runs
-        .remove(&janitor::RunId::new("run-no-metadata").unwrap())
-        .await;
+    assert_eq!(
+        finish_outcome(&state, "run-no-metadata").await,
+        (
+            false,
+            Some((
+                "upload-failed".to_string(),
+                Some(
+                    "Upload processing failed: Validation error: Missing worker_result field"
+                        .to_string()
+                ),
+                Some(true)
+            ))
+        )
+    );
 }
 
 /// `POST /finish` with malformed multipart (unterminated body) yields
 /// a 400 with the multipart-parse error, not a 500 or a hang.
 #[tokio::test]
 async fn finish_malformed_multipart_returns_400() {
-    let Some((app, state)) = setup().await else {
+    let Some((app, state)) = setup_with_campaign().await else {
         eprintln!("skipping: no test resources");
         return;
     };
     let pool = state.database.pool().clone();
     insert_codebase(&pool, "finish-neg-cb").await;
     seed_active_run_for_finish(&state, "run-malformed").await;
+    state
+        .auth_service
+        .create_worker("finish-worker", "pw", None)
+        .await
+        .expect("create worker");
 
     // Boundary declared but body doesn't contain it -- axum's
     // multipart reader raises the parse error we translate to 400.
@@ -1715,11 +1753,21 @@ async fn finish_malformed_multipart_returns_400() {
     let response = app.oneshot(req).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-    let _ = state
-        .active_runs
-        .remove(&janitor::RunId::new("run-malformed").unwrap())
-        .await;
+    assert_eq!(
+        finish_outcome(&state, "run-malformed").await,
+        (
+            false,
+            Some((
+                "upload-failed".to_string(),
+                Some(
+                    "Upload processing failed: Multipart error: Failed to read field: \
+                     Error parsing `multipart/form-data` request"
+                        .to_string()
+                ),
+                Some(true)
+            ))
+        )
+    );
 }
 
 /// `POST /finish` with a multipart part that has no `name=` in the
@@ -1727,13 +1775,18 @@ async fn finish_malformed_multipart_returns_400() {
 /// processor's `Field missing name` branch.
 #[tokio::test]
 async fn finish_multipart_field_without_name_returns_400() {
-    let Some((app, state)) = setup().await else {
+    let Some((app, state)) = setup_with_campaign().await else {
         eprintln!("skipping: no test resources");
         return;
     };
     let pool = state.database.pool().clone();
     insert_codebase(&pool, "finish-neg-cb").await;
     seed_active_run_for_finish(&state, "run-no-field-name").await;
+    state
+        .auth_service
+        .create_worker("finish-worker", "pw", None)
+        .await
+        .expect("create worker");
 
     // Content-Disposition without a `name=` attribute -- axum returns
     // None from field.name(), and upload_processor rejects it.
@@ -1756,11 +1809,17 @@ async fn finish_multipart_field_without_name_returns_400() {
     let response = app.oneshot(req).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-    let _ = state
-        .active_runs
-        .remove(&janitor::RunId::new("run-no-field-name").unwrap())
-        .await;
+    assert_eq!(
+        finish_outcome(&state, "run-no-field-name").await,
+        (
+            false,
+            Some((
+                "upload-failed".to_string(),
+                Some("Upload processing failed: Multipart error: Field missing name".to_string()),
+                Some(true)
+            ))
+        )
+    );
 }
 
 /// Assignment scoring by priority: given three candidates with the
