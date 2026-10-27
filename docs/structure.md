@@ -11,6 +11,7 @@
   - `queue list [--limit <n>]` - show queue items, default limit 100
   - `run list` - list active runs
   - `run kill <run-id>` - kill an active run
+  - `setup` - print the janitor config (`--config`, default `janitor.conf`) with credentials masked
   - `merge-proposal set-status <url> <status>` - set a merge proposal's status (closed/abandoned/applied/rejected)
   - `reprocess-logs run <run-id> [--dry-run] [--reschedule]` - reprocess a single run's stored build log
   - `reprocess-logs bulk [--run-id <id>...] [--dry-run] [--reschedule]` - reprocess stored build logs in bulk, restricted to the given run IDs if any are passed

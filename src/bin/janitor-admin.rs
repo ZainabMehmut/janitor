@@ -3,12 +3,14 @@
 //! Talks to a running janitor site instance over its public HTTP API.
 
 use clap::{Args, Parser, Subcommand};
+use janitor::config::Config;
 use janitor::{Campaign, RunId};
 use reqwest::{Client, RequestBuilder, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -16,7 +18,11 @@ use std::process::ExitCode;
 struct Cli {
     /// Base URL of the janitor site (e.g. https://janitor.debian.net).
     #[arg(long, env = "JANITOR_URL")]
-    url: Url,
+    url: Option<Url>,
+
+    /// Path to the janitor config.
+    #[arg(long, default_value = "janitor.conf")]
+    config: PathBuf,
 
     /// Username for HTTP basic auth (admin).
     #[arg(long, env = "JANITOR_USER")]
@@ -59,6 +65,8 @@ enum Command {
         /// Log file to print (e.g. worker.log).
         name: String,
     },
+    /// Show the janitor config, with credentials masked.
+    Setup,
 }
 
 #[derive(Subcommand)]
@@ -156,13 +164,17 @@ struct AddWorkerResponse {
 
 struct ApiClient {
     http: Client,
-    base: Url,
+    base: Option<Url>,
     user: Option<String>,
     password: Option<String>,
 }
 
 impl ApiClient {
-    fn new(base: Url, user: Option<String>, password: Option<String>) -> reqwest::Result<Self> {
+    fn new(
+        base: Option<Url>,
+        user: Option<String>,
+        password: Option<String>,
+    ) -> reqwest::Result<Self> {
         Ok(Self {
             http: Client::builder().build()?,
             base,
@@ -172,7 +184,11 @@ impl ApiClient {
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> Result<RequestBuilder, String> {
-        let url = api_url(&self.base, path).map_err(|e| e.to_string())?;
+        let base = self
+            .base
+            .as_ref()
+            .ok_or("--url (or JANITOR_URL) is required for this command")?;
+        let url = api_url(base, path).map_err(|e| e.to_string())?;
         let mut req = self.http.request(method, url);
         if let Some(user) = &self.user {
             req = req.basic_auth(user, self.password.as_deref());
@@ -386,6 +402,27 @@ async fn cmd_logs(client: &ApiClient, run_id: &RunId, name: &str) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
+/// The config in text format, with credentials masked.
+fn masked_config(config: &Config) -> String {
+    let mut config = config.clone();
+    if let Some(provider) = config.oauth2_provider.as_mut() {
+        if provider.client_secret.is_some() {
+            provider.client_secret = Some("***".to_string());
+        }
+    }
+    let text = protobuf::text_format::print_to_string_pretty(&config);
+    let text = lazy_regex::regex_replace_all!(r"://[^/?#\s]*@", &text, "://***@");
+    lazy_regex::regex_replace_all!(r#"(?i)(password=)(?:\\.|[^&\s"\\])*"#, &text, "${1}***")
+        .into_owned()
+}
+
+fn cmd_setup(path: &std::path::Path) -> Result<(), String> {
+    let config =
+        janitor::config::read_file(path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    print!("{}", masked_config(&config));
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -414,6 +451,7 @@ async fn main() -> ExitCode {
             RunCmd::List => cmd_run_list(&client).await,
         },
         Command::Logs { run_id, name } => cmd_logs(&client, &run_id, &name).await,
+        Command::Setup => cmd_setup(&cli.config),
     };
 
     match result {
@@ -481,7 +519,6 @@ mod tests {
         use clap::CommandFactory;
         let cmd = Cli::command();
         let url = cmd.get_arguments().find(|a| a.get_id() == "url").unwrap();
-        assert!(url.is_required_set());
         assert!(url.get_default_values().is_empty());
     }
 
@@ -503,5 +540,48 @@ mod tests {
             }
             _ => panic!("wrong subcommand"),
         }
+    }
+
+    #[test]
+    fn setup_masks_credentials() {
+        let config = janitor::config::read_string(
+            r#"
+database_location: "postgresql://db.example/janitor?user=janitor&password=s3\"cret&sslmode=require"
+redis_location: "redis://:s3\"cret@localhost:6379"
+logs_location: "https://key:s3cret@s3.example"
+artifact_location: "/srv/janitor/artifacts"
+origin: "example"
+distribution {
+  name: "unstable"
+  archive_mirror_uri: "http://user:s3cret@deb.example/debian"
+  component: "main"
+}
+oauth2_provider {
+  client_id: "janitor"
+  client_secret: "s3cret"
+  base_url: "https://user:s3cret@sso.example/"
+}
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            masked_config(&config),
+            r#"logs_location: "https://***@s3.example"
+database_location: "postgresql://db.example/janitor?user=janitor&password=***&sslmode=require"
+distribution {
+  name: "unstable"
+  archive_mirror_uri: "http://***@deb.example/debian"
+  component: "main"
+}
+origin: "example"
+oauth2_provider {
+  client_id: "janitor"
+  client_secret: "***"
+  base_url: "https://***@sso.example/"
+}
+artifact_location: "/srv/janitor/artifacts"
+redis_location: "redis://***@localhost:6379"
+"#
+        );
     }
 }
