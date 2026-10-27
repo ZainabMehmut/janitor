@@ -442,7 +442,10 @@ mod tests {
     #[test]
     fn test_remote_git_vcs_manager_branch_url_escapes_name() {
         let mgr = RemoteGitVcsManager::new(Url::parse("https://vcs.example.com/git/").unwrap());
-        let url = mgr.get_branch_url("mycodebase", "lintian-fixes/main");
+        let url = mgr.get_branch_url(
+            &CodebaseName::new("mycodebase").unwrap(),
+            "lintian-fixes/main",
+        );
         assert_eq!(
             url.as_str(),
             "https://vcs.example.com/git/mycodebase,branch=lintian-fixes%2Fmain"
@@ -470,7 +473,10 @@ mod tests {
         git(&["branch", "lintian-fixes/main"]);
 
         let mgr = LocalGitVcsManager::new(td.path().to_path_buf());
-        let url = mgr.get_branch_url("mycodebase", "lintian-fixes/main");
+        let url = mgr.get_branch_url(
+            &CodebaseName::new("mycodebase").unwrap(),
+            "lintian-fixes/main",
+        );
         let branch = breezyshim::branch::open_as_generic(&url).unwrap();
         assert_eq!(branch.name().as_deref(), Some("lintian-fixes/main"));
     }
