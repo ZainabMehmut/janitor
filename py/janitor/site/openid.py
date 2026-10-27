@@ -24,6 +24,7 @@ import uuid
 from typing import Optional
 
 import aiohttp
+import asyncpg
 from aiohttp import web
 from yarl import URL
 
@@ -31,13 +32,21 @@ from yarl import URL
 @web.middleware
 async def openid_middleware(request, handler):
     session_id = request.cookies.get("session_id")
+    userinfo = None
     if session_id is not None:
-        async with request.app.database.acquire() as conn:
-            userinfo = await conn.fetchval(
-                "SELECT userinfo FROM site_session WHERE id = $1", session_id
-            )
-    else:
-        userinfo = None
+        try:
+            async with request.app.database.acquire() as conn:
+                userinfo = await conn.fetchval(
+                    "SELECT userinfo FROM site_session WHERE id = $1", session_id
+                )
+        except (
+            OSError,
+            asyncpg.InterfaceError,
+            asyncpg.PostgresConnectionError,
+            asyncpg.OperatorInterventionError,
+            asyncpg.InsufficientResourcesError,
+        ) as e:
+            logging.warning("Session lookup failed, treating as logged out: %s", e)
     request["user"] = userinfo
     resp = await handler(request)
     return resp

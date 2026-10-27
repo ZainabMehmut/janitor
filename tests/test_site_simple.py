@@ -36,7 +36,7 @@ _SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schema"
 
 
 @pytest_asyncio.fixture()
-async def database_location():
+async def postgresql():
     with testing.postgresql.Postgresql() as postgresql:
         conn = await asyncpg.connect(postgresql.url())
         try:
@@ -45,7 +45,12 @@ async def database_location():
         finally:
             await conn.close()
 
-        yield postgresql.url()
+        yield postgresql
+
+
+@pytest_asyncio.fixture()
+async def database_location(postgresql):
+    return postgresql.url()
 
 
 def create_config(database_location=None, extra=""):
@@ -73,6 +78,19 @@ async def test_codebase_query_redirect(aiohttp_client, database_location):
     )
     assert resp.status == 302
     assert resp.headers["Location"] == "/lintian-fixes/c/foo/"
+
+
+@pytest.mark.parametrize("path", ["/", "/about"])
+async def test_simple_page_with_session(aiohttp_client, postgresql, path):
+    _private_app, app = await create_app(
+        config=create_config(postgresql.url()), redis=FakeRedis()
+    )
+    client = await aiohttp_client(app, cookies={"session_id": "some-session"})
+    statuses = [(await client.get(path)).status]
+    # Pages that need no database still load while PostgreSQL is down.
+    await asyncio.to_thread(postgresql.stop)
+    statuses.append((await client.get(path)).status)
+    assert statuses == [200, 200]
 
 
 async def test_ws_notifications_forwards_redis_channels(
