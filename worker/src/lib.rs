@@ -1256,6 +1256,89 @@ mod tests {
     use test_log::test;
 
     #[test]
+    fn test_session_failure() {
+        use ognibuild::session::{Error, ImageError};
+        use std::os::unix::process::ExitStatusExt;
+
+        let f = session_failure(
+            Error::SetupFailure(
+                "E: sid: Chroot not found".to_string(),
+                "E: sid: Chroot not found\n".to_string(),
+            ),
+            &["build"],
+        );
+        assert_eq!(f.code, "session-setup-failure");
+        assert_eq!(
+            f.description,
+            "Error setting up session: E: sid: Chroot not found"
+        );
+        assert_eq!(
+            f.details,
+            Some(serde_json::json!({"output": "E: sid: Chroot not found\n"}))
+        );
+        assert_eq!(f.stage, vec!["build".to_string()]);
+        assert_eq!(f.transient, Some(true));
+
+        let f = session_failure(
+            Error::SetupFailure("open failed".to_string(), "denied".to_string()),
+            &[],
+        );
+        assert_eq!(
+            f.description,
+            "Error setting up session: open failed: denied"
+        );
+        assert!(f.stage.is_empty());
+
+        let cases = vec![
+            (
+                Error::IoError(std::io::Error::other("boom")),
+                "session-io-error",
+                false,
+                "boom",
+            ),
+            (
+                Error::CalledProcessError(std::process::ExitStatus::from_raw(1 << 8)),
+                "session-process-error",
+                false,
+                "1",
+            ),
+            (
+                Error::ImageError(ImageError::UnsupportedArchitecture {
+                    arch: "s390x".to_string(),
+                }),
+                "session-image-error",
+                false,
+                "s390x",
+            ),
+            (
+                Error::ImageError(ImageError::DownloadFailed {
+                    url: "https://example.com/sid.tar.xz".to_string(),
+                    error: "timed out".to_string(),
+                }),
+                "session-image-error",
+                true,
+                "https://example.com/sid.tar.xz",
+            ),
+            (
+                Error::MissingBinary {
+                    command: "schroot".to_string(),
+                    source: std::io::ErrorKind::NotFound.into(),
+                },
+                "session-missing-binary",
+                false,
+                "schroot",
+            ),
+        ];
+        for (error, code, transient, text) in cases {
+            let f = session_failure(error, &[]);
+            assert_eq!(f.code, code);
+            assert_eq!(f.transient, Some(transient), "{}", code);
+            assert_eq!(f.details, None, "{}", code);
+            assert!(f.description.contains(text), "{}", f.description);
+        }
+    }
+
+    #[test]
     fn test_derive_branch_name() {
         assert_eq!(
             derive_branch_name(&url::Url::parse("https://example.com/foo/bar").unwrap()),
