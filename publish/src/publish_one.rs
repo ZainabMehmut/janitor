@@ -38,6 +38,13 @@ pub fn publish_one(
     request: &crate::PublishOneRequest,
     possible_transports: &mut Option<Vec<Transport>>,
 ) -> Result<(PublishOneResult, String), PublishError> {
+    if request.mode == Mode::Bts {
+        return Err(PublishError::Failure {
+            description: "Publish mode bts is not supported".to_string(),
+            code: "invalid-mode".to_string(),
+        });
+    }
+
     let mut args = match shlex::split(&request.command) {
         Some(args) => args,
         None => {
@@ -149,8 +156,6 @@ pub fn publish_one(
             });
         }
     };
-
-    assert_ne!(request.mode, Mode::Bts);
 
     let forge: Option<Forge> = match breezyshim::forge::get_forge(&target_branch) {
         Err(e @ BrzError::UnsupportedForge(..)) => {
