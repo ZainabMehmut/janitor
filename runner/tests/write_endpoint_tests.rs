@@ -862,6 +862,82 @@ async fn post_candidates_records_unknown_publish_policy() {
     );
 }
 
+/// `POST /candidates` without a `publish-policy` still stores the
+/// candidate and lists its codebase in `missing_publish_policy`. A
+/// candidate that already had a policy keeps it and is not listed.
+#[tokio::test]
+async fn post_candidates_reports_missing_publish_policy() {
+    let Some((app, state)) = setup_with_campaign().await else {
+        eprintln!("skipping: no test resources");
+        return;
+    };
+
+    let pool = state.database.pool().clone();
+    insert_codebase(&pool, "cand-no-pp-cb").await;
+    insert_codebase(&pool, "cand-keep-pp-cb").await;
+    sqlx::query("INSERT INTO named_publish_policy (name) VALUES ('keep-policy')")
+        .execute(&pool)
+        .await
+        .expect("publish policy insert");
+
+    let post = |body: Value| {
+        Request::builder()
+            .method(Method::POST)
+            .uri("/candidates")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let response = app
+        .clone()
+        .oneshot(post(json!([{
+            "codebase": "cand-keep-pp-cb",
+            "campaign": "test-campaign",
+            "publish-policy": "keep-policy",
+        }])))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(post(json!([
+            {"codebase": "cand-no-pp-cb", "campaign": "test-campaign"},
+            {"codebase": "cand-keep-pp-cb", "campaign": "test-campaign"},
+        ])))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = get_body(response).await;
+    assert_eq!(
+        body["success"].as_array().map(Vec::len),
+        Some(2),
+        "both candidates must be stored, got {body}"
+    );
+    assert_eq!(
+        body["missing_publish_policy"],
+        json!(["cand-no-pp-cb"]),
+        "got {body}"
+    );
+
+    let policies: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT codebase, publish_policy FROM candidate
+         WHERE codebase IN ('cand-no-pp-cb', 'cand-keep-pp-cb') ORDER BY codebase",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("candidate lookup");
+    assert_eq!(
+        policies,
+        vec![
+            (
+                "cand-keep-pp-cb".to_string(),
+                Some("keep-policy".to_string())
+            ),
+            ("cand-no-pp-cb".to_string(), None),
+        ]
+    );
+}
+
 /// `POST /candidates` for a known campaign but a codebase that does
 /// not have a row in the `codebase` table records it in
 /// `unknown_codebases` via the FK-violation branch.
