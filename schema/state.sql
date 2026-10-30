@@ -242,6 +242,13 @@ CREATE TABLE new_result_branch (
 CREATE INDEX ON new_result_branch (revision);
 CREATE INDEX ON new_result_branch (absorbed);
 
+CREATE TABLE IF NOT EXISTS run_remote (
+ run_id text not null references run (id) on delete cascade,
+ name text not null,
+ url text not null,
+ UNIQUE(run_id, name)
+);
+
 CREATE OR REPLACE FUNCTION refresh_last_run(run_id text)
   RETURNS void
   LANGUAGE PLPGSQL

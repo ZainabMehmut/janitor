@@ -245,6 +245,7 @@ impl RunnerDatabase {
             .get_resume_info(&run.id, &run.codebase, &run.suite)
             .await?;
         let debian_build = self.get_run_debian_build(&run.id).await?;
+        let remotes = self.get_run_remotes(&run.id).await?;
 
         let builder_result = debian_build.map(BuilderResult::from);
         let target = builder_result.as_ref().map(|br| crate::ResultTarget {
@@ -274,8 +275,7 @@ impl RunnerDatabase {
                     .map(|(name, rev)| (name, Some(RevisionId::from(rev.as_bytes()))))
                     .collect()
             }),
-            // TODO: remote URLs reported by the worker are not stored.
-            remotes: None,
+            remotes,
             branches: run.result_branches.map(|branches| {
                 branches
                     .into_iter()
@@ -420,10 +420,10 @@ impl RunnerDatabase {
     }
 
     /// Insert a completed run into the `run` table along with its
-    /// per-role `new_result_branch` rows. The caller is responsible for
-    /// providing a transaction; `finish_run` wraps this,
-    /// `store_change_set`, and the `queue` deletion in a single
-    /// transaction so that either all of them happen or none do.
+    /// per-role `new_result_branch` rows and its `run_remote` rows. The
+    /// caller is responsible for providing a transaction. `finish_run`
+    /// wraps this, `store_change_set`, and the `queue` deletion in a
+    /// single transaction so that either all of them happen or none do.
     pub async fn store_run(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -538,6 +538,17 @@ INSERT INTO run (
                 .bind(revision.as_ref().map(|r| r.to_string()))
                 .execute(&mut **tx)
                 .await?;
+            }
+        }
+
+        if let Some(remotes) = &result.remotes {
+            for (name, remote) in remotes {
+                sqlx::query("INSERT INTO run_remote (run_id, name, url) VALUES ($1, $2, $3)")
+                    .bind(&result.log_id)
+                    .bind(name)
+                    .bind(&remote.url)
+                    .execute(&mut **tx)
+                    .await?;
             }
         }
 
@@ -1778,6 +1789,26 @@ INSERT INTO run (
         .bind(run_id)
         .fetch_optional(self.pool())
         .await
+    }
+
+    /// Get the remotes a worker reported for a run, if any.
+    pub async fn get_run_remotes(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Option<HashMap<String, crate::ResultRemote>>, sqlx::Error> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT name, url FROM run_remote WHERE run_id = $1")
+                .bind(run_id)
+                .fetch_all(self.pool())
+                .await?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(
+            rows.into_iter()
+                .map(|(name, url)| (name, crate::ResultRemote { url }))
+                .collect(),
+        ))
     }
 }
 
