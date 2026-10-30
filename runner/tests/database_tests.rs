@@ -3,6 +3,7 @@
 use janitor::schema::setup_debian_test_database;
 use janitor::test_utils::TestDatabase;
 use janitor_runner::database::{DebianBuildRow, RunnerDatabase};
+use janitor_runner::{JanitorResult, ResultRemote};
 use serde_json::json;
 
 async fn setup() -> Option<TestDatabase> {
@@ -143,5 +144,59 @@ async fn test_get_run_debian_build() {
             "lintian": null,
             "binary_packages": ["foo"],
         })
+    );
+}
+
+#[tokio::test]
+async fn test_finish_run_stores_remotes() {
+    let Some(db) = setup().await else { return };
+    let runner_db = RunnerDatabase::new(db.pool.clone());
+    let mut result = JanitorResult {
+        log_id: janitor::RunId::new("run-1").unwrap(),
+        branch_url: "https://example.com/foo".to_string(),
+        subpath: None,
+        code: "success".to_string(),
+        transient: None,
+        codebase: janitor::CodebaseName::new("foo").unwrap(),
+        campaign: janitor::Campaign::new("lintian-fixes").unwrap(),
+        description: None,
+        codemod: None,
+        value: None,
+        logfilenames: vec![],
+        start_time: chrono::Utc::now(),
+        finish_time: chrono::Utc::now(),
+        revision: None,
+        main_branch_revision: None,
+        change_set: None,
+        tags: None,
+        remotes: Some(maplit::hashmap! {
+            "origin".to_string() => ResultRemote {
+                url: "https://example.com/foo".to_string(),
+            },
+        }),
+        branches: None,
+        failure_details: None,
+        failure_stage: None,
+        resume: None,
+        target: None,
+        worker_name: None,
+        vcs_type: Some("git".to_string()),
+        target_branch_url: None,
+        context: None,
+        builder_result: None,
+    };
+    runner_db
+        .finish_run(&mut result, "lintian-brush", None, 1)
+        .await
+        .unwrap();
+
+    let run = runner_db
+        .get_run(&janitor::RunId::new("run-1").unwrap())
+        .await
+        .unwrap()
+        .expect("run was just stored");
+    assert_eq!(
+        serde_json::to_value(&run.remotes).unwrap(),
+        json!({"origin": {"url": "https://example.com/foo"}})
     );
 }
