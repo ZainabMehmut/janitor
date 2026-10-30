@@ -439,3 +439,21 @@ async def test_review_without_oauth2_provider_is_not_qa_review(aiohttp_client, d
     async with db.acquire() as conn:
         rows = await conn.fetch("SELECT run_id, reviewer, verdict FROM review")
     assert [tuple(row) for row in rows] == [("r1", "alice@example.com", "approved")]
+
+
+async def test_runner_log_index_passes_through_runner_error(aiohttp_client, db):
+    runner_app = web.Application()
+
+    async def _handle_log_index(request):
+        return web.json_response({"reason": "No such current run: r1"}, status=404)
+
+    runner_app.router.add_get("/log/{run_id}", _handle_log_index)
+    runner_client = await aiohttp_client(runner_app)
+
+    client = await create_client(
+        aiohttp_client, db, runner_url=str(runner_client.make_url("/"))
+    )
+
+    resp = await client.get("/active-runs/r1/log/")
+    assert resp.status == 404
+    assert await resp.json() == {"reason": "No such current run: r1"}
