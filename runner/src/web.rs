@@ -838,6 +838,9 @@ async fn get_candidates(State(state): State<Arc<AppState>>) -> impl IntoResponse
 ///
 /// - Missing `codebase` or `campaign` -> 400.
 /// - Unknown campaign -> collected in `unknown_campaigns`, skipped.
+/// - No `publish-policy` -> stored, keeping any existing policy. If
+///   the candidate has none, codebase collected in
+///   `missing_publish_policy`.
 /// - No `command` in entry -> fall back to the campaign config's
 ///   `command`; if neither is present the entry is rejected into
 ///   `invalid_command`.
@@ -864,7 +867,8 @@ async fn get_candidates(State(state): State<Arc<AppState>>) -> impl IntoResponse
 ///   "invalid_value": [...],
 ///   "unknown_campaigns": [...],
 ///   "unknown_codebases": [...],
-///   "unknown_publish_policies": [...]
+///   "unknown_publish_policies": [...],
+///   "missing_publish_policy": [...]
 /// }
 /// ```
 /// Outcome of validating a queue assignment in `assign_work_internal`.
@@ -1064,6 +1068,7 @@ async fn upload_candidates(
     let mut invalid_command = std::collections::BTreeSet::<String>::new();
     let mut invalid_value = std::collections::BTreeSet::<i64>::new();
     let mut unknown_publish_policies = std::collections::BTreeSet::<String>::new();
+    let mut missing_publish_policy = std::collections::BTreeSet::<CodebaseName>::new();
 
     let known_campaign_names: std::collections::HashSet<String> = state
         .config
@@ -1130,7 +1135,7 @@ async fn upload_candidates(
             }
         };
 
-        let insert_result = sqlx::query_scalar::<_, i32>(
+        let insert_result = sqlx::query_as::<_, (i32, Option<String>)>(
             r#"
             INSERT INTO candidate
             (suite, command, change_set, context, value, success_chance, publish_policy, codebase)
@@ -1141,9 +1146,9 @@ async fn upload_candidates(
                 value = EXCLUDED.value,
                 success_chance = EXCLUDED.success_chance,
                 command = EXCLUDED.command,
-                publish_policy = EXCLUDED.publish_policy,
+                publish_policy = COALESCE(EXCLUDED.publish_policy, candidate.publish_policy),
                 codebase = EXCLUDED.codebase
-            RETURNING id
+            RETURNING id, publish_policy
             "#,
         )
         .bind(&campaign)
@@ -1157,8 +1162,8 @@ async fn upload_candidates(
         .fetch_one(&mut *tx)
         .await;
 
-        let candidate_id: i32 = match insert_result {
-            Ok(id) => id,
+        let (candidate_id, stored_policy) = match insert_result {
+            Ok(row) => row,
             Err(sqlx::Error::Database(db_err))
                 if db_err
                     .constraint()
@@ -1202,6 +1207,11 @@ async fn upload_candidates(
                     .into_response();
             }
         };
+
+        if stored_policy.is_none() {
+            log::warn!("no publish policy for candidate {}/{}", codebase, campaign);
+            missing_publish_policy.insert(codebase.clone());
+        }
 
         // Detect an existing open MP with a different command.
         let existing_mp = sqlx::query_as::<_, (Option<String>, String)>(
@@ -1358,6 +1368,7 @@ async fn upload_candidates(
             "unknown_campaigns": unknown_campaigns.into_iter().collect::<Vec<_>>(),
             "unknown_codebases": unknown_codebases.into_iter().collect::<Vec<_>>(),
             "unknown_publish_policies": unknown_publish_policies.into_iter().collect::<Vec<_>>(),
+            "missing_publish_policy": missing_publish_policy.into_iter().collect::<Vec<_>>(),
         })),
     )
         .into_response()
