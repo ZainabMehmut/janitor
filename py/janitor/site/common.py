@@ -6,6 +6,7 @@ import aiohttp_jinja2
 import asyncpg
 from aiohttp import ClientConnectorError, ClientResponseError, web
 from breezy.revision import NULL_REVISION
+from yarl import URL
 
 from janitor import splitout_env, state
 from janitor.config import get_campaign_config
@@ -183,6 +184,15 @@ ORDER BY finish_time DESC
     return await conn.fetchrow(query, main_branch_revision.decode("utf-8"), codebase)
 
 
+async def _fetch_codebase_merge_proposals(client, publisher_url, codebase_name):
+    if not publisher_url:
+        return []
+    url = URL(publisher_url) / "c" / codebase_name / "merge-proposals"
+    async with client.get(url, raise_for_status=True) as resp:
+        data = await resp.json()
+    return [(entry["url"], entry.get("status")) for entry in data]
+
+
 async def generate_codebase_context(
     db,
     config,
@@ -193,6 +203,7 @@ async def generate_codebase_context(
     codebase_name,
     span,
     run_id=None,
+    publisher_url: Optional[str] = None,
 ):
     async with db.acquire() as conn:
         # TODO(jelmer): Run these in parallel with gather()
@@ -218,20 +229,9 @@ WHERE codebase.name = $1""",
         else:
             with span.new_child("sql:unchanged-run"):
                 run = await get_last_unabsorbed_run(conn, codebase_name, suite)
-            with span.new_child("sql:merge-proposals"):
-                merge_proposals = await conn.fetch(
-                    """\
-SELECT
-    DISTINCT ON (merge_proposal.url)
-    merge_proposal.url AS url, merge_proposal.status AS status
-FROM
-    merge_proposal
-LEFT JOIN run
-ON merge_proposal.revision = run.revision AND run.result_code = 'success'
-WHERE run.codebase = $1 AND run.suite = $2
-""",
-                    codebase["name"],
-                    suite,
+            with span.new_child("publisher:merge-proposals"):
+                merge_proposals = await _fetch_codebase_merge_proposals(
+                    client, publisher_url, codebase["name"]
                 )
         if run is None:
             # No runs recorded

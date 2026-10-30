@@ -321,6 +321,7 @@ async def handle_generic_codebase(request):
         codebase,
         aiozipkin.request_span(request),
         run_id,
+        publisher_url=request.app["publisher_url"],
     )
 
 
